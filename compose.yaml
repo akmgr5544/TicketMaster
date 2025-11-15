@@ -1,0 +1,31 @@
+﻿services:
+  ticketmaster:
+    image: ticketmaster
+    build:
+      context: .
+      dockerfile: TicketMaster/Dockerfile
+
+  bookingapi:
+    image: bookingapi
+    build:
+      context: .
+      dockerfile: BookingApi/Dockerfile
+
+  booking.slq:
+    image: booking.slq
+    build:
+      context: .
+      dockerfile: Booking.Slq/Dockerfile
+
+  events.api:
+    image: events.api
+    build:
+      context: .
+      dockerfile: Events.Api/Dockerfile
+
+  users.api:
+    image: users.api
+    build:
+      context: .
+      dockerfile: Users.Api/Dockerfile
+

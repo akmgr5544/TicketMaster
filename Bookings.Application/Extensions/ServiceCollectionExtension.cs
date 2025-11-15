@@ -1,0 +1,16 @@
+using Bookings.Application.Pipelines;
+using MediatR;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace Bookings.Application.Extensions;
+
+public static class ServiceCollectionExtension
+{
+    public static IServiceCollection AddApplicationServices(this IServiceCollection services)
+    {
+        services.AddMediatR(cf => 
+            cf.RegisterServicesFromAssembly(typeof(ServiceCollectionExtension).Assembly));
+        services.AddTransient(typeof(IPipelineBehavior<,>), typeof(TransactionBehavior<,>));
+        return services;
+    }
+}

@@ -1,0 +1,13 @@
+namespace Events.Domain.Entities;
+
+public class Performer
+{
+    public Performer(string name, string description)
+    {
+        Name = name;
+        Description = description;
+    }
+    public string Id { get; set; }
+    public string Name { get; init; }
+    public string Description { get; init; }
+}
