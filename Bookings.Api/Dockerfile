@@ -7,17 +7,17 @@ EXPOSE 8081
 FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
 ARG BUILD_CONFIGURATION=Release
 WORKDIR /src
-COPY ["BookingApi/BookingApi.csproj", "BookingApi/"]
-RUN dotnet restore "BookingApi/BookingApi.csproj"
+COPY ["Bookings.Api/Bookings.Api.csproj", "Bookings.Api/"]
+RUN dotnet restore "Bookings.Api/Bookings.Api.csproj"
 COPY . .
-WORKDIR "/src/BookingApi"
-RUN dotnet build "./BookingApi.csproj" -c $BUILD_CONFIGURATION -o /app/build
+WORKDIR "/src/Bookings.Api"
+RUN dotnet build "./Bookings.Api.csproj" -c $BUILD_CONFIGURATION -o /app/build
 
 FROM build AS publish
 ARG BUILD_CONFIGURATION=Release
-RUN dotnet publish "./BookingApi.csproj" -c $BUILD_CONFIGURATION -o /app/publish /p:UseAppHost=false
+RUN dotnet publish "./Bookings.Api.csproj" -c $BUILD_CONFIGURATION -o /app/publish /p:UseAppHost=false
 
 FROM base AS final
 WORKDIR /app
 COPY --from=publish /app/publish .
-ENTRYPOINT ["dotnet", "BookingApi.dll"]
+ENTRYPOINT ["dotnet", "Bookings.Api.dll"]
