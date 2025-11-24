@@ -1,3 +1,5 @@
+using MongoDB.Bson;
+
 namespace Events.Domain.Entities;
 
 public class Performer
@@ -7,7 +9,7 @@ public class Performer
         Name = name;
         Description = description;
     }
-    public string Id { get; set; }
+    public ObjectId Id { get; set; }
     public string Name { get; init; }
     public string Description { get; init; }
 }
