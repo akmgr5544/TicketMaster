@@ -1,6 +1,6 @@
 namespace Bookings.Domain.Entities;
 
-public class Ticket
+public class Ticket : RootEntity
 {
     public Ticket(string seats, int venueId, int eventId,  DateTime eventDate)
     {

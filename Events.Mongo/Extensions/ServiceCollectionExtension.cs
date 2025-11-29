@@ -10,6 +10,8 @@ public static class ServiceCollectionExtension
     {
         //TODO:: add mongo configurations
         services.AddScoped<IEventRepository, EventRepository>();
+        services.AddScoped<IVenueRepository, VenueRepository>();
+        services.AddScoped<IPerformerRepository, PerformerRepository>();
         return services;
     }
 }

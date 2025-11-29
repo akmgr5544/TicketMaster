@@ -1,8 +1,9 @@
 using Events.Application.Commands;
-using Events.Domain.Entities;
 using Events.Domain.Exceptions;
 using Events.Domain.Repositories;
+using MassTransit;
 using MediatR;
+using Event = Events.Domain.Entities.Event;
 
 namespace Events.Application.CommandHandlers;
 
@@ -10,7 +11,7 @@ public class CreateEventCommandHandler : IRequestHandler<CreateEventCommand>
 {
     private readonly IEventRepository _eventRepository;
     
-    public CreateEventCommandHandler(IEventRepository eventRepository)
+    public CreateEventCommandHandler(IEventRepository eventRepository, IBus bus)
     {
         _eventRepository = eventRepository;
     }
