@@ -2,7 +2,7 @@ using Bookings.Domain.Enums;
 
 namespace Bookings.Domain.Entities;
 
-public class BookingHistory
+public sealed class BookingHistory
 {
     public long Id { get; set; }
     public long BookingId { get; set; }

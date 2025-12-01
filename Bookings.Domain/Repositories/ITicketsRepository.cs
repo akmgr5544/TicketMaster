@@ -3,7 +3,7 @@ using Bookings.Domain.Entities;
 
 namespace Bookings.Domain.Repositories;
 
-public interface ITicketsRepository : IAggregateRoot<Ticket>
+public interface ITicketsRepository
 {
     ValueTask<Ticket[]> GetTicketsByIdAsync(ImmutableArray<long> ticketIds,
         CancellationToken cancellationToken);

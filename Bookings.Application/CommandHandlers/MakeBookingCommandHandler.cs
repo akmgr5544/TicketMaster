@@ -23,12 +23,14 @@ internal class MakeBookingCommandHandler : IRequestHandler<MakeBookingCommand>
         //TODO:: logic for ticket checking
         //TODO:: lock tickets for booking use redis
 
-        var bookedTickets = tickets.Select(x => new BookedTicket()
+        var booking = new Booking(request.UserId, request.Status);
+        
+        foreach (var ticket in tickets)
         {
-            TicketId = x.Id,
-        }).ToList();
-
-        var booking = new Booking(request.UserId, request.Status, bookedTickets);
+            booking.AddBookedTicket(ticket.Id);
+        }
+        
+        //TODO:: publish event to change ticket status??
 
         await _bookingRepository.AddAsync(booking);
         await _bookingRepository.SaveChangesAsync(cancellationToken);

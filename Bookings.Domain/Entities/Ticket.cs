@@ -1,18 +1,23 @@
+using Bookings.Domain.Abstractions;
+using Bookings.Domain.Enums;
+
 namespace Bookings.Domain.Entities;
 
-public class Ticket : RootEntity
+public sealed class Ticket : Entity, IAggregateRoot
 {
-    public Ticket(string seats, int venueId, int eventId,  DateTime eventDate)
+    public Ticket(string seat, string venueId, string eventId,  DateTime eventDate)
     {
-        Seats = seats;
+        Seat = seat;
         VenueId = venueId;
         EventId = eventId;
         EventDate = eventDate;
+        Status = TicketStatus.None;
     }
 
     public long Id { get; set; }
-    public long VenueId { get; set; }
-    public long EventId { get; set; }
-    public string Seats { get; init; }
+    public string VenueId { get; set; }
+    public string EventId { get; set; }
+    public string Seat { get; init; }
     public DateTime EventDate { get; set; }
+    public TicketStatus Status { get; set; }
 }

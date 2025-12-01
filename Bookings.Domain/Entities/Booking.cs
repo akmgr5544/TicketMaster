@@ -1,8 +1,9 @@
+using Bookings.Domain.Abstractions;
 using Bookings.Domain.Enums;
 
 namespace Bookings.Domain.Entities;
 
-public class Booking : RootEntity
+public sealed class Booking : Entity, IAggregateRoot
 {
     public long Id { get; set; }
     public string UserId { get; set; }
@@ -10,13 +11,22 @@ public class Booking : RootEntity
     public List<BookingHistory> BookingHistories { get; set; }
     public List<BookedTicket> BookedTickets { get; set; }
 
+    private Booking()
+    {
+    }
+
     public Booking(string userId,
-        BookingStatus status,
-        List<BookedTicket> bookedTickets)
+        BookingStatus status)
     {
         UserId = userId;
         Status = status;
-        BookedTickets = bookedTickets;
-        BookingHistories = [new BookingHistory(status, bookedTickets.Count)];
+        BookedTickets = [];
+        //TODO::
+        BookingHistories = [];
+    }
+
+    public void AddBookedTicket(long bookedTicketId)
+    {
+        BookedTickets.Add(new BookedTicket(bookedTicketId, Id));
     }
 }
