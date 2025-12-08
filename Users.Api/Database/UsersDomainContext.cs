@@ -1,16 +1,15 @@
 using Microsoft.EntityFrameworkCore;
-using Users.Domain.Entities;
-using Users.Sql.Configurations;
+using Users.Api.Database.Configurations;
+using Users.Api.Entities;
 
-namespace Users.Sql;
+namespace Users.Api.Database;
 
 public class UsersDomainContext : DbContext
 {
-    public DbSet<User>  Users { get; set; }
-    
+    public DbSet<User> Users { get; set; }
+
     public UsersDomainContext(DbContextOptions options) : base(options)
     {
-        
     }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)

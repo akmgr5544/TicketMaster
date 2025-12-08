@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using Bookings.Domain.Abstractions;
 using Bookings.Domain.Entities;
 using Bookings.Domain.Repositories;
 using Microsoft.EntityFrameworkCore;
@@ -18,6 +19,11 @@ public class TicketsRepository : ITicketsRepository
         CancellationToken cancellationToken)
     {
         return await _context.Tickets.Where(x => ticketIds.Contains(x.Id)).ToArrayAsync(cancellationToken);
+    }
+
+    public async ValueTask AddTicketAsync(Ticket ticket, CancellationToken cancellationToken)
+    {
+        await _context.Tickets.AddAsync(ticket, cancellationToken);
     }
 
     public async ValueTask AddTicketsAsync(Ticket[] ticket)

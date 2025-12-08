@@ -1,12 +1,15 @@
 using System.Collections.Immutable;
+using Bookings.Domain.Abstractions;
 using Bookings.Domain.Entities;
 
 namespace Bookings.Domain.Repositories;
 
-public interface ITicketsRepository
+public interface ITicketsRepository : IUnitOfWork
 {
     ValueTask<Ticket[]> GetTicketsByIdAsync(ImmutableArray<long> ticketIds,
         CancellationToken cancellationToken);
 
     ValueTask AddTicketsAsync(Ticket[] ticket);
+
+    ValueTask AddTicketAsync(Ticket ticket, CancellationToken cancellationToken);
 }

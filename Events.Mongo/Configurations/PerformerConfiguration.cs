@@ -7,9 +7,6 @@ public static class PerformerConfiguration
 {
     public static void PerformerConfig()
     {
-        BsonClassMap.RegisterClassMap<Performer>(map =>
-        {
-
-        });
+        BsonClassMap.RegisterClassMap<Performer>(map => { map.AutoMap(); });
     }
 }

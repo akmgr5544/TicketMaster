@@ -9,7 +9,7 @@ public static class EventConfiguration
     {
         BsonClassMap.RegisterClassMap<Event>(map =>
         {
-
+            map.AutoMap();
         });
     }
 }

@@ -12,13 +12,15 @@ internal class CreateTicketCommandHandler : IRequestHandler<CreateTicketCommand>
     {
         _ticketsRepository = ticketsRepository;
     }
-    public Task Handle(CreateTicketCommand request, CancellationToken cancellationToken)
+    public async Task Handle(CreateTicketCommand request, CancellationToken cancellationToken)
     {
-        //TODO:: add bulk insertion for Tickets on EventCreated and pass total seats for venue
+        //TODO:: add validation for Venues and Events
         var ticket = new Ticket(request.Seat,
             request.VenueId,
             request.EventId,
             request.EventDate);
-        throw new NotImplementedException();
+        
+        await _ticketsRepository.AddTicketAsync(ticket, cancellationToken);
+        await _ticketsRepository.SaveChangesAsync(cancellationToken);
     }
 }

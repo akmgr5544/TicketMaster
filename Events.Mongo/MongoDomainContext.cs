@@ -11,7 +11,6 @@ public class MongoDomainContext
 
     public MongoDomainContext(IMongoDatabase mongoDatabase)
     {
-        //TODO:: pass config to remove hard code
         Events = mongoDatabase.GetCollection<Event>("events");
         Performers = mongoDatabase.GetCollection<Performer>("performers");
         Venues = mongoDatabase.GetCollection<Venue>("venues");
