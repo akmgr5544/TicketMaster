@@ -8,6 +8,19 @@ internal class UserConfiguration : IEntityTypeConfiguration<User>
 {
     public void Configure(EntityTypeBuilder<User> builder)
     {
-        throw new NotImplementedException();
+        builder.ToTable("Users");
+        builder.HasKey(user => user.Id);
+        builder.Property(user => user.Id).ValueGeneratedOnAdd();
+        
+        builder.Property(user => user.Email).HasMaxLength(60).IsRequired();
+        builder.HasIndex(user => user.Email).IsUnique();
+        
+        builder.Property(user => user.UserName).HasMaxLength(120).IsRequired();
+        builder.HasIndex(user => user.UserName).IsUnique();
+        
+        builder.Property(user => user.Password).HasMaxLength(60).IsRequired();
+        builder.Property(user => user.FirstName).HasMaxLength(120).IsRequired();
+        builder.Property(user => user.LastName).HasMaxLength(120).IsRequired();
+        builder.Property(user => user.PhoneNumber).HasMaxLength(120);
     }
 }
