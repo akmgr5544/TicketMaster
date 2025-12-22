@@ -5,6 +5,9 @@ EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{9392DB75-E286-47B2-827B-429060C7DD36}"
 	ProjectSection(SolutionItems) = preProject
 		compose.yaml = compose.yaml
+		.editorconfig = .editorconfig
+		Directory.Build.props = Directory.Build.props
+		Directory.Packages.props = Directory.Packages.props
 	EndProjectSection
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Bookings.Api", "Bookings.Api\Bookings.Api.csproj", "{8E99CC1F-9EA0-4EAB-9EAD-8F5CF1B7171E}"
@@ -30,6 +33,8 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Events.Application", "Events.Application\Events.Application.csproj", "{27091990-CE5A-4D74-BEB2-39658DED99E5}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Bookings.Application", "Bookings.Application\Bookings.Application.csproj", "{556A25B3-B74F-473A-97FC-C0C15525FF27}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TicketMaster.Common", "TicketMaster.Common\TicketMaster.Common.csproj", "{7EACB3CA-8A7A-4808-9EFB-22AA275BF711}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -77,6 +82,10 @@ Global
 		{556A25B3-B74F-473A-97FC-C0C15525FF27}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{556A25B3-B74F-473A-97FC-C0C15525FF27}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{556A25B3-B74F-473A-97FC-C0C15525FF27}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7EACB3CA-8A7A-4808-9EFB-22AA275BF711}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7EACB3CA-8A7A-4808-9EFB-22AA275BF711}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7EACB3CA-8A7A-4808-9EFB-22AA275BF711}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7EACB3CA-8A7A-4808-9EFB-22AA275BF711}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{7E7353E3-0896-44D5-A825-9C422B127B66} = {33934861-A0AB-4684-88CF-12460AADFF40}
