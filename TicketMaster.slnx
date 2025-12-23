@@ -1,0 +1,25 @@
+<Solution>
+  <Folder Name="/BookingService/">
+    <Project Path="Bookings.Api/Bookings.Api.csproj" />
+    <Project Path="Bookings.Application/Bookings.Application.csproj" />
+    <Project Path="Bookings.Domain/Bookings.Domain.csproj" />
+    <Project Path="Bookings.Sql/Bookings.Sql.csproj" />
+  </Folder>
+  <Folder Name="/EventService/">
+    <Project Path="Events.Api/Events.Api.csproj" />
+    <Project Path="Events.Application/Events.Application.csproj" />
+    <Project Path="Events.Domain/Events.Domain.csproj" />
+    <Project Path="Events.Mongo/Events.Mongo.csproj" />
+  </Folder>
+  <Folder Name="/Solution Items/">
+    <File Path=".editorconfig" />
+    <File Path="compose.yaml" />
+    <File Path="Directory.Build.props" />
+    <File Path="Directory.Packages.props" />
+  </Folder>
+  <Folder Name="/UserService/">
+    <Project Path="Users.Api/Users.Api.csproj" />
+  </Folder>
+  <Project Path="TicketMaster.ApiGateway/TicketMaster.ApiGateway.csproj" />
+  <Project Path="TicketMaster.Common/TicketMaster.Common.csproj" />
+</Solution>
