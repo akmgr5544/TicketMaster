@@ -29,4 +29,9 @@ internal class PerformerRepository : IPerformerRepository
         
         return _context.Performers.Find(filter).ToListAsync(cancellationToken);
     }
+
+    public Task AddPerformerAsync(Performer performer, CancellationToken cancellationToken)
+    {
+        return _context.Performers.InsertOneAsync(performer, cancellationToken: cancellationToken);
+    }
 }

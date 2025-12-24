@@ -15,7 +15,6 @@ public class TransactionBehavior<TRequest, TResponse> : IPipelineBehavior<TReque
     public async Task<TResponse> Handle(TRequest request, RequestHandlerDelegate<TResponse> next,
         CancellationToken cancellationToken)
     {
-        //TODO:: add MQ transaction as well 
         TResponse response;
 
         await using (var transaction = await _context.Database.BeginTransactionAsync(cancellationToken))

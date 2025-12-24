@@ -1,4 +1,6 @@
 using Events.Application.Commands;
+using Events.Domain.Entities;
+using Events.Domain.Repositories;
 using Events.Mongo;
 using MediatR;
 
@@ -6,15 +8,17 @@ namespace Events.Application.CommandHandlers;
 
 public class AddVenueCommandHandler : IRequestHandler<AddVenueCommand>
 {
-    private readonly MongoDomainContext _context;
+    private readonly IVenueRepository _repository;
     
-    public AddVenueCommandHandler(MongoDomainContext context)
+    public AddVenueCommandHandler(IVenueRepository repository)
     {
-        _context = context;
+        _repository = repository;
     }
     
-    public Task Handle(AddVenueCommand request, CancellationToken cancellationToken)
+    public async Task Handle(AddVenueCommand request, CancellationToken cancellationToken)
     {
-        throw new NotImplementedException();
+        var venue = new Venue(request.Name, request.Address, request.Location);
+        
+        await _repository.AddVenueAsync(venue, cancellationToken: cancellationToken);
     }
 }

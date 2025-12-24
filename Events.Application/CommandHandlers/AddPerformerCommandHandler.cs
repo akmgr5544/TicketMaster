@@ -1,4 +1,6 @@
 using Events.Application.Commands;
+using Events.Domain.Entities;
+using Events.Domain.Repositories;
 using Events.Mongo;
 using MediatR;
 
@@ -6,15 +8,17 @@ namespace Events.Application.CommandHandlers;
 
 public class AddPerformerCommandHandler : IRequestHandler<AddPerformerCommand>
 {
-    private readonly MongoDomainContext _context;
+    private readonly IPerformerRepository _repository;
     
-    public AddPerformerCommandHandler(MongoDomainContext context)
+    public AddPerformerCommandHandler(IPerformerRepository repository)
     {
-        _context = context;
+        _repository = repository;
     }
     
-    public Task Handle(AddPerformerCommand request, CancellationToken cancellationToken)
+    public async Task Handle(AddPerformerCommand request, CancellationToken cancellationToken)
     {
-        throw new NotImplementedException();
+        var performer = new Performer(request.Name, request.Description);
+        
+        await _repository.AddPerformerAsync(performer, cancellationToken);
     }
 }

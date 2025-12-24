@@ -5,7 +5,6 @@ namespace Bookings.Domain.Entities;
 public sealed class BookingHistory
 {
     public long Id { get; set; }
-    public long BookingId { get; set; }
     public BookingStatus BookingStatus { get; set; }
     public int TicketsCount { get; set; }
 

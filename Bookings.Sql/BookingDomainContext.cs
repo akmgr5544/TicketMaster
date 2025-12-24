@@ -8,7 +8,6 @@ public class BookingDomainContext : DbContext
 {
     public DbSet<Booking> Bookings { get; set; }
     public DbSet<Ticket> Tickets { get; set; }
-    public DbSet<BookingHistory> BookingHistories { get; set; }
 
     public BookingDomainContext(DbContextOptions options) : base(options)
     {
@@ -19,9 +18,6 @@ public class BookingDomainContext : DbContext
     {
         base.OnModelCreating(modelBuilder);
         modelBuilder.ApplyConfiguration(new BookingConfiguration());
-        modelBuilder.ApplyConfiguration(new BookingHistoryConfiguration());
         modelBuilder.ApplyConfiguration(new TicketConfiguration());
-        //TODO:: make Configuration for BookedTicket in BookingConfiguration as owned prop
-        modelBuilder.ApplyConfiguration(new BookedTicketConfiguration());
     }
 }

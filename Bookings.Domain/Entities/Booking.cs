@@ -27,6 +27,6 @@ public sealed class Booking : Entity, IAggregateRoot
 
     public void AddBookedTicket(long bookedTicketId)
     {
-        BookedTickets.Add(new BookedTicket(bookedTicketId, Id));
+        BookedTickets.Add(new BookedTicket(bookedTicketId));
     }
 }
