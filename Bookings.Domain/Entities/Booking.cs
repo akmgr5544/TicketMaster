@@ -15,18 +15,24 @@ public sealed class Booking : Entity, IAggregateRoot
     {
     }
 
-    public Booking(string userId,
+    private Booking(string userId,
         BookingStatus status)
     {
         UserId = userId;
         Status = status;
         BookedTickets = [];
-        //TODO::
         BookingHistories = [];
     }
 
     public void AddBookedTicket(long bookedTicketId)
     {
         BookedTickets.Add(new BookedTicket(bookedTicketId));
+    }
+
+    public static Booking Create(string userId, BookingStatus status, int ticketCount)
+    {
+        var booking = new Booking(userId, status);
+        booking.BookingHistories.Add(new BookingHistory(booking.Status, ticketCount));
+        return booking;
     }
 }

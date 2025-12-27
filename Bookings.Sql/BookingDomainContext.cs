@@ -1,3 +1,4 @@
+using Bookings.Domain.Abstractions;
 using Bookings.Domain.Entities;
 using Bookings.Sql.Configurations;
 using Microsoft.EntityFrameworkCore;
@@ -8,6 +9,7 @@ public class BookingDomainContext : DbContext
 {
     public DbSet<Booking> Bookings { get; set; }
     public DbSet<Ticket> Tickets { get; set; }
+    public DbSet<BookedTicket> BookedTickets { get; set; }
 
     public BookingDomainContext(DbContextOptions options) : base(options)
     {

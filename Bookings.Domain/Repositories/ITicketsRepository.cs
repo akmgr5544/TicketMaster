@@ -6,6 +6,9 @@ namespace Bookings.Domain.Repositories;
 
 public interface ITicketsRepository : IUnitOfWork
 {
+    ValueTask<Ticket[]> GetTicketsForBookingAsync(ImmutableArray<long> ticketIds,
+        string eventId,
+        CancellationToken cancellationToken);
     ValueTask<Ticket[]> GetTicketsByIdAsync(ImmutableArray<long> ticketIds,
         CancellationToken cancellationToken);
 

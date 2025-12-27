@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using Bookings.Domain.Abstractions;
 using Bookings.Domain.Entities;
+using Bookings.Domain.Enums;
 using Bookings.Domain.Repositories;
 using Microsoft.EntityFrameworkCore;
 
@@ -13,6 +14,17 @@ public class TicketsRepository : ITicketsRepository
     public TicketsRepository(BookingDomainContext context)
     {
         _context = context;
+    }
+
+    public async ValueTask<Ticket[]> GetTicketsForBookingAsync(ImmutableArray<long> ticketIds,
+        string eventId,
+        CancellationToken cancellationToken)
+    {
+        var tickets = _context.Tickets.Where(x => ticketIds.Contains(x.Id) && 
+                                                  x.EventId == eventId &&
+                                                  x.EventDate > DateTime.UtcNow.AddHours(-5) &&
+                                                  x.Status == TicketStatus.None);
+        return await tickets.ToArrayAsync(cancellationToken);
     }
 
     public async ValueTask<Ticket[]> GetTicketsByIdAsync(ImmutableArray<long> ticketIds,
