@@ -6,10 +6,13 @@
 
     <ItemGroup>
       <PackageReference Include="MediatR" />
+      <PackageReference Include="WolverineFx" />
+      <PackageReference Include="WolverineFx.RabbitMQ" />
     </ItemGroup>
 
     <ItemGroup>
       <ProjectReference Include="..\Bookings.Sql\Bookings.Sql.csproj" />
+      <ProjectReference Include="..\TicketMaster.Common\TicketMaster.Common.csproj" />
     </ItemGroup>
 
 </Project>

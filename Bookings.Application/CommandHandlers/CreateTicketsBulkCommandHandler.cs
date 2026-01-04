@@ -16,7 +16,6 @@ public class CreateTicketsBulkCommandHandler : IRequestHandler<CreateTicketsBulk
     
     public async Task Handle(CreateTicketsBulkCommand request, CancellationToken cancellationToken)
     {
-        //TODO:: trigger from Event Create
         var tickets = new List<Ticket>();
         
         foreach (var seat in request.Seats)

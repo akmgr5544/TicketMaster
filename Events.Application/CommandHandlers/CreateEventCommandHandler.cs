@@ -1,8 +1,9 @@
 using Events.Application.Commands;
 using Events.Domain.Exceptions;
 using Events.Domain.Repositories;
-using MassTransit;
 using MediatR;
+using TicketMaster.Common.IntegrationEvents;
+using Wolverine;
 using Event = Events.Domain.Entities.Event;
 
 namespace Events.Application.CommandHandlers;
@@ -10,10 +11,12 @@ namespace Events.Application.CommandHandlers;
 public class CreateEventCommandHandler : IRequestHandler<CreateEventCommand>
 {
     private readonly IEventRepository _eventRepository;
+    private readonly IMessageBus _messageBus;
     
-    public CreateEventCommandHandler(IEventRepository eventRepository, IBus bus)
+    public CreateEventCommandHandler(IEventRepository eventRepository, IMessageBus messageBus)
     {
         _eventRepository = eventRepository;
+        _messageBus = messageBus;
     }
     
     public async Task Handle(CreateEventCommand request, CancellationToken cancellationToken)
@@ -34,6 +37,10 @@ public class CreateEventCommandHandler : IRequestHandler<CreateEventCommand>
             performers);
         
         await _eventRepository.AddEventAsync(@event, cancellationToken);
-        //TODO:: publish integration event
+        await _messageBus.PublishAsync(new EventCreatedIntegrationEvent(@event.Id.ToString(),
+            venue.Id.ToString(),
+            @event.StartDate,
+            venue.Seats
+            ));
     }
 }

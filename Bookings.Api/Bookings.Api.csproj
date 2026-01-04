@@ -4,4 +4,8 @@
         <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
     </ItemGroup>
 
+    <ItemGroup>
+      <ProjectReference Include="..\Bookings.Application\Bookings.Application.csproj" />
+    </ItemGroup>
+
 </Project>

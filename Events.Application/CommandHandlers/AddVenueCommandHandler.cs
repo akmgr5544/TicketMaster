@@ -17,7 +17,10 @@ public class AddVenueCommandHandler : IRequestHandler<AddVenueCommand>
     
     public async Task Handle(AddVenueCommand request, CancellationToken cancellationToken)
     {
-        var venue = new Venue(request.Name, request.Address, request.Location);
+        var venue = new Venue(request.Name,
+            request.Address,
+            request.Location,
+            request.Seats);
         
         await _repository.AddVenueAsync(venue, cancellationToken: cancellationToken);
     }

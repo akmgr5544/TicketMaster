@@ -1,3 +1,7 @@
 namespace TicketMaster.Common.IntegrationEvents;
 
-public record EventCreatedIntegrationEvent();
+public record EventCreatedIntegrationEvent(
+    string EventId,
+    string VenueId,
+    DateTime EventDate,
+    string[] Seats);

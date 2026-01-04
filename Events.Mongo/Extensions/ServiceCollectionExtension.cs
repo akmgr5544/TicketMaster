@@ -1,6 +1,5 @@
 using Events.Domain.Repositories;
 using Events.Mongo.Repositories;
-using MassTransit;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Driver;
@@ -27,24 +26,6 @@ public static class ServiceCollectionExtension
 
         MongoCollectionConfig.AddMongoCollectionConfig();
         
-        services.AddMassTransit(config =>
-        {
-            config.AddMongoDbOutbox(options =>
-            {
-                options.QueryDelay = TimeSpan.FromSeconds(1);
-
-                options.ClientFactory(provider => provider.GetRequiredService<IMongoClient>());
-                options.DatabaseFactory(provider =>
-                {
-                    var mongoClient = provider.GetRequiredService<IMongoClient>();
-
-                    return mongoClient.GetDatabase("");
-                });
-
-                options.DuplicateDetectionWindow = TimeSpan.FromSeconds(30);
-            });
-        });
-
         services.AddScoped<IEventRepository, EventRepository>();
         services.AddScoped<IVenueRepository, VenueRepository>();
         services.AddScoped<IPerformerRepository, PerformerRepository>();

@@ -1,6 +1,9 @@
 using Bookings.Application.Pipelines;
 using MediatR;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Wolverine;
+using Wolverine.RabbitMQ;
 
 namespace Bookings.Application.Extensions;
 
@@ -12,5 +15,16 @@ public static class ServiceCollectionExtension
             cf.RegisterServicesFromAssembly(typeof(ServiceCollectionExtension).Assembly));
         services.AddTransient(typeof(IPipelineBehavior<,>), typeof(TransactionBehavior<,>));
         return services;
+    }
+
+    public static void ConfigureRabbitMq(this IHostBuilder hostBuilder)
+    {
+        hostBuilder.UseWolverine(options =>
+        {
+            options.UseRabbitMqUsingNamedConnection("")
+                .AutoProvision()
+                .UseConventionalRouting();
+
+        });
     }
 }

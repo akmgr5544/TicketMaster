@@ -2,14 +2,13 @@
 
     <ItemGroup>
       <PackageReference Include="MediatR"/>
+      <PackageReference Include="WolverineFx" />
+      <PackageReference Include="WolverineFx.RabbitMQ" />
     </ItemGroup>
 
     <ItemGroup>
       <ProjectReference Include="..\Events.Mongo\Events.Mongo.csproj" />
-    </ItemGroup>
-
-    <ItemGroup>
-      <Folder Include="DomainEventHandlers\" />
+      <ProjectReference Include="..\TicketMaster.Common\TicketMaster.Common.csproj" />
     </ItemGroup>
 
 </Project>
