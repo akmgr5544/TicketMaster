@@ -9,7 +9,6 @@ public class TransactionBehavior<TRequest, TResponse> : IPipelineBehavior<TReque
         RequestHandlerDelegate<TResponse> next,
         CancellationToken cancellationToken)
     {
-        //TODO:: add MQ transaction as well
         var response = await next(cancellationToken);
 
         return response;

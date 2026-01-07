@@ -1,0 +1,30 @@
+{
+  "ReverseProxy": {
+    "Routes": {
+      "users-route": {
+        "ClusterId": "users-cluster",
+        "AuthorizationPolicy": "GatewayAuthPolicy",
+        "Match": {
+          "Path": "/users-service/{**catch-all}"
+        },
+        "Transforms": [{"PathPattern": "{**catch-all}"}]
+      },
+      "bookings-route": {
+        "ClusterId": "bookings-cluster",
+        "AuthorizationPolicy": "GatewayAuthPolicy",
+        "Match": {
+          "Path": "/bookings-service/{**catch-all}"
+        },
+        "Transforms": [{"PathPattern": "{**catch-all}"}]
+      },
+      "events-route": {
+        "ClusterId": "events-cluster",
+        "AuthorizationPolicy": "GatewayAuthPolicy",
+        "Match": {
+          "Path": "/events-service/{**catch-all}"
+        },
+        "Transforms": [{"PathPattern": "{**catch-all}"}]
+      }
+    }
+  }
+}

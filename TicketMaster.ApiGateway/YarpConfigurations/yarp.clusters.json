@@ -1,0 +1,27 @@
+{
+  "ReverseProxy": {
+    "Clusters": {
+      "users-cluster": {
+        "Destinations": {
+          "destination1": {
+            "Address": ""
+          }
+        }
+      },
+      "bookings-cluster": {
+        "Destinations": {
+          "destination1": {
+            "Address": ""
+          }
+        }
+      },
+      "events-cluster": {
+        "Destinations": {
+          "destination1": {
+            "Address": ""
+          }
+        }
+      }
+    }
+  }
+}
