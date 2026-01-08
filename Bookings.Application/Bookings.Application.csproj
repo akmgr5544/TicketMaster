@@ -1,11 +1,10 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
     <ItemGroup>
-      <Folder Include="Dtos\" />
-    </ItemGroup>
-
-    <ItemGroup>
+      <PackageReference Include="DistributedLock.Redis" />
       <PackageReference Include="MediatR" />
+      <PackageReference Include="Microsoft.Extensions.Caching.StackExchangeRedis" />
+      <PackageReference Include="Newtonsoft.Json" />
       <PackageReference Include="WolverineFx" />
       <PackageReference Include="WolverineFx.RabbitMQ" />
     </ItemGroup>

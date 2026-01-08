@@ -1,3 +1,4 @@
+using Bookings.Application.Services.Interfaces;
 using Bookings.Domain.DomainEvents;
 using Bookings.Domain.Enums;
 using MediatR;
