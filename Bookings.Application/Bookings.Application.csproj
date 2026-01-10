@@ -6,6 +6,8 @@
       <PackageReference Include="Microsoft.Extensions.Caching.StackExchangeRedis" />
       <PackageReference Include="Newtonsoft.Json" />
       <PackageReference Include="WolverineFx" />
+      <PackageReference Include="WolverineFx.EntityFrameworkCore" />
+      <PackageReference Include="WolverineFx.Postgresql" />
       <PackageReference Include="WolverineFx.RabbitMQ" />
     </ItemGroup>
 

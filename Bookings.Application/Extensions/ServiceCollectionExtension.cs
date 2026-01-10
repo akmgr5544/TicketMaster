@@ -9,6 +9,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using StackExchange.Redis;
 using Wolverine;
+using Wolverine.EntityFrameworkCore;
+using Wolverine.Postgresql;
 using Wolverine.RabbitMQ;
 
 namespace Bookings.Application.Extensions;
@@ -43,13 +45,20 @@ public static class ServiceCollectionExtension
         return services;
     }
 
-    public static void ConfigureRabbitMq(this IHostBuilder hostBuilder)
+    public static void ConfigureRabbitMq(this IHostBuilder hostBuilder, IConfiguration configuration)
     {
+        var rabbitConnection = configuration.GetConnectionString("RabbitMQ")!;
+        var connectionString = configuration.GetConnectionString("DefaultConnection")!;
         hostBuilder.UseWolverine(options =>
         {
-            options.UseRabbitMqUsingNamedConnection("")
+            options.UseRabbitMqUsingNamedConnection(rabbitConnection)
                 .AutoProvision()
                 .UseConventionalRouting();
+            
+            options.PersistMessagesWithPostgresql(connectionString);
+            options.UseEntityFrameworkCoreTransactions();
+            
+            options.Policies.UseDurableLocalQueues();
         });
     }
 }

@@ -33,7 +33,7 @@ public class ReserveTicketCommandHandler : IRequestHandler<ReserveTicketCommand>
         if (distributedLock == null)
             throw new BookingException("Tickets reservation is in progress");
 
-        using (distributedLock)
+        await using (distributedLock)
         {
             var keys = request.Tickets.Select(id => id.ToString()).ToArray();
             var reservedTickets = await _cacheService.GetByKeysAsync<ReserveTicketDto>(keys);
