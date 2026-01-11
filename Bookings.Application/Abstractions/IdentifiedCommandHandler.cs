@@ -2,7 +2,7 @@ using MediatR;
 
 namespace Bookings.Application.Abstractions;
 
-public class IdentifiedCommandHandler<T, TR> : IRequestHandler<IdentifiedCommand<T, TR>, TR>
+public class IdentifiedCommandHandler<T, TR> : IRequestHandler<IdentifiedCommand<T, TR>, TR?>
     where T : IRequest<TR>
 {
     private readonly IMediator _mediator;
@@ -14,7 +14,7 @@ public class IdentifiedCommandHandler<T, TR> : IRequestHandler<IdentifiedCommand
         _requestManager = requestManager;
     }
 
-    public async Task<TR> Handle(IdentifiedCommand<T, TR> request, CancellationToken cancellationToken)
+    public async Task<TR?> Handle(IdentifiedCommand<T, TR> request, CancellationToken cancellationToken)
     {
         var alreadyExists = await _requestManager.ExistsAsync(request.Id, cancellationToken);
 

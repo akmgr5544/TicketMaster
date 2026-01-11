@@ -5,23 +5,24 @@ namespace Bookings.Domain.Entities;
 
 public sealed class Booking : Entity, IAggregateRoot
 {
-    public long Id { get; set; }
-    public string UserId { get; set; }
-    public BookingStatus Status { get; set; }
-    public List<BookingHistory> BookingHistories { get; set; }
-    public List<BookedTicket> BookedTickets { get; set; }
+    public long Id { get; init; }
+    public string UserId { get; init; } = null!;
+    public BookingStatus Status { get; init; }
+    public List<BookingHistory> BookingHistories { get; init; }
+    public List<BookedTicket> BookedTickets { get; init; }
 
     private Booking()
     {
+        
+        BookedTickets = [];
+        BookingHistories = [];
     }
 
     private Booking(string userId,
-        BookingStatus status)
+        BookingStatus status) : this()
     {
         UserId = userId;
         Status = status;
-        BookedTickets = [];
-        BookingHistories = [];
     }
 
     public void AddBookedTicket(long bookedTicketId)

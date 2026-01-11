@@ -2,14 +2,12 @@
 
     <ItemGroup>
         <PackageReference Include="MediatR" />
+        <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" />
         <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
         <PackageReference Include="Microsoft.EntityFrameworkCore" />
         <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
-    </ItemGroup>
-
-    <ItemGroup>
-      <Folder Include="Features\Users\Authenticate\" />
-      <Folder Include="Features\Users\RefreshToken\" />
+        <PackageReference Include="Scrutor" />
+        <PackageReference Include="System.IdentityModel.Tokens.Jwt" />
     </ItemGroup>
 
 </Project>
