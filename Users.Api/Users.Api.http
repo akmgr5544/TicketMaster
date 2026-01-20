@@ -1,6 +1,19 @@
 @Users.Api_HostAddress = http://localhost:5161
+@UserId = 1
 
-GET {{Users.Api_HostAddress}}/weatherforecast/
+POST {{Users.Api_HostAddress}}/api/users/registration
 Accept: application/json
+X-Identity-UserId: {{UserId}}
+###
+
+
+POST {{Users.Api_HostAddress}}/api/users/login
+Accept: application/json
+X-Identity-UserId: {{UserId}}
+###
+
+POST {{Users.Api_HostAddress}}/api/users/refreshToken
+Accept: application/json
+X-Identity-UserId: {{UserId}}
 
 ###

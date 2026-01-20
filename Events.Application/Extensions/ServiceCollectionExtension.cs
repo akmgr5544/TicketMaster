@@ -26,7 +26,8 @@ public static class ServiceCollectionExtension
             options.UseRabbitMqUsingNamedConnection("")
                 .AutoProvision()
                 .UseConventionalRouting();
-
+            
+            options.Policies.DisableConventionalLocalRouting();
         });
     }
 }
