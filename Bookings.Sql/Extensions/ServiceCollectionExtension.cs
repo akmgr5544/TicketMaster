@@ -4,6 +4,7 @@ using Bookings.Sql.Repositories;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace Bookings.Sql.Extensions;
 
@@ -26,5 +27,12 @@ public static class ServiceCollectionExtension
         });
 
         return services;
+    }
+    
+    public static async Task ApplyMigrationsAsync(this IHost app)
+    {
+        using var scope = app.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<BookingDomainContext>();
+        await dbContext.Database.MigrateAsync();
     }
 }

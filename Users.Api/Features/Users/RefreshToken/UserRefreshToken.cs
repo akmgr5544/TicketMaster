@@ -47,6 +47,8 @@ public static class UserRefreshToken
             var refreshToken = TokenService.CreateRefreshToken(user, _authOptions);
 
             user.RefreshToken = refreshToken;
+            _dbContext.Users.Update(user);
+            await _dbContext.SaveChangesAsync(cancellationToken);
 
             var result = new Response(token, refreshToken);
             return Result<Response>.Success(result);

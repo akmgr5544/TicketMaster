@@ -21,6 +21,8 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
 }
 
+await app.ApplyMigrationsAsync();
+
 app.UseHttpsRedirection();
 
 await app.RunAsync();
