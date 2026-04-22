@@ -2,7 +2,7 @@ using MediatR;
 
 namespace Bookings.Application.Abstractions;
 
-public class IdentifiedCommandHandler<T, TR> : IRequestHandler<IdentifiedCommand<T, TR>, TR?>
+internal class IdentifiedCommandHandler<T, TR> : IRequestHandler<IdentifiedCommand<T, TR>, TR?>
     where T : IRequest<TR>
 {
     private readonly IMediator _mediator;

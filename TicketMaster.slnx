@@ -17,6 +17,12 @@
     <File Path="Directory.Build.props" />
     <File Path="Directory.Packages.props" />
   </Folder>
+  <Folder Name="/Tests/">
+    <Project Path="Tests/ArchitectureTests/ArchitectureTests.csproj" />
+  </Folder>
+  <Folder Name="/Tests/Test Items/">
+    <File Path="Tests\Directory.Packages.props" />
+  </Folder>
   <Folder Name="/UserService/">
     <Project Path="Users.Api/Users.Api.csproj" />
   </Folder>

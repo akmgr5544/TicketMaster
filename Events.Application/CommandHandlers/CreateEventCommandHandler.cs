@@ -8,7 +8,7 @@ using Event = Events.Domain.Entities.Event;
 
 namespace Events.Application.CommandHandlers;
 
-public class CreateEventCommandHandler : IRequestHandler<CreateEventCommand>
+internal class CreateEventCommandHandler : IRequestHandler<CreateEventCommand>
 {
     private readonly IEventRepository _eventRepository;
     private readonly IMessageBus _messageBus;

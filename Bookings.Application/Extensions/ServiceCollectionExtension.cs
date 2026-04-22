@@ -1,9 +1,7 @@
-using Bookings.Application.Pipelines;
 using Bookings.Application.Services.Implementations;
 using Bookings.Application.Services.Interfaces;
 using Medallion.Threading;
 using Medallion.Threading.Redis;
-using MediatR;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -40,8 +38,6 @@ public static class ServiceCollectionExtension
         services.AddScoped<ICacheService, CacheService>();
         services.AddMediatR(cf =>
             cf.RegisterServicesFromAssembly(typeof(ServiceCollectionExtension).Assembly));
-        services.AddTransient(typeof(IPipelineBehavior<,>), typeof(TransactionBehavior<,>));
-
         return services;
     }
 

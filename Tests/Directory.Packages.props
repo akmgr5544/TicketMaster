@@ -1,0 +1,11 @@
+<Project>
+  <!-- IMPORTANT: Manually import the root versions -->
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Packages.props', '$(MSBuildThisFileDirectory)../'))" />
+  <ItemGroup>
+    <PackageVersion Include="coverlet.collector" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.4.0" />
+    <PackageVersion Include="TngTech.ArchUnitNET.xUnit" Version="0.13.3" />
+    <PackageVersion Include="xunit" Version="2.9.3" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
+  </ItemGroup>
+</Project>

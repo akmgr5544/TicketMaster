@@ -6,7 +6,7 @@ using MediatR;
 
 namespace Events.Application.CommandHandlers;
 
-public class AddVenueCommandHandler : IRequestHandler<AddVenueCommand>
+internal class AddVenueCommandHandler : IRequestHandler<AddVenueCommand>
 {
     private readonly IVenueRepository _repository;
     

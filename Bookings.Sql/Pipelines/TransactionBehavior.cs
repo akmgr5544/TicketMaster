@@ -1,9 +1,8 @@
-using Bookings.Sql;
 using MediatR;
 
-namespace Bookings.Application.Pipelines;
+namespace Bookings.Sql.Pipelines;
 
-public class TransactionBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>
+internal class TransactionBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>
 {
     private readonly BookingDomainContext _context;
 

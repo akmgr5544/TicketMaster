@@ -6,7 +6,7 @@ using MediatR;
 
 namespace Events.Application.CommandHandlers;
 
-public class AddPerformerCommandHandler : IRequestHandler<AddPerformerCommand>
+internal class AddPerformerCommandHandler : IRequestHandler<AddPerformerCommand>
 {
     private readonly IPerformerRepository _repository;
     

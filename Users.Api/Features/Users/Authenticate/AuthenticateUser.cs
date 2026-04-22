@@ -16,7 +16,6 @@ public static class AuthenticateUser
 
     public sealed record Response(string Token, string RefreshToken);
 
-    [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)]
     internal sealed class Handler : IRequestHandler<Command, Result<Response>>
     {
         private readonly UsersDomainContext _dbContext;

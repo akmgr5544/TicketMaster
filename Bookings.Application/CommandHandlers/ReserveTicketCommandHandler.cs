@@ -7,7 +7,7 @@ using MediatR;
 
 namespace Bookings.Application.CommandHandlers;
 
-public class ReserveTicketCommandHandler : IRequestHandler<ReserveTicketCommand>
+internal class ReserveTicketCommandHandler : IRequestHandler<ReserveTicketCommand>
 {
     private readonly IDistributedLockProvider _lockProvider;
     private readonly ICacheService _cacheService;

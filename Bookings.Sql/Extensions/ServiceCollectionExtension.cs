@@ -1,6 +1,8 @@
 using Bookings.Domain.Repositories;
 using Bookings.Sql.Interceptors;
+using Bookings.Sql.Pipelines;
 using Bookings.Sql.Repositories;
+using MediatR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -13,6 +15,8 @@ public static class ServiceCollectionExtension
     public static IServiceCollection AddInfrastructureServices(this IServiceCollection services,
         IConfiguration configuration)
     {
+        services.AddTransient(typeof(IPipelineBehavior<,>), typeof(TransactionBehavior<,>));
+
         services.AddScoped<IBookingRepository, BookingRepository>();
         services.AddScoped<ITicketsRepository, TicketsRepository>();
 
@@ -28,7 +32,7 @@ public static class ServiceCollectionExtension
 
         return services;
     }
-    
+
     public static async Task ApplyMigrationsAsync(this IHost app)
     {
         using var scope = app.Services.CreateScope();

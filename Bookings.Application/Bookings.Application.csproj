@@ -16,4 +16,8 @@
       <ProjectReference Include="..\TicketMaster.Common\TicketMaster.Common.csproj" />
     </ItemGroup>
 
+    <ItemGroup>
+      <Folder Include="Pipelines\" />
+    </ItemGroup>
+
 </Project>

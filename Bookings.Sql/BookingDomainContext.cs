@@ -1,11 +1,10 @@
-using Bookings.Domain.Abstractions;
 using Bookings.Domain.Entities;
 using Bookings.Sql.Configurations;
 using Microsoft.EntityFrameworkCore;
 
 namespace Bookings.Sql;
 
-public class BookingDomainContext : DbContext
+internal class BookingDomainContext : DbContext
 {
     public DbSet<Booking> Bookings { get; set; }
     public DbSet<Ticket> Tickets { get; set; }

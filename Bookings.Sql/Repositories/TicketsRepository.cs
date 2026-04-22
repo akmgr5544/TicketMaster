@@ -7,7 +7,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Bookings.Sql.Repositories;
 
-public class TicketsRepository : ITicketsRepository
+internal class TicketsRepository : ITicketsRepository
 {
     private readonly BookingDomainContext _context;
 

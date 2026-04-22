@@ -3,33 +3,38 @@
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
   </PropertyGroup>
   <ItemGroup>
-    <GlobalPackageReference Include="SonarAnalyzer.CSharp" Version="10.17.0.131074" />
-    <Content Include="..\.dockerignore">
-      <Link>.dockerignore</Link>
-    </Content>
+    <GlobalPackageReference Include="SonarAnalyzer.CSharp" Version="10.23.0.137933" />
   </ItemGroup>
+    <!-- Only run this if a Dockerfile physically exists in the project folder -->
+   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Dockerfile')">
+       <Content Include="$(MSBuildThisFileDirectory).dockerignore">
+            <Link>.dockerignore</Link>
+            <!-- Optional: Hide from build output, only show in VS -->
+            <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+       </Content>
+   </ItemGroup>
   <ItemGroup>
     <PackageVersion Include="DistributedLock.Redis" Version="1.1.1" />
-    <PackageVersion Include="MediatR" Version="14.0.0" />
-    <PackageVersion Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.1" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.Tools" Version="10.0.1" />
-    <PackageVersion Include="Microsoft.Extensions.Caching.StackExchangeRedis" Version="10.0.1" />
-    <PackageVersion Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.1" />
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.1" />
-    <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.1" />
-    <PackageVersion Include="MongoDB.Bson" Version="3.5.2" />
-    <PackageVersion Include="MongoDB.Driver" Version="3.5.2" />
-    <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="10.0.1" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="10.0.1" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.1" />
+    <PackageVersion Include="MediatR" Version="14.1.0" />
+    <PackageVersion Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.6" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Tools" Version="10.0.6" />
+    <PackageVersion Include="Microsoft.Extensions.Caching.StackExchangeRedis" Version="10.0.6" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.6" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.6" />
+    <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.6" />
+    <PackageVersion Include="MongoDB.Bson" Version="3.7.1" />
+    <PackageVersion Include="MongoDB.Driver" Version="3.7.1" />
+    <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="10.0.6" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="10.0.6" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.6" />
     <PackageVersion Include="Newtonsoft.Json" Version="13.0.4" />
-    <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.0" />
+    <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.1" />
     <PackageVersion Include="Scrutor" Version="7.0.0" />
-    <PackageVersion Include="System.IdentityModel.Tokens.Jwt" Version="8.15.0" />
-    <PackageVersion Include="WolverineFx" Version="5.9.2" />
-    <PackageVersion Include="WolverineFx.EntityFrameworkCore" Version="5.9.2" />
-    <PackageVersion Include="WolverineFx.Postgresql" Version="5.9.2" />
-    <PackageVersion Include="WolverineFx.RabbitMQ" Version="5.9.2" />
+    <PackageVersion Include="System.IdentityModel.Tokens.Jwt" Version="8.17.0" />
+    <PackageVersion Include="WolverineFx" Version="5.31.1" />
+    <PackageVersion Include="WolverineFx.EntityFrameworkCore" Version="5.31.1" />
+    <PackageVersion Include="WolverineFx.Postgresql" Version="5.31.1" />
+    <PackageVersion Include="WolverineFx.RabbitMQ" Version="5.31.1" />
     <PackageVersion Include="Yarp.ReverseProxy" Version="2.3.0" />
   </ItemGroup>
 </Project>
