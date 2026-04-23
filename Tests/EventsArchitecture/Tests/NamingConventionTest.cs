@@ -1,10 +1,10 @@
-using ArchitectureTests.BaseTests;
+using ArchUnitNET.xUnit;
 using MediatR;
 using static ArchUnitNET.Fluent.ArchRuleDefinition;
 
-namespace ArchitectureTests.DependenceTests.Booking;
+namespace EventsArchitecture.Tests;
 
-public class NamingConventionTest : BookingBaseTest
+public class NamingConventionTest : BaseTest
 {
     [Fact]
     public void CommandHandlers_ShouldHave_NameEndingWith_CommandHandler()
@@ -14,6 +14,7 @@ public class NamingConventionTest : BookingBaseTest
             .ImplementInterface(typeof(IRequestHandler<>))
             .Or()
             .ImplementInterface(typeof(IRequestHandler<,>))
-            .Should().HaveNameEndingWith("CommandHandler");
+            .Should().HaveNameEndingWith("CommandHandler")
+            .Check(Architecture);
     }
 }

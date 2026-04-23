@@ -1,15 +1,15 @@
 using System.Reflection;
-using ArchUnitNET.Domain;
 using ArchUnitNET.Loader;
 using Bookings.Api;
 using Bookings.Application;
 using Bookings.Domain;
 using Bookings.Sql;
+using ArchUnitNET.Domain;
 using Assembly = System.Reflection.Assembly;
 
-namespace ArchitectureTests.BaseTests;
+namespace BookingArchitecture;
 
-public abstract class BookingBaseTest
+public abstract class BaseTest
 {
     protected static readonly Assembly ApiAssembly = typeof(IApiAssemblyMarker).Assembly;
     protected static readonly Assembly ApplicationAssembly = typeof(IApplicationAssemblyMarker).Assembly;

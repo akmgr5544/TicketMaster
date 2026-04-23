@@ -17,8 +17,14 @@
     <File Path="Directory.Build.props" />
     <File Path="Directory.Packages.props" />
   </Folder>
-  <Folder Name="/Tests/">
-    <Project Path="Tests/ArchitectureTests/ArchitectureTests.csproj" />
+  <Folder Name="/Tests/" />
+  <Folder Name="/Tests/ArchitectureTests/">
+    <Project Path="Tests/BookingArchitecture/BookingArchitecture.csproj" />
+    <Project Path="Tests/EventsArchitecture/EventsArchitecture.csproj" />
+    <Project Path="Tests/UsersArchitecture/UsersArchitecture.csproj" />
+  </Folder>
+  <Folder Name="/Tests/IntegrationTests/">
+    <Project Path="Tests/BookingIntegration/BookingIntegration.csproj" />
   </Folder>
   <Folder Name="/Tests/Test Items/">
     <File Path="Tests\Directory.Packages.props" />

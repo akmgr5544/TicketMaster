@@ -1,21 +1,18 @@
-using ArchitectureTests.BaseTests;
-using ArchUnitNET.xUnit;
 using MediatR;
 using static ArchUnitNET.Fluent.ArchRuleDefinition;
 
-namespace ArchitectureTests.DependenceTests.Events;
+namespace BookingArchitecture.Tests;
 
-public class VisibilityTest : EventsBaseTest
+public class NamingConventionTest : BaseTest
 {
     [Fact]
-    public void CommandHandlers_ShouldNotBePublic()
+    public void CommandHandlers_ShouldHave_NameEndingWith_CommandHandler()
     {
         Classes().That().ResideInAssembly(ApplicationAssembly)
             .And()
             .ImplementInterface(typeof(IRequestHandler<>))
             .Or()
             .ImplementInterface(typeof(IRequestHandler<,>))
-            .Should().BeInternal()
-            .Check(Architecture);
+            .Should().HaveNameEndingWith("CommandHandler");
     }
 }

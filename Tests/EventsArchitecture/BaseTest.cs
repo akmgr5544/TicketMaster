@@ -1,15 +1,15 @@
 using System.Reflection;
 using ArchUnitNET.Domain;
 using ArchUnitNET.Loader;
-using Bookings.Sql;
 using Events.Api;
 using Events.Application;
 using Events.Domain;
+using Events.Mongo;
 using Assembly = System.Reflection.Assembly;
 
-namespace ArchitectureTests.BaseTests;
+namespace EventsArchitecture;
 
-public abstract class EventsBaseTest
+public abstract class BaseTest
 {
     protected static readonly Assembly ApiAssembly = typeof(IApiAssemblyMarker).Assembly;
     protected static readonly Assembly ApplicationAssembly = typeof(IApplicationAssemblyMarker).Assembly;

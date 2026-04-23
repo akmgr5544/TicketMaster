@@ -1,11 +1,10 @@
-using ArchitectureTests.BaseTests;
 using ArchUnitNET.Domain;
 using ArchUnitNET.xUnit;
 using static ArchUnitNET.Fluent.ArchRuleDefinition;
 
-namespace ArchitectureTests.DependenceTests.Events;
+namespace BookingArchitecture.Tests;
 
-public class DependenceTest : EventsBaseTest
+public class DependenceTest : BaseTest
 {
     private static readonly IObjectProvider<IType> Domain =
         Types().That().ResideInAssembly(DomainAssembly).As("Domain Layer");
@@ -16,9 +15,9 @@ public class DependenceTest : EventsBaseTest
     private static readonly IObjectProvider<IType> Api =
         Types().That().ResideInAssembly(ApiAssembly).As("Api Layer");
 
-    private static readonly IObjectProvider<IType> Mongo =
-        Types().That().ResideInAssembly(MongoAssembly).As("Mongo Layer");
-    
+    private static readonly IObjectProvider<IType> Sql =
+        Types().That().ResideInAssembly(SqlAssembly).As("Sql Layer");
+
     [Fact]
     public void DomainLayer_ShouldNotDependOn_ApplicationLayer()
     {
@@ -36,18 +35,18 @@ public class DependenceTest : EventsBaseTest
     }
 
     [Fact]
-    public void DomainLayer_ShouldNotDependOn_MongoLayer()
+    public void DomainLayer_ShouldNotDependOn_SqlLayer()
     {
         Types().That().Are(Domain).Should()
-            .NotDependOnAny(Mongo)
+            .NotDependOnAny(Sql)
             .Check(Architecture);
     }
     
     [Fact]
-    public void ApplicationLayer_ShouldNotDependOn_MongoLayer()
+    public void ApplicationLayer_ShouldNotDependOn_SqlLayer()
     {
         Types().That().Are(Application).Should()
-            .NotDependOnAny(Mongo)
+            .NotDependOnAny(Sql)
             .Check(Architecture);
     }
     
@@ -60,9 +59,9 @@ public class DependenceTest : EventsBaseTest
     }
     
     [Fact]
-    public void MongoLayer_ShouldNotDependOn_ApiLayer()
+    public void SqlLayer_ShouldNotDependOn_ApiLayer()
     {
-        Types().That().Are(Mongo).Should()
+        Types().That().Are(Sql).Should()
             .NotDependOnAny(Api)
             .Check(Architecture);
     }

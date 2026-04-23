@@ -3,9 +3,9 @@ using ArchUnitNET.Loader;
 using Users.Api;
 using Assembly = System.Reflection.Assembly;
 
-namespace ArchitectureTests.BaseTests;
+namespace UsersArchitecture;
 
-public class UsersBaseTest
+public class BaseTest
 {
     protected static readonly Assembly UsersAssembly = typeof(IAssemblyMarker).Assembly;
 

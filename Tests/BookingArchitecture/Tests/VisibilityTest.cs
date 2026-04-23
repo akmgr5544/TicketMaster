@@ -1,11 +1,10 @@
-using ArchitectureTests.BaseTests;
 using ArchUnitNET.xUnit;
 using MediatR;
 using static ArchUnitNET.Fluent.ArchRuleDefinition;
 
-namespace ArchitectureTests.DependenceTests.Booking;
+namespace BookingArchitecture.Tests;
 
-public class VisibilityTest : BookingBaseTest
+public class VisibilityTest : BaseTest
 {
     [Fact]
     public void CommandHandlers_ShouldNotBePublic()
