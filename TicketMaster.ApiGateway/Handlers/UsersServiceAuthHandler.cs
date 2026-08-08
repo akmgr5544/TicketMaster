@@ -23,7 +23,12 @@ public class UsersServiceAuthHandler : AuthenticationHandler<AuthenticationSchem
         if (!Request.Headers.TryGetValue("Authorization", out var token))
             return AuthenticateResult.Fail("Missing Authorization Header");
 
-        var response = await _httpClient.GetAsync($"api/users/auth?token={token}");
+        // Forwarded as a header, not a query parameter: query strings land in access logs,
+        // proxy logs and browser history, and the value here is a live bearer credential.
+        using var introspection = new HttpRequestMessage(HttpMethod.Get, "api/users/auth");
+        introspection.Headers.TryAddWithoutValidation("Authorization", token.ToString());
+
+        var response = await _httpClient.SendAsync(introspection, Context.RequestAborted);
         if (!response.IsSuccessStatusCode)
             return AuthenticateResult.Fail("Unauthorized");
 

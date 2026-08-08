@@ -40,6 +40,8 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         };
     });
 
+builder.Services.AddAuthorization();
+
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
@@ -52,5 +54,8 @@ await app.ApplyMigrationsAsync();
 
 app.UseHttpsRedirection();
 app.UseAuthentication();
+app.UseAuthorization();
+
+app.MapEndpoints();
 
 await app.RunAsync();

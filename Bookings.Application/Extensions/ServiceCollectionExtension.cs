@@ -18,17 +18,17 @@ public static class ServiceCollectionExtension
     public static IServiceCollection AddApplicationServices(this IServiceCollection services,
         IConfiguration configuration)
     {
-        var redisConnection = configuration.GetConnectionString("Redis");
+        var redisConnection = configuration.GetConnectionString("Redis")
+                              ?? throw new InvalidOperationException("Connection string 'Redis' is not configured.");
 
-        services.AddSingleton<IConnectionMultiplexer>(ConnectionMultiplexer.Connect(redisConnection!));
-        services.AddScoped<IDatabase>(serviceProvider =>
+        // Resolved lazily: connecting during registration blocks startup on Redis being reachable.
+        services.AddSingleton<IConnectionMultiplexer>(_ => ConnectionMultiplexer.Connect(redisConnection));
+
+        // Singleton, not scoped. IDatabase is a cheap thread-safe handle over the multiplexer, and
+        // the singleton IDistributedLockProvider below cannot depend on a scoped service.
+        services.AddSingleton<IDatabase>(serviceProvider =>
             serviceProvider.GetRequiredService<IConnectionMultiplexer>().GetDatabase());
-        services.AddStackExchangeRedisCache(options =>
-        {
-            options.Configuration = redisConnection;
-            options.ConnectionMultiplexerFactory = 
-                () => Task.FromResult(services.BuildServiceProvider().GetRequiredService<IConnectionMultiplexer>());
-        });
+
         services.AddSingleton<IDistributedLockProvider>(serviceProvider =>
         {
             var redisDb = serviceProvider.GetRequiredService<IDatabase>();
@@ -36,6 +36,10 @@ public static class ServiceCollectionExtension
         });
 
         services.AddScoped<ICacheService, CacheService>();
+
+        // CreateTicketCommandHandler depends on this; without the registration the container fails
+        // validation at startup. The implementation is still a stub that throws when called.
+        services.AddScoped<IEventsService, EventsService>();
         services.AddMediatR(cf =>
             cf.RegisterServicesFromAssembly(typeof(ServiceCollectionExtension).Assembly));
         return services;
@@ -43,11 +47,14 @@ public static class ServiceCollectionExtension
 
     public static void ConfigureRabbitMq(this IHostBuilder hostBuilder, IConfiguration configuration)
     {
-        var rabbitConnection = configuration.GetConnectionString("RabbitMQ")!;
-        var connectionString = configuration.GetConnectionString("DefaultConnection")!;
+        var connectionString = configuration.GetConnectionString("DefaultConnection")
+                               ?? throw new InvalidOperationException(
+                                   "Connection string 'DefaultConnection' is not configured.");
+
         hostBuilder.UseWolverine(options =>
         {
-            options.UseRabbitMqUsingNamedConnection(rabbitConnection)
+            // Takes the connection string *name*; Wolverine resolves it from IConfiguration itself.
+            options.UseRabbitMqUsingNamedConnection("RabbitMQ")
                 .AutoProvision()
                 .UseConventionalRouting();
             

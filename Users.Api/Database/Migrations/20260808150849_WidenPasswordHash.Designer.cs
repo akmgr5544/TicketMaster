@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using Users.Api.Database;
@@ -11,9 +12,11 @@ using Users.Api.Database;
 namespace Users.Api.Database.Migrations
 {
     [DbContext(typeof(UsersDomainContext))]
-    partial class UsersDomainContextModelSnapshot : ModelSnapshot
+    [Migration("20260808150849_WidenPasswordHash")]
+    partial class WidenPasswordHash
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

@@ -17,10 +17,14 @@
     <PackageVersion Include="DistributedLock.Redis" Version="1.1.1" />
     <PackageVersion Include="MediatR" Version="14.1.0" />
     <PackageVersion Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.6" />
+    <!-- Tools declares Design >= 8.0.0, so NuGet resolves 8.0.0 against 10.x Abstractions and
+         `dotnet ef` fails with MissingMethodException. Pin Design explicitly. -->
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.6" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Tools" Version="10.0.6" />
     <PackageVersion Include="Microsoft.Extensions.Caching.StackExchangeRedis" Version="10.0.6" />
     <PackageVersion Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.6" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.6" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.6" />
     <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.6" />
     <PackageVersion Include="MongoDB.Bson" Version="3.7.1" />
     <PackageVersion Include="MongoDB.Driver" Version="3.7.1" />

@@ -1,5 +1,4 @@
 using Events.Application.Pipelines;
-using MassTransit;
 using MediatR;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -23,7 +22,8 @@ public static class ServiceCollectionExtension
     {
         hostBuilder.UseWolverine(options =>
         {
-            options.UseRabbitMqUsingNamedConnection("")
+            // Takes the connection string *name*; Wolverine resolves it from IConfiguration itself.
+            options.UseRabbitMqUsingNamedConnection("RabbitMQ")
                 .AutoProvision()
                 .UseConventionalRouting();
             

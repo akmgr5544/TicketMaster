@@ -18,7 +18,8 @@ internal class UserConfiguration : IEntityTypeConfiguration<User>
         builder.Property(user => user.UserName).HasMaxLength(120).IsRequired();
         builder.HasIndex(user => user.UserName).IsUnique();
         
-        builder.Property(user => user.PasswordHash).HasMaxLength(60).IsRequired();
+        // PasswordHasher<User> emits a fixed 84 chars for the v3 format (61 bytes, Base64).
+        builder.Property(user => user.PasswordHash).HasMaxLength(84).IsRequired();
         builder.Property(user => user.FirstName).HasMaxLength(120).IsRequired();
         builder.Property(user => user.LastName).HasMaxLength(120).IsRequired();
         builder.Property(user => user.PhoneNumber).HasMaxLength(120);

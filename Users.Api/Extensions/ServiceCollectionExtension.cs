@@ -33,4 +33,19 @@ public static class ServiceCollectionExtension
         var dbContext = scope.ServiceProvider.GetRequiredService<UsersDomainContext>();
         await dbContext.Database.MigrateAsync();
     }
+
+    /// <summary>
+    /// Maps every discovered <see cref="IEndpointMarker"/>. Endpoints are found by assembly scan in
+    /// <see cref="AddBusinessServices"/>, so a new feature slice needs no registration here.
+    /// </summary>
+    public static void MapEndpoints(this WebApplication app)
+    {
+        using var scope = app.Services.CreateScope();
+        var endpoints = scope.ServiceProvider.GetServices<IEndpointMarker>();
+
+        foreach (var endpoint in endpoints)
+        {
+            endpoint.MapEndpoint(app);
+        }
+    }
 }

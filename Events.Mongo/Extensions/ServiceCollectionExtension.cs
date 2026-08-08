@@ -25,7 +25,9 @@ public static class ServiceCollectionExtension
         services.AddSingleton<IMongoDatabase>(provider =>
         {
             var options = provider.GetRequiredService<IOptions<MongoOptions>>().Value;
-            var client = provider.GetRequiredService<MongoClient>();
+            // IMongoClient is what was registered above; asking for the concrete MongoClient
+            // throws because nothing registers that type.
+            var client = provider.GetRequiredService<IMongoClient>();
             return client.GetDatabase(options.Database);
         });
 

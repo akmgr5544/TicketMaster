@@ -7,6 +7,8 @@ var configuration = builder.Configuration;
 builder.Services.AddInfrastructureServices(configuration);
 builder.Services.AddApplicationServices(configuration);
 
+builder.Services.AddControllers();
+
 // Add services to the container.
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
@@ -24,5 +26,7 @@ if (app.Environment.IsDevelopment())
 await app.ApplyMigrationsAsync();
 
 app.UseHttpsRedirection();
+
+app.MapControllers();
 
 await app.RunAsync();
