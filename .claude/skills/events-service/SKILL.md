@@ -1,6 +1,6 @@
 ---
 name: events-service
-description: Use when working on Events — events, venues, performers, the MongoDB persistence layer, the planned Cosmos DB migration, or anything in Events.Domain, Events.Application, Events.Mongo or Events.Api.
+description: Use when working on Events — events, venues, performers, the Cosmos DB persistence layer, partition keys, document serialization, or anything in Events.Domain, Events.Application, Events.Cosmos or Events.Api.
 ---
 
 # Events Service
@@ -11,10 +11,10 @@ the `EventCreatedIntegrationEvent`, which is what causes tickets to exist.
 
 ## Scope
 
-Covers `Events.Domain/`, `Events.Application/`, `Events.Mongo/`, `Events.Api/`.
+Covers `Events.Domain/`, `Events.Application/`, `Events.Cosmos/`, `Events.Api/`.
 
-**Layered Clean Architecture with DDD, on a document store.** Bookings shares the layering but is
-relational — the aggregate rules below are shaped by the document model and are not
+**Layered Clean Architecture with DDD, on Azure Cosmos DB (NoSQL API).** Bookings shares the
+layering but is relational — the aggregate rules below are shaped by the document model and are not
 interchangeable with Bookings'. Users.Api is vertical slice; nothing from there applies.
 
 **Load alongside this skill:**
@@ -26,40 +26,58 @@ interchangeable with Bookings'. Users.Api is vertical slice; nothing from there 
 
 ```
 Events.Api  ──►  Events.Application  ──►  Events.Domain
-                                              ▲
-                        Events.Mongo  ────────┘
+     │                                         ▲
+     └────────►  Events.Cosmos  ───────────────┘
 ```
 
 | Project | Owns | Must not reference |
 |---|---|---|
-| `Events.Domain` | Entities, repository *interfaces*, domain exceptions | Any driver or persistence package |
-| `Events.Application` | Commands, handlers, DTOs, DI wiring | `Events.Mongo` |
-| `Events.Mongo` | `MongoDomainContext`, class maps, repository implementations | `Events.Api` |
-| `Events.Api` | HTTP surface | `Events.Domain` for business decisions |
+| `Events.Domain` | Entities, value objects, repository *interfaces*, domain exceptions | Anything at all — it has zero package and project references |
+| `Events.Application` | Commands, handlers, DTOs, DI wiring | `Events.Cosmos` |
+| `Events.Cosmos` | `EventsCosmosContext`, serialization, repository implementations, provisioning | `Events.Api` |
+| `Events.Api` | HTTP surface, composition root | `Events.Domain` for business decisions |
 
-`Events.Application` currently references `Events.Mongo`, which inverts this. See Known gaps.
+`Events.Api` references `Events.Cosmos` directly and deliberately: Application stops at the
+repository interfaces, so only the composition root knows which store is behind them.
+
+## The decisions you cannot cheaply reverse
+
+1. **Partition key is `/id` on all three containers.** Cosmos cannot change a container's partition
+   key in place — switching means copying every item to a new container. `/id` is right here
+   because the catalogue is read almost entirely by id, and a point read on id + partition key is
+   the cheapest operation Cosmos offers. Queries filtering on anything else (venue geo search,
+   events at a venue) fan out across partitions, which is affordable at catalogue size.
+2. **Ids are strings generated in the entity constructor** with `Guid.CreateVersion7()` — sortable,
+   and known before the write instead of assigned by the driver afterwards.
+3. **Throughput is provisioned at the database level** (400 RU/s shared), so three containers cost
+   the same floor as one.
+4. **Entities have a private parameterless constructor used only for rehydration.** This is not
+   ceremony. Binding through the public constructor re-runs creation invariants on every read, and
+   `Event`'s minimum-lead-time rule would throw when loading any event that has already happened.
+   Reading is not creating.
 
 ## Aggregates in a document store
 
 1. **The aggregate boundary is the document boundary.** What loads and saves together as one unit
-   is one document. If two things must change atomically, they belong in the same document.
-2. **One document write per business operation.** Cross-document atomicity is limited and, after
-   the Cosmos migration, confined to a single logical partition.
+   is one document.
+2. **One document write per business operation.** Cross-document atomicity is confined to a single
+   logical partition — and with `/id` partition keys, no two documents ever share one, so there is
+   effectively none. Do not design an operation that needs it.
 3. **An aggregate is entered through its root.** Embedded entities are reached through the document
    that contains them, never fetched or written independently.
-4. **State changes go through behavior, not setters.** Public setters on every property make the
-   entity a bag of data that any caller can put into an invalid state.
-5. **The domain owns its id type.** Entities expose `string` or a typed id; `ObjectId` belongs in
-   `Events.Mongo`. This is what keeps the Cosmos migration a mapping change (`document-db` rule 6).
-6. **One repository per aggregate root.** A repository that fetches performers, venues *and* writes
-   events serves three aggregates and belongs to none.
-7. **The domain project stays persistence-ignorant.** No driver packages, no BSON attributes, no
-   shapes chosen for the serializer.
+4. **State changes go through behavior, not setters.** Every entity property is `private set`;
+   changes go through `Rename`, `Relocate`, `Reschedule`.
+5. **The domain owns its id type.** Entities expose `string`. No driver type appears in
+   `Events.Domain` — enforced by `DependenceTest`.
+6. **One repository per aggregate root.** `IEventRepository`, `IVenueRepository` and
+   `IPerformerRepository` each serve exactly one.
+7. **The domain project stays persistence-ignorant.** `Events.Domain.csproj` has no references at
+   all. Keep it that way.
 
 ## Data model and the embedding decision
 
 An `Event` embeds its `Venue` in full and its `Performer` list in full. `Venue` and `Performer`
-also exist as their own collections.
+also exist as their own containers.
 
 **This is a deliberate snapshot, not an accident.** The embedded copy records the venue and
 performers *as they were when the event was created*. Renaming a venue must **not** retroactively
@@ -67,16 +85,17 @@ rewrite past events.
 
 Consequences to hold onto:
 
-- The standalone `venues` and `performers` collections are the source **for creating new events**.
+- The standalone `venues` and `performers` containers are the source **for creating new events**.
   They are not a source of truth for events that already exist.
 - Updating a venue deliberately does **not** fan out to embedded copies. Divergence between a
   venue document and the copy inside an old event is correct behavior.
-- Anything needing "the venue as it is now" reads the `venues` collection by id. Anything needing
+- Anything needing "the venue as it is now" reads the `venues` container by id. Anything needing
   "the venue as it was" reads the embedded copy. Be explicit about which one a query wants.
 - This satisfies `document-db` rule 4 by choosing **snapshot**. Do not "fix" the staleness.
 
-The bound on rule 3 (no unbounded arrays) holds because performers per event is naturally small.
-If that ever stops being true, the embedding decision has to be revisited.
+The bound on rule 3 (no unbounded arrays) holds because performers per event is naturally small,
+and matters more under Cosmos than it did under MongoDB — the item cap is 2 MB, not 16 MB, and
+document size drives RU cost directly.
 
 ## Rules
 
@@ -85,73 +104,89 @@ If that ever stops being true, the embedding decision has to be revisited.
 9. **`EventCreatedIntegrationEvent` is a public contract** in `TicketMaster.Common`. Bookings
    creates tickets from it — changing its shape non-additively breaks ticket creation.
 10. **The integration event must not be published unless the write succeeded and is durable.**
-    Publishing directly after an insert loses the message if the process dies in between, and
+    Publishing directly after a write loses the message if the process dies in between, and
     Bookings then never creates tickets for an event that exists. See `messaging` rule 4.
-11. **Geographic coordinates use a geo type, not a 2D integer point.** `System.Drawing.Point` is
-    integer X/Y for drawing surfaces — it cannot represent latitude and longitude, and it makes geo
-    queries impossible.
-12. **Repository signatures are expressed in domain terms.** A repository method taking a drawing
-    primitive or a driver type has leaked infrastructure into the contract.
-13. **Reference data still needs indexes.** "Rarely written" is an argument for *more* indexes, not
-    fewer — the write cost barely matters and the read benefit is permanent.
+    **Events does not satisfy this today** — see Known gaps.
+11. **Geographic coordinates use `GeoLocation`**, a validated value object in `Events.Domain`,
+    serialized as a GeoJSON Point. GeoJSON orders coordinates `[longitude, latitude]` — reversed
+    from how they are written. `GeoLocationConverter` is the single place that order is decided.
+12. **Repository signatures are expressed in domain terms.** `UpdateVenueAsync` takes the `Venue`
+    aggregate, not loose fields, so an update cannot bypass the entity's validation.
+13. **Default indexing is left in place.** Cosmos indexes everything by default, including
+    geospatial data, so `ST_DISTANCE` works without a declared spatial index. For a store written
+    rarely and read often, the write cost is a fair trade. Note that
+    `CreateContainerIfNotExistsAsync` matches on container id alone, so changing an indexing policy
+    later needs `ReplaceContainerAsync` — startup provisioning is not a migration mechanism.
+
+## Serialization
+
+`Events.Cosmos/Serialization/` holds everything the serializer knows; no JSON attribute appears in
+the domain.
+
+- `CosmosJson.Options` is the single `JsonSerializerOptions` the `CosmosClient` is built with, and
+  the same instance the tests exercise. camelCase naming is what turns `Id` into the lowercase `id`
+  Cosmos requires.
+- `DomainBinding` is a `JsonTypeInfo` modifier that selects the private rehydration constructor and
+  writes to private setters and collection backing fields.
+- `GeoLocationConverter` maps `GeoLocation` to and from a GeoJSON Point.
+- `UseSystemTextJsonSerializerWithOptions` is **mutually exclusive** with `Serializer` and
+  `SerializerOptions` — setting both throws.
+- `Newtonsoft.Json` must stay an explicit `PackageReference` on `Events.Cosmos` even though nothing
+  in our code uses it: the Cosmos SDK uses it internally for system types and its nuspec does not
+  declare the dependency.
+
+## Reads
+
+| Need | Use | Cost |
+|---|---|---|
+| One item by id | `container.PointReadAsync<T>(id, ct)` | ~1 RU, the cheapest read available |
+| Many items by id | `ReadManyItemsAsync<T>` | point-read cost per item, no fan-out |
+| Anything else | SQL query | fans out across partitions |
+
+A query that merely filters on `id` is **not** a point read and does not get point-read pricing.
+`PointReadAsync` turns the SDK's NotFound exception back into `null`; that exception must never
+escape the persistence layer.
 
 ## Known gaps
 
-**Stops the service from running at all:**
-- `AddSingleton<IMongoDatabase>` resolves `MongoClient` (the concrete type) but only `IMongoClient`
-  is registered. Throws on first resolution.
-- `appsettings.json` has no `MongoConfigs` section, so `MongoOptions.ConnectionString` is null.
-- **`ConfigureRabbitMq` is never called from `Program.cs`.** Wolverine never starts, `IMessageBus`
-  is never registered, and `CreateEventCommandHandler` cannot be constructed.
-- `UseRabbitMqUsingNamedConnection("")` passes an empty connection name.
-- There are no controllers or endpoints, and no `AddControllers()` / `MapControllers()`. The
-  service exposes nothing.
-
-**Architecture:**
-- `Events.Domain` references `MongoDB.Bson` and every entity's `Id` is `ObjectId` (rule 5). This is
-  the single largest obstacle to the Cosmos migration.
-- `Events.Application` references `Events.Mongo`, inverting the dependency direction.
-- `IEventRepository` exposes performer, venue and event operations while `IPerformerRepository` and
-  `IVenueRepository` also exist (rule 6).
-- `Events.Domain/Extensions/ServiceCollectionExtension.AddDomainServices` is an empty no-op, and
-  the domain project references DI abstractions to provide it.
-- `Events.Domain` has an empty `IntegrationEvents/` folder; contracts belong in
-  `TicketMaster.Common`.
-
 **Wrong behavior:**
-- `TransactionBehavior` calls `next` and returns — it is a no-op wearing the name of a guarantee.
-- `CreateEventCommandHandler` publishes the integration event straight after the insert, with no
-  outbox and no message persistence configured anywhere in Events (rule 10).
-- `Venue.Location` is `System.Drawing.Point` (rule 11), and that type appears in
-  `IVenueRepository.UpdateVenueAsync` (rule 12).
-- No indexes are ever created (rule 13).
-- `BsonClassMap.RegisterClassMap` is called from `AddInfrastructureServices`; a second call for the
-  same type throws.
-- `EventRepository.UpdateEventAsync` throws `NotImplementedException`.
-- Entities have public setters throughout (rule 4) and no domain behavior.
-- `Events.Application/Extensions/ServiceCollectionExtension.cs` has an unused `using MassTransit;`
-  alongside the Wolverine configuration.
+- `TransactionBehavior` calls `next` and returns. Under Cosmos there is nothing to implement here —
+  atomicity is per logical partition and `/id` keys mean nothing shares one. A handler must not
+  assume a rollback. The class is documented as a no-op rather than quietly left implying a
+  guarantee.
+- `CreateEventCommandHandler` publishes the integration event straight after the write, with no
+  outbox (rule 10). Wolverine is configured with RabbitMQ but no message persistence, so a crash
+  between the write and the publish loses the message and Bookings never creates tickets. This is
+  the most valuable remaining fix.
+
+**Missing:**
+- No read endpoints. The service is write-only: the three controllers only POST.
+- No optimistic concurrency — `_etag` is not read or enforced, so concurrent venue updates
+  last-write-wins.
+- Emulator geospatial support is unverified; `ST_DISTANCE` has not been exercised against it.
 
 ## Adding a feature
 
 1. Model the change on the entity in `Events.Domain` — a method, not a setter. Domain ids stay
-   domain types.
+   strings.
 2. Add the command in `Events.Application/Commands` and the handler in `CommandHandlers`.
-3. Add or extend the repository interface in `Events.Domain`; implement it in `Events.Mongo`.
+3. Add or extend the repository interface in `Events.Domain`; implement it in `Events.Cosmos`.
 4. Decide the document shape first: embedded or referenced, and if embedded, snapshot or replica
    (`document-db` rule 4).
-5. Add any index the new query needs, at startup.
+5. Shape the read so it can be a point read if at all possible.
 6. If another service must learn about it, add the contract to `TicketMaster.Common` and publish
-   through the outbox — not inline after the write.
+   through an outbox — not inline after the write.
 
 ## Common mistakes
 
 | Symptom | Cause |
 |---|---|
-| Startup fails resolving Mongo services | Interface registered, concrete type resolved |
+| A past-dated event throws on load | Deserialization routed through the public constructor, re-running creation invariants |
+| Coordinates land in the wrong hemisphere | GeoJSON is `[longitude, latitude]`; the order was swapped |
 | Bookings has no tickets for an existing event | Integration event published without an outbox (rule 10) |
-| Handler assumes a rollback | `TransactionBehavior` is a no-op |
+| Handler assumes a rollback | `TransactionBehavior` is a no-op, and Cosmos cannot provide one here |
 | Venue rename doesn't appear on old events | Correct — embedded copies are snapshots by design |
-| Venue rename doesn't appear on the venue page either | Reading the embedded copy where the collection was wanted |
-| Cosmos migration touches every domain file | `ObjectId` in the domain (rule 5) |
-| Geo query impossible to write | Location stored as a 2D integer point (rule 11) |
+| Venue rename doesn't appear on the venue page either | Reading the embedded copy where the container was wanted |
+| Reads cost far more RU than expected | A query was used where a point read would do |
+| Indexing policy change had no effect | `CreateContainerIfNotExistsAsync` matches on id only; needs `ReplaceContainerAsync` |
+| `Serializer`/`SerializerOptions` throws at startup | Set alongside `UseSystemTextJsonSerializerWithOptions` |

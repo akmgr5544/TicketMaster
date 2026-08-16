@@ -11,36 +11,40 @@ namespace Events.Application.CommandHandlers;
 internal class CreateEventCommandHandler : IRequestHandler<CreateEventCommand>
 {
     private readonly IEventRepository _eventRepository;
+    private readonly IVenueRepository _venueRepository;
+    private readonly IPerformerRepository _performerRepository;
     private readonly IMessageBus _messageBus;
-    
-    public CreateEventCommandHandler(IEventRepository eventRepository, IMessageBus messageBus)
+
+    public CreateEventCommandHandler(IEventRepository eventRepository,
+        IVenueRepository venueRepository,
+        IPerformerRepository performerRepository,
+        IMessageBus messageBus)
     {
         _eventRepository = eventRepository;
+        _venueRepository = venueRepository;
+        _performerRepository = performerRepository;
         _messageBus = messageBus;
     }
-    
+
     public async Task Handle(CreateEventCommand request, CancellationToken cancellationToken)
     {
-        if (request.StartDate < DateTime.UtcNow.AddDays(10))
-            throw new EventsDomainException("Start date must be in the future");
-        
-        var performers = await _eventRepository.GetPerformersByIdsAsync(request.Performers, cancellationToken);
+        var performers = await _performerRepository.GetPerformersByIdsAsync(request.Performers, cancellationToken);
         if (performers.Count == 0)
             throw new EventsDomainException("No performers found");
-        
-        var venue = await _eventRepository.GetVenueByIdAsync(request.Venue, cancellationToken);
-        if (venue == null)
+
+        var venue = await _venueRepository.GetVenueByIdAsync(request.Venue, cancellationToken);
+        if (venue is null)
             throw new EventsDomainException("No venue found");
 
-        var @event = new Event(request.StartDate,
-            venue,
-            performers);
-        
+        // The start-date rule lives in the Event constructor, not here — it is an invariant of the
+        // aggregate rather than a check this particular caller happens to perform.
+        var @event = new Event(request.StartDate, venue, performers);
+
         await _eventRepository.AddEventAsync(@event, cancellationToken);
-        await _messageBus.PublishAsync(new EventCreatedIntegrationEvent(@event.Id.ToString(),
-            venue.Id.ToString(),
+
+        await _messageBus.PublishAsync(new EventCreatedIntegrationEvent(@event.Id,
+            venue.Id,
             @event.StartDate,
-            venue.Seats
-            ));
+            [..venue.Seats]));
     }
 }

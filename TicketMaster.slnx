@@ -9,7 +9,7 @@
     <Project Path="Events.Api/Events.Api.csproj" />
     <Project Path="Events.Application/Events.Application.csproj" />
     <Project Path="Events.Domain/Events.Domain.csproj" />
-    <Project Path="Events.Mongo/Events.Mongo.csproj" />
+    <Project Path="Events.Cosmos/Events.Cosmos.csproj" />
   </Folder>
   <Folder Name="/Solution Items/">
     <File Path=".editorconfig" />
@@ -18,13 +18,17 @@
     <File Path="Directory.Packages.props" />
   </Folder>
   <Folder Name="/Tests/" />
-  <Folder Name="/Tests/ArchitectureTests/">
-    <Project Path="Tests/BookingArchitecture/BookingArchitecture.csproj" />
-    <Project Path="Tests/EventsArchitecture/EventsArchitecture.csproj" />
-    <Project Path="Tests/UsersArchitecture/UsersArchitecture.csproj" />
+  <Folder Name="/Tests/Bookings/">
+    <Project Path="Tests/Bookings/BookingArchitecture/BookingArchitecture.csproj" />
+    <Project Path="Tests/Bookings/BookingIntegration/BookingIntegration.csproj" />
   </Folder>
-  <Folder Name="/Tests/IntegrationTests/">
-    <Project Path="Tests/BookingIntegration/BookingIntegration.csproj" />
+  <Folder Name="/Tests/Events/">
+    <Project Path="Tests/Events/EventsArchitecture/EventsArchitecture.csproj" />
+    <Project Path="Tests/Events/EventsCosmos/EventsCosmos.csproj" />
+    <Project Path="Tests/Events/EventsDomain/EventsDomain.csproj" />
+  </Folder>
+  <Folder Name="/Tests/Users/">
+    <Project Path="Tests/Users/UsersArchitecture/UsersArchitecture.csproj" />
   </Folder>
   <Folder Name="/Tests/Test Items/">
     <File Path="Tests\Directory.Packages.props" />

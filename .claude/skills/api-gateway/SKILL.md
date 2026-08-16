@@ -163,7 +163,8 @@ These cross-file references are validated by tests over the loaded configuration
 - every route's `AuthorizationPolicy` resolves to a policy registered in `Program.cs`
 - every route with a path prefix has a `PathPattern` transform that strips it
 
-Tests belong under `Tests/`, alongside the existing per-service architecture test projects.
+Test projects are grouped by service under `Tests/<Service>/`, so gateway tests belong in
+`Tests/Gateway/`.
 
 ## Common mistakes
 

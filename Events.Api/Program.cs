@@ -1,5 +1,5 @@
 using Events.Application.Extensions;
-using Events.Mongo.Extensions;
+using Events.Cosmos.Extensions;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -21,6 +21,8 @@ if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
 }
+
+await app.EnsureContainersAsync();
 
 app.UseHttpsRedirection();
 

@@ -1,0 +1,17 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <ItemGroup>
+      <PackageReference Include="Microsoft.Azure.Cosmos" />
+      <!-- Not a transitive dependency of the Cosmos SDK: its nuspec omits Newtonsoft.Json even
+           though it uses it internally for system types, so the reference must be explicit. -->
+      <PackageReference Include="Newtonsoft.Json" />
+      <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" />
+      <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
+      <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <ProjectReference Include="..\Events.Domain\Events.Domain.csproj" />
+    </ItemGroup>
+
+</Project>

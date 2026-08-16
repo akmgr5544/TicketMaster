@@ -1,10 +1,9 @@
-using System.Drawing;
 using MediatR;
 
 namespace Events.Application.Commands;
 
-public record AddVenueCommand(string Id,
-    string Name,
+public record AddVenueCommand(string Name,
     string Address,
-    Point Location,
+    double Latitude,
+    double Longitude,
     string[] Seats) : IRequest;
