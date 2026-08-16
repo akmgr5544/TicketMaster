@@ -126,6 +126,9 @@ the range filter must be defined last.
 
 ## Migrating from MongoDB
 
+**Done — Events moved to the Cosmos NoSQL API and `Events.Mongo` no longer exists.** Kept as a
+record of what the move cost, and as a checklist if another service ever makes the same trip.
+
 | Concern | Action |
 |---|---|
 | `ObjectId` ids | Map to `string` at the persistence boundary before migrating (`document-db` rule 6) |

@@ -6,6 +6,9 @@
 
     <ItemGroup>
       <ProjectReference Include="..\Events.Application\Events.Application.csproj" />
+      <!-- The composition root is the one place allowed to know which store is in use: Application
+           stops at the repository interfaces, so the host has to supply the implementations. -->
+      <ProjectReference Include="..\Events.Cosmos\Events.Cosmos.csproj" />
     </ItemGroup>
 
 </Project>

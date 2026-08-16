@@ -7,7 +7,9 @@
     </ItemGroup>
 
     <ItemGroup>
-      <ProjectReference Include="..\Events.Mongo\Events.Mongo.csproj" />
+      <!-- The domain directly, never through the persistence project. Application must not know
+           which store is behind the repository interfaces. -->
+      <ProjectReference Include="..\Events.Domain\Events.Domain.csproj" />
       <ProjectReference Include="..\TicketMaster.Common\TicketMaster.Common.csproj" />
     </ItemGroup>
 

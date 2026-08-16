@@ -1,12 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
-    <ItemGroup>
-      <Folder Include="IntegrationEvents\" />
-    </ItemGroup>
-
-    <ItemGroup>
-      <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions"/>
-      <PackageReference Include="MongoDB.Bson"/>
-    </ItemGroup>
+    <!-- Intentionally free of package and project references. The domain owns its own types; the
+         persistence layer maps them. Guarded by EventsArchitecture.Tests.DependenceTest. -->
 
 </Project>

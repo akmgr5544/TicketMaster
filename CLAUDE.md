@@ -18,13 +18,16 @@ dotnet run --project Users.Api/Users.Api.csproj
 dotnet run --project TicketMaster.ApiGateway/TicketMaster.ApiGateway.csproj
 
 # Tests — no aggregating test project, run per-project
-dotnet test Tests/BookingArchitecture/BookingArchitecture.csproj
-dotnet test Tests/EventsArchitecture/EventsArchitecture.csproj
-dotnet test Tests/UsersArchitecture/UsersArchitecture.csproj
-dotnet test Tests/BookingIntegration/BookingIntegration.csproj
+# Tests are grouped by service under Tests/<Service>/ so a service can be lifted out whole.
+dotnet test Tests/Bookings/BookingArchitecture/BookingArchitecture.csproj
+dotnet test Tests/Bookings/BookingIntegration/BookingIntegration.csproj
+dotnet test Tests/Events/EventsArchitecture/EventsArchitecture.csproj
+dotnet test Tests/Events/EventsDomain/EventsDomain.csproj      # Events domain rules
+dotnet test Tests/Events/EventsCosmos/EventsCosmos.csproj      # Cosmos document serialization
+dotnet test Tests/Users/UsersArchitecture/UsersArchitecture.csproj
 
 # Single test
-dotnet test Tests/BookingArchitecture/BookingArchitecture.csproj --filter "FullyQualifiedName~NamingConventionTest"
+dotnet test Tests/Bookings/BookingArchitecture/BookingArchitecture.csproj --filter "FullyQualifiedName~NamingConventionTest"
 
 # EF Core migrations (services that use Postgres). Run from the API project;
 # the DbContext lives in the *.Sql project so `-s` and `-p` differ.
@@ -56,7 +59,7 @@ Four .NET services plus a shared kernel, wired together at runtime by a YARP API
               ┌──────────────────────┼──────────────────────┐
               ▼                      ▼                      ▼
         Users.Api            Bookings.Api             Events.Api
-        (Postgres+EF,       (Postgres+EF,             (MongoDB)
+        (Postgres+EF,       (Postgres+EF,             (Cosmos DB,
          JWT issuer)         Wolverine outbox,
                              Redis cache/locks)
                                      │
@@ -70,10 +73,10 @@ Four .NET services plus a shared kernel, wired together at runtime by a YARP API
 
 - `*.Domain` — aggregates, entities, domain events, repository interfaces. Bookings.Domain defines the DDD primitives in `Abstractions/` (`Entity`, `DomainEvent`, `IAggregateRoot`, `IUnitOfWork`).
 - `*.Application` — MediatR commands + handlers, application services, integration event handlers, DI wiring (`Extensions/ServiceCollectionExtension.AddApplicationServices`).
-- `*.Sql` / `*.Mongo` — infrastructure: `DbContext`, EF configurations, repository implementations, MediatR pipeline behaviors, DI wiring (`AddInfrastructureServices`, `ApplyMigrationsAsync`).
+- `*.Sql` / `*.Cosmos` — infrastructure: `DbContext` or `EventsCosmosContext`, entity/document mapping, repository implementations, MediatR pipeline behaviors, DI wiring (`AddInfrastructureServices`, plus `ApplyMigrationsAsync` for Bookings and `EnsureContainersAsync` for Events).
 - `*.Api` — ASP.NET Core host; `Program.cs` calls `AddInfrastructureServices` then `AddApplicationServices`.
 
-Each project has a marker interface (`IApiAssemblyMarker`, `IApplicationAssemblyMarker`, `IDomainAssemblyMarker`, `IMongoAssemblyMarker` — note the SQL project also uses the `IMongoAssemblyMarker` name for historical reasons in Bookings.Sql). Architecture tests load assemblies via these markers.
+Each project has a marker interface (`IApiAssemblyMarker`, `IApplicationAssemblyMarker`, `IDomainAssemblyMarker`, and `ICosmosAssemblyMarker` in Events.Cosmos — note Bookings.Sql still uses the name `IMongoAssemblyMarker` for historical reasons, despite being Postgres). Architecture tests load assemblies via these markers.
 
 **Users.Api** is a single-project **vertical slice** design (feature folders under `Features/Users/{Authenticate,RefreshToken,Register}`), not the layered layout above. It is the JWT issuer for the system.
 
@@ -95,8 +98,10 @@ Each project has a marker interface (`IApiAssemblyMarker`, `IApplicationAssembly
 
 ### Tests
 
-- **Architecture tests** (`Tests/*Architecture`) use **ArchUnitNET.xUnit**. Each project has a `BaseTest` that loads the service's assemblies via marker interfaces into a shared `Architecture` instance; concrete tests assert dependencies, naming, visibility, and colocation rules. Adding a new layer/project means updating `BaseTest.cs` to include its assembly.
-- **Integration tests**: `Tests/BookingIntegration` (currently a scaffold).
+- **Layout**: test projects are grouped by service — `Tests/Bookings/`, `Tests/Events/`, `Tests/Users/` — so that everything belonging to one service can be extracted together when a module is split out into its own deployable. Put new test projects under the folder for the service they test.
+- **Architecture tests** (`Tests/<Service>/*Architecture`) use **ArchUnitNET.xUnit**. Each project has a `BaseTest` that loads the service's assemblies via marker interfaces into a shared `Architecture` instance; concrete tests assert dependencies, naming, visibility, and colocation rules. Adding a new layer/project means updating `BaseTest.cs` to include its assembly.
+- **Unit tests**: `Tests/Events/EventsDomain` covers the Events domain rules; `Tests/Events/EventsCosmos` covers Cosmos document serialization against the real `CosmosJson.Options`, with no emulator needed.
+- **Integration tests**: `Tests/Bookings/BookingIntegration` (currently a scaffold).
 - Test-only package versions live in `Tests/Directory.Packages.props` (xUnit, Microsoft.NET.Test.Sdk, ArchUnitNET, coverlet). It imports the root `Directory.Packages.props` first, so all versions stay centrally managed.
 
 ## Conventions worth knowing

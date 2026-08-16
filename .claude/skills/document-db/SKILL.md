@@ -1,6 +1,6 @@
 ---
 name: document-db
-description: Use when modelling documents, writing queries or repositories, or designing ids and indexes against a document database in any TicketMaster service. Covers MongoDB (IMongoCollection, BsonClassMap, ObjectId, Builders filters) today and Azure Cosmos DB for the planned migration.
+description: Use when modelling documents, writing queries or repositories, or designing ids, partition keys and indexes against a document database in any TicketMaster service. Covers Azure Cosmos DB (Container, PartitionKey, point reads, RU cost) as the store in use.
 ---
 
 # Document Databases
@@ -11,12 +11,13 @@ shape you read.
 
 ## Scope
 
-Cross-cutting — every TicketMaster service backed by a document store. Events.Api is the only one
-today (MongoDB), with a planned move to Cosmos DB.
+Cross-cutting — every TicketMaster service backed by a document store. Events.Api is the only one,
+and it runs on **Azure Cosmos DB (NoSQL API)**. The MongoDB migration is done; `Events.Mongo` no
+longer exists.
 
-**The rules below are provider-neutral.** MongoDB and Cosmos DB specifics live in their own
-sections. For Cosmos partitioning, RU costs and indexing policy in depth, read
-`cosmosdb-reference.md` in this skill directory — you need it when migrating, not for daily work.
+**The rules below are provider-neutral.** Cosmos specifics live in their own section. For
+partitioning, RU costs and indexing policy in depth, read `cosmosdb-reference.md` in this skill
+directory.
 
 ## Rules
 
@@ -67,69 +68,71 @@ sections. For Cosmos partitioning, RU costs and indexing policy in depth, read
 11. **Query construction stays inside the repository.** Filter builders, projections and driver
     types must not escape into application code — that's what makes the store swappable.
 
-## MongoDB today
+## Cosmos DB today
 
-MongoDB.Driver 3.7.1. Registration lives in `Events.Mongo.Extensions.ServiceCollectionExtension`.
+Microsoft.Azure.Cosmos 3.62.1, NoSQL API. Registration lives in
+`Events.Cosmos.Extensions.ServiceCollectionExtension`. Full detail on partitioning, RU cost and
+indexing policy in `cosmosdb-reference.md`.
 
-**Lifetimes.** `IMongoClient` is thread-safe, holds the connection pool, and must be a **singleton**
-— one per application, never per request. `IMongoDatabase` and `IMongoCollection<T>` are cheap
-handles over it and can be singletons too. Resolve the interface you registered: registering
-`IMongoClient` and then asking for the concrete `MongoClient` fails at runtime.
+**Lifetimes.** `CosmosClient` is thread-safe, holds the connection pool, and must be a
+**singleton** — one per application, never per request. `Container` handles are cheap and can be
+held alongside it.
 
-**Class maps.** `BsonClassMap.RegisterClassMap<T>` is process-global and **throws if called twice
-for the same type**. Register once at startup, guarded, not from a method that could run again in
-tests or a second host.
+**Partition keys are immutable.** A container's partition key cannot be changed in place; switching
+means copying every item into a new container. Choose it before the first write, from the equality
+filters your reads actually use. Events uses `/id` on all three containers because it is read
+almost entirely by id.
 
-**Ids.** `ObjectId` is a driver type. Map it at the boundary (rule 6). Cosmos has no equivalent —
-its `id` is a string — so every `ObjectId` in the domain is migration debt.
+**Point reads are the whole game.** `ReadItemAsync<T>(id, partitionKey)` is the cheapest operation
+available, and `ReadManyItemsAsync` extends that price to a set of independent items. A query that
+merely filters on `id` and the partition key is **not** a point read and does not get the price.
+Shape access so the id is derivable and you avoid queries entirely.
 
-**Writes are immediate.** `InsertOneAsync` / `UpdateOneAsync` hit the server there and then. There
-is no unit of work and no change tracking. A MediatR pipeline behavior named `TransactionBehavior`
-that merely calls `next` provides no transaction — it is decoration, and worse than nothing because
-it implies a guarantee that isn't there. Real multi-document transactions need an explicit session
-and a replica set.
+**A missing item is an exception, not a null.** `ReadItemAsync` throws `CosmosException` with
+`StatusCode.NotFound`. Catch it in the repository and return `null`; never let it reach application
+code. `ReadItemStreamAsync` returns a status instead of throwing if the allocation matters.
 
-**Indexes.** Nothing creates them for you. Declare them at startup with `CreateIndexesAsync`, and
-treat the list as part of the schema.
+**Serialization.** `UseSystemTextJsonSerializerWithOptions` is mutually exclusive with `Serializer`
+and `SerializerOptions` — setting both throws. The identity property must serialize to lowercase
+`id`; a camelCase naming policy gets there from `Id` without an attribute in the domain. Keep
+`Newtonsoft.Json` as an explicit `PackageReference` even if nothing in your code uses it: the SDK
+needs it internally and its nuspec does not declare it.
 
-## Cosmos DB when you migrate
+**Everything is indexed by default**, including geospatial data, so `ST_DISTANCE` works without a
+declared spatial index. Tuning is therefore subtractive — but for a store written rarely and read
+often, leaving the default is usually the right trade. Note that `CreateContainerIfNotExistsAsync`
+matches on container **id alone**: an existing container comes back untouched and policy changes
+are silently ignored. Provisioning at startup is not a migration mechanism; use
+`ReplaceContainerAsync`.
 
-Full detail in `cosmosdb-reference.md`. What changes conceptually:
+**Writes are immediate and there is no unit of work.** A MediatR pipeline behavior named
+`TransactionBehavior` that merely calls `next` provides no transaction — it is decoration, and
+worse than nothing because it implies a guarantee that isn't there. Under Cosmos there is often no
+honest implementation available: atomicity is confined to one logical partition, so with `/id`
+partition keys no two documents can ever be written atomically.
 
-| | MongoDB | Cosmos DB (NoSQL) |
-|---|---|---|
-| Id | `ObjectId`, unique per collection | `string`, unique **within a logical partition** |
-| Partitioning | Optional sharding | **Mandatory partition key, immutable once set** |
-| Cost model | Server resources | Request Units per operation, provisioned |
-| Item size cap | 16 MB | 2 MB |
-| Indexing | Opt-in per field | **Everything indexed by default** — opt out to save write RUs |
-| Atomicity | Session transactions | Transactional batch within one logical partition |
-
-The two decisions worth making before the migration, because they're expensive afterwards:
-
-- **The id.** Rule 6 turns this from a domain rewrite into a mapping change.
-- **The partition key.** It cannot be changed in place — moving to a different key means copying
-  the container. For Events, a read-heavy store of rarely-changing data, pick the property that
-  appears as an equality filter in the queries you actually run.
+**Throughput** can be provisioned per container or shared at the database level. Shared is the
+cheaper floor when several small containers sit together — 400 RU/s total rather than each.
 
 ## Common mistakes
 
 | Symptom | Cause |
 |---|---|
-| Resolution fails at startup | Registered an interface, resolved the concrete type |
-| "class map already registered" | `RegisterClassMap` ran twice (tests, second host build) |
+| Reads cost far more RU than expected | A query was used where a point read would do |
 | Reads slow down as data grows | Unbounded embedded array (rule 3) |
 | Stale data in embedded copies | Denormalization with no stated consistency decision (rule 4) |
 | Reads break after adding a field | Existing documents predate it (rule 10) |
 | Changing database rewrites the domain | Driver id type leaked into domain entities (rule 6) |
 | Handler assumes a rollback that never happens | No-op transaction behavior over immediate writes |
-| Cosmos write costs climb unexpectedly | Default index policy indexing every property (rule 7) |
+| Write costs climb unexpectedly | Default index policy indexing every property (rule 7) |
+| Indexing or partition-key change had no effect | `CreateContainerIfNotExistsAsync` matches on id only |
+| Serializer throws at client construction | `Serializer`/`SerializerOptions` set alongside `UseSystemTextJsonSerializerWithOptions` |
+| Entity throws its own validation on load | Deserialization routed through the public constructor instead of a rehydration one |
 
 ## Sources
 
-Retrieved 2026-08-08.
+Retrieved 2026-08-08, except where noted.
 
-- MongoDB data modeling: https://www.mongodb.com/docs/manual/data-modeling/
 - Cosmos DB data modeling: https://learn.microsoft.com/azure/cosmos-db/modeling-data
 - Cosmos DB partitioning: https://learn.microsoft.com/azure/cosmos-db/partitioning
 - Request units: https://learn.microsoft.com/azure/cosmos-db/request-units
