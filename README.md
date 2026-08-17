@@ -101,6 +101,8 @@ real document shape without needing an emulator.
 
 ```bash
 dotnet test Tests/Events/EventsDomain/EventsDomain.csproj
+dotnet test Tests/Events/EventsApplication/EventsApplication.csproj
+dotnet test Tests/Events/EventsApi/EventsApi.csproj
 dotnet test Tests/Events/EventsCosmos/EventsCosmos.csproj
 dotnet test Tests/Events/EventsArchitecture/EventsArchitecture.csproj
 dotnet test Tests/Users/UsersArchitecture/UsersArchitecture.csproj
@@ -140,24 +142,26 @@ Being explicit about what is not finished:
 - **`Events.Application.Pipelines.TransactionBehavior` is a no-op**, and documented as one. Under
   Cosmos there is no honest implementation available: atomicity is confined to a single logical
   partition, and with `/id` partition keys no two documents ever share one.
-- **Events is write-only.** The three controllers expose POST endpoints; there are no read
-  endpoints or queries yet.
+- **Only venues have full CRUD.** Events and performers are still POST-only; reads for them follow
+  the same shape as the venue slice.
+- **The venue delete guard is best-effort.** It counts upcoming events before deleting, but an
+  event can be created in that window and no transaction can span two logical partitions.
 - **The Events Cosmos layer has not been run against a live instance.** Provisioning and the
   repositories are verified by the compiler and by unit-tested serialization, not by execution.
 - **Gateway destination addresses are empty strings** in `YarpConfigurations/yarp.clusters.json`,
   and the `"UsersService"` client's `BaseAddress` is unset. Fill both in before running the gateway.
 - **`compose.yaml` is stale** — service paths such as `BookingApi/Dockerfile` no longer match the
   project layout. Only the `cosmos` service is currently usable.
-- **No global exception handling.** There is no middleware translating domain exceptions into
-  consistent API responses.
+- **Exception-to-status mapping exists in Events only.** Bookings and Users still surface unhandled
+  failures as bare 500s.
 - **`Bookings.Sql` still exposes `IMongoAssemblyMarker`**, a leftover name from before it was
   Postgres. Harmless, but confusing.
 
 ## 🗺️ Roadmap
 
 - A durable outbox for Events, so ticket creation cannot be silently lost
-- Read endpoints and queries for the Events catalogue
+- CRUD for events and performers, following the venue slice
 - Integration tests against the Cosmos emulator and a Postgres container
 - Saga / process-manager work for the full booking flow in Wolverine
-- Global exception handling middleware
+- Exception-to-status mapping in Bookings and Users, as Events now has
 - A working `compose.yaml` covering every service

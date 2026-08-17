@@ -36,9 +36,17 @@ registration code — not the rules.
    `UserRequest`). No settable properties, no mutation inside the handler.
 3. **Handlers are `internal sealed`.** Only the request and response types are public. Nothing
    outside the assembly should be able to reference a handler directly.
-4. **Handlers return `Result`/`Result<T>` for expected failures** — not found, validation failed,
-   conflict. Exceptions are for genuinely exceptional conditions only. See the owning service's
-   skill for the concrete Result type.
+4. **Signal expected failures — not found, validation failed, conflict — the way the owning service
+   does.** The two mechanisms in use are deliberate, not accidental drift:
+
+   | Service | Mechanism |
+   |---|---|
+   | **Users.Api** | `Result` / `Result<T>` with `Error` and `ErrorType`, in `Users.Api/Shared`. Handlers return failures; they do not throw. |
+   | **Bookings, Events** | Exceptions. Handlers throw; an `IExceptionHandler` at the edge maps them to status codes. Events has exactly three types — `EventsDomainException` (broken invariant, 400), `NotFoundException` (404) and `EventsApplicationException` (409) — and adding a failure mode means throwing one of them, not writing a fourth. |
+
+   Do not introduce the Result type into Bookings or Events, and do not throw for expected failures
+   in Users. Whichever mechanism a service uses, an expected failure must produce the right status
+   code — a "not found" that surfaces as 500 is a bug either way.
 5. **A handler never dispatches another request.** Handler-to-handler chaining hides the real
    dependency graph and defeats the pipeline (the inner request re-runs every behavior, including
    transactions). Extract shared logic into a service or static helper and call it from both.
@@ -98,8 +106,9 @@ coupling across every feature.
 1. Define the request as an immutable record named for the intent.
 2. Define the response record. Return a projection, not an entity.
 3. Write the `internal sealed` handler. One operation, `CancellationToken` threaded through.
-4. Return `Result<T>` — success or a typed error. Don't throw for expected failures.
-5. Map the endpoint: dispatch, translate the result, return. No logic.
+4. Signal expected failures the way the service does (rule 4): `Result<T>` in Users, a domain
+   exception in Bookings and Events.
+5. Map the endpoint: dispatch, translate the outcome to a status code, return. No logic.
 6. Ask whether anything you wrote is cross-cutting. If so, move it to a behavior.
 
 ## Common mistakes
@@ -110,5 +119,6 @@ coupling across every feature.
 | Nested transaction, or a behavior running twice for one request | A handler dispatched another request |
 | Handler referenced from outside its assembly | Handler isn't `internal` |
 | Endpoint has a `DbContext` or business rule in it | Logic that belongs in a handler |
+| "Not found" surfaces as a 500 | Nothing maps the failure to a status code — in Events, the exception thrown isn't one of the three the handler knows |
 | Cancellation ignored during shutdown or client disconnect | `CancellationToken` not threaded through |
 | Entity leaked into an HTTP response | Handler returned the entity instead of a response record |

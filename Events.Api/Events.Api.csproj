@@ -5,6 +5,11 @@
     </ItemGroup>
 
     <ItemGroup>
+      <!-- The exception-to-status mapping is internal but load-bearing for the API contract. -->
+      <InternalsVisibleTo Include="EventsApi" />
+    </ItemGroup>
+
+    <ItemGroup>
       <ProjectReference Include="..\Events.Application\Events.Application.csproj" />
       <!-- The composition root is the one place allowed to know which store is in use: Application
            stops at the repository interfaces, so the host has to supply the implementations. -->

@@ -22,8 +22,10 @@ dotnet run --project TicketMaster.ApiGateway/TicketMaster.ApiGateway.csproj
 dotnet test Tests/Bookings/BookingArchitecture/BookingArchitecture.csproj
 dotnet test Tests/Bookings/BookingIntegration/BookingIntegration.csproj
 dotnet test Tests/Events/EventsArchitecture/EventsArchitecture.csproj
-dotnet test Tests/Events/EventsDomain/EventsDomain.csproj      # Events domain rules
-dotnet test Tests/Events/EventsCosmos/EventsCosmos.csproj      # Cosmos document serialization
+dotnet test Tests/Events/EventsDomain/EventsDomain.csproj            # Events domain rules
+dotnet test Tests/Events/EventsApplication/EventsApplication.csproj  # handlers, with fake repositories
+dotnet test Tests/Events/EventsApi/EventsApi.csproj                  # exception-to-status mapping
+dotnet test Tests/Events/EventsCosmos/EventsCosmos.csproj            # Cosmos document serialization
 dotnet test Tests/Users/UsersArchitecture/UsersArchitecture.csproj
 
 # Single test
