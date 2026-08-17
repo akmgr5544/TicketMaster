@@ -69,6 +69,27 @@ public class VenueTests
     }
 
     [Fact]
+    public void Changes_the_address()
+    {
+        var venue = AVenue();
+
+        venue.ChangeAddress("Argishti St 9");
+
+        Assert.Equal("Argishti St 9", venue.Address);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Refuses_to_change_to_a_blank_address(string address)
+    {
+        var venue = AVenue();
+
+        Assert.Throws<EventsDomainException>(() => venue.ChangeAddress(address));
+        Assert.Equal("Tsitsernakaberd Hwy 1", venue.Address);
+    }
+
+    [Fact]
     public void Relocates_the_venue()
     {
         var venue = AVenue();

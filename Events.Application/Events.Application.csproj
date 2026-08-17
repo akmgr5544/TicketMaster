@@ -1,6 +1,11 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
     <ItemGroup>
+      <!-- Handlers are internal by design (cqrs rule 3); the unit tests exercise them directly. -->
+      <InternalsVisibleTo Include="EventsApplication" />
+    </ItemGroup>
+
+    <ItemGroup>
       <PackageReference Include="MediatR"/>
       <PackageReference Include="WolverineFx" />
       <PackageReference Include="WolverineFx.RabbitMQ" />

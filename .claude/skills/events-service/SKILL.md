@@ -147,6 +147,42 @@ A query that merely filters on `id` is **not** a point read and does not get poi
 `PointReadAsync` turns the SDK's NotFound exception back into `null`; that exception must never
 escape the persistence layer.
 
+**Paging is cursor-based.** `ListVenuesAsync` returns `Page<T>(Items, ContinuationToken)`; the
+caller sends the token back to continue. Do not add `OFFSET`/`LIMIT` — Cosmos charges for the rows
+it skips, so deep pages get progressively more expensive.
+
+## Failures and status codes
+
+Events breaks the flow by **throwing**, not by returning a result type. The `Result`/`Error`
+pattern belongs to Users.Api and must not be introduced here — see `cqrs` rule 4.
+
+**There are exactly three exception types in the whole service.** Do not add a fourth without a
+good reason — a class per failure case multiplies with every entity.
+
+| Type | Where | Thrown when | Status |
+|---|---|---|---|
+| `EventsDomainException` | `Events.Domain/Exceptions` | An entity refuses a change — a broken invariant. Every entity throws this one; it has no subclasses. | 400 |
+| `NotFoundException(entity, id)` | `Events.Application/Exceptions` | Something was asked for by id and is not there. | 404 |
+| `EventsApplicationException` | `Events.Application/Exceptions` | The model is intact but the use case cannot proceed — the request conflicts with current state. | 409 |
+
+A lookup that misses is not a domain rule violation: nothing about the aggregate is wrong, the
+document simply is not there. That is why "not found" lives in Application, not Domain.
+
+`NotFoundException` is **not** `KeyNotFoundException` on purpose. That is what a `Dictionary`
+indexer throws, so mapping it to 404 would turn a stray lookup bug in our own code into a "not
+found" for the caller instead of a visible failure.
+
+`Events.Api/Handlers/EventsExceptionHandler` maps all three to `ProblemDetails`. Anything else is
+left unhandled and surfaces as a 500 — correct for the genuinely unexpected.
+
+**The switch arms are ordered most-derived-first, and the compiler enforces it.**
+`NotFoundException` derives from `EventsApplicationException`, so putting the base arm first makes
+the derived arm unreachable and the build fails with `CS8510`. This is not a convention anyone has
+to remember.
+
+Adding a failure mode is therefore usually **not** a new type: throw one of the three with a
+message that says what happened.
+
 ## Known gaps
 
 **Wrong behavior:**
@@ -160,10 +196,15 @@ escape the persistence layer.
   the most valuable remaining fix.
 
 **Missing:**
-- No read endpoints. The service is write-only: the three controllers only POST.
+- **Venues have full CRUD; events and performers are still POST-only.** Follow the venue slice when
+  adding reads for them: query + `QueryHandler`, point read where possible, cursor paging for lists.
 - No optimistic concurrency — `_etag` is not read or enforced, so concurrent venue updates
   last-write-wins.
+- The delete guard on venues is **best-effort**. `CountUpcomingEventsAtVenueAsync` runs before the
+  delete, and an event can be created in between; with `/id` partition keys no transaction can
+  close that window. It prevents the accident, not the race.
 - Emulator geospatial support is unverified; `ST_DISTANCE` has not been exercised against it.
+- Nothing in the Cosmos layer has been exercised against a running Cosmos instance.
 
 ## Adding a feature
 

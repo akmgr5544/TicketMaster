@@ -40,6 +40,8 @@ public class Venue
 
     public void Rename(string name) => Name = NotBlank(name, nameof(name));
 
+    public void ChangeAddress(string address) => Address = NotBlank(address, nameof(address));
+
     public void Relocate(GeoLocation location) => Location = location;
 
     private static string NotBlank(string value, string field) =>

@@ -6,7 +6,7 @@ using MediatR;
 
 namespace Events.Application.CommandHandlers;
 
-internal class AddVenueCommandHandler : IRequestHandler<AddVenueCommand>
+internal sealed class AddVenueCommandHandler : IRequestHandler<AddVenueCommand, string>
 {
     private readonly IVenueRepository _repository;
 
@@ -15,7 +15,7 @@ internal class AddVenueCommandHandler : IRequestHandler<AddVenueCommand>
         _repository = repository;
     }
 
-    public async Task Handle(AddVenueCommand request, CancellationToken cancellationToken)
+    public async Task<string> Handle(AddVenueCommand request, CancellationToken cancellationToken)
     {
         var venue = new Venue(request.Name,
             request.Address,
@@ -23,5 +23,7 @@ internal class AddVenueCommandHandler : IRequestHandler<AddVenueCommand>
             request.Seats);
 
         await _repository.AddVenueAsync(venue, cancellationToken);
+
+        return venue.Id;
     }
 }
