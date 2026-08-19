@@ -2,4 +2,5 @@ using MediatR;
 
 namespace Events.Application.Commands;
 
-public record AddPerformerCommand(string Name, string Description) : IRequest;
+/// <summary>Returns the id of the created performer so the caller can address it.</summary>
+public record AddPerformerCommand(string Name, string Description) : IRequest<string>;

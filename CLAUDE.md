@@ -20,6 +20,8 @@ dotnet run --project TicketMaster.ApiGateway/TicketMaster.ApiGateway.csproj
 # Tests — no aggregating test project, run per-project
 # Tests are grouped by service under Tests/<Service>/ so a service can be lifted out whole.
 dotnet test Tests/Bookings/BookingArchitecture/BookingArchitecture.csproj
+dotnet test Tests/Bookings/BookingDomain/BookingDomain.csproj        # Ticket rules, incl. staleness
+dotnet test Tests/Bookings/BookingApplication/BookingApplication.csproj  # EventSync consumers
 dotnet test Tests/Bookings/BookingIntegration/BookingIntegration.csproj
 dotnet test Tests/Events/EventsArchitecture/EventsArchitecture.csproj
 dotnet test Tests/Events/EventsDomain/EventsDomain.csproj            # Events domain rules
@@ -104,6 +106,14 @@ Each project has a marker interface (`IApiAssemblyMarker`, `IApplicationAssembly
 - **Architecture tests** (`Tests/<Service>/*Architecture`) use **ArchUnitNET.xUnit**. Each project has a `BaseTest` that loads the service's assemblies via marker interfaces into a shared `Architecture` instance; concrete tests assert dependencies, naming, visibility, and colocation rules. Adding a new layer/project means updating `BaseTest.cs` to include its assembly.
 - **Unit tests**: `Tests/Events/EventsDomain` covers the Events domain rules; `Tests/Events/EventsCosmos` covers Cosmos document serialization against the real `CosmosJson.Options`, with no emulator needed.
 - **Integration tests**: `Tests/Bookings/BookingIntegration` (currently a scaffold).
+- **Known pre-existing failure**: 4 of the `BookingArchitecture` tests fail on a clean tree.
+  `ColocationTest` requires a handler to live in the same namespace as its command, and the four
+  handlers in `Bookings.Application/CommandHandlers` predate that rule. New Bookings slices —
+  `Bookings.Application/EventSync` — colocate command and handler and do pass. Don't read those 4
+  failures as damage from your change; check the failing type names first.
+- Handlers are `internal` by architecture rule, so a test project that constructs them needs an
+  `InternalsVisibleTo` entry in the production `.csproj` (see `Bookings.Application.csproj`,
+  `Events.Application.csproj`).
 - Test-only package versions live in `Tests/Directory.Packages.props` (xUnit, Microsoft.NET.Test.Sdk, ArchUnitNET, coverlet). It imports the root `Directory.Packages.props` first, so all versions stay centrally managed.
 
 ## Conventions worth knowing

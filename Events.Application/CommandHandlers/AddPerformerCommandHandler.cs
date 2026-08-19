@@ -5,7 +5,7 @@ using MediatR;
 
 namespace Events.Application.CommandHandlers;
 
-internal class AddPerformerCommandHandler : IRequestHandler<AddPerformerCommand>
+internal sealed class AddPerformerCommandHandler : IRequestHandler<AddPerformerCommand, string>
 {
     private readonly IPerformerRepository _repository;
 
@@ -14,10 +14,12 @@ internal class AddPerformerCommandHandler : IRequestHandler<AddPerformerCommand>
         _repository = repository;
     }
 
-    public async Task Handle(AddPerformerCommand request, CancellationToken cancellationToken)
+    public async Task<string> Handle(AddPerformerCommand request, CancellationToken cancellationToken)
     {
         var performer = new Performer(request.Name, request.Description);
 
         await _repository.AddPerformerAsync(performer, cancellationToken);
+
+        return performer.Id;
     }
 }

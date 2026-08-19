@@ -74,6 +74,37 @@ repository interfaces, so only the composition root knows which store is behind 
 7. **The domain project stays persistence-ignorant.** `Events.Domain.csproj` has no references at
    all. Keep it that way.
 
+## Domain events on the Event aggregate
+
+`Event` inherits `Events.Domain/Abstractions/Entity`, which holds a list of `IDomainEvent`. `Venue`
+and `Performer` deliberately do not — nothing outside this service reacts to them.
+
+1. **`IDomainEvent` is a bare marker with no base type.** Bookings' equivalent implements MediatR's
+   `INotification`; copying that here would put a package reference on `Events.Domain`, which has
+   none (rule 7, enforced by `DependenceTest`).
+2. **Dispatch is explicit in the command handler, not an interceptor.** Bookings dispatches from a
+   `SaveChangesInterceptor`; Cosmos has no equivalent hook. The order is load → mutate → write →
+   publish, and it matters both ways: a refused mutation throws before the write so nothing is
+   stored *and* nothing is announced, and publishing after the write means no consumer hears about a
+   change that failed to persist.
+3. **Every mutation bumps `Version` and raises a domain event.** Consumers use the version to
+   discard messages that arrive out of order, so a mutation that forgets to bump it is silently
+   unprotected. Validate before bumping, so a refused change leaves the version alone.
+4. **Domain events carry resulting state, not deltas** — a relocation says which seats the event now
+   has, never which were added or removed. That is what makes a redelivered message harmless
+   downstream, and it is why `EventRelocated` carries `StartDate` it did not change: the consumer
+   needs it to create tickets for seats that are new.
+5. **Translation to public contracts happens in `Events.Application/IntegrationEvents`**, never in
+   the domain — `TicketMaster.Common` is a reference `Events.Domain` may not take. A domain event is
+   allowed to have no public counterpart: `EventLineupChangedDomainEvent` has none, because nothing
+   outside depends on who is performing.
+6. **Everything reaches the broker through `IIntegrationEventPublisher`.** It takes the aggregate
+   rather than a list of events, so clearing cannot be forgotten, and it is the single place an
+   outbox will land.
+7. **`Cancel()` is idempotent.** Cancelling an already-cancelled event changes nothing, raises
+   nothing and does not move the version — it is the same request arriving twice, not an error. Any
+   other mutation on a cancelled event throws `EventsDomainException`.
+
 ## Data model and the embedding decision
 
 An `Event` embeds its `Venue` in full and its `Performer` list in full. `Venue` and `Performer`
@@ -126,8 +157,18 @@ the domain.
 - `CosmosJson.Options` is the single `JsonSerializerOptions` the `CosmosClient` is built with, and
   the same instance the tests exercise. camelCase naming is what turns `Id` into the lowercase `id`
   Cosmos requires.
+- **Enums are stored as names, not ordinals** (`JsonStringEnumConverter`). Inserting or reordering a
+  value would otherwise silently reinterpret every document already written, and `c.status =
+  "Cancelled"` is a query a human can read.
 - `DomainBinding` is a `JsonTypeInfo` modifier that selects the private rehydration constructor and
   writes to private setters and collection backing fields.
+- **`DomainBinding` also drops every property declared on `Entity`** — today that is `DomainEvents`.
+  This does not fail loudly if removed, which is why it has its own test. The getter works, so every
+  write carries a `"domainEvents":[{}]` array — one empty object per raised event, because
+  `IDomainEvent` is an interface with no members — while nothing reads it back. `_domainEvents` is
+  private to the base class, so `GetField(..., NonPublic)` on the derived type never finds it and the
+  property never gets a setter. The result is silent document bloat charged in RU on every write, not
+  an exception. The fix cannot be `[JsonIgnore]`: no JSON attribute may appear in the domain.
 - `GeoLocationConverter` maps `GeoLocation` to and from a GeoJSON Point.
 - `UseSystemTextJsonSerializerWithOptions` is **mutually exclusive** with `Serializer` and
   `SerializerOptions` — setting both throws.
@@ -190,19 +231,35 @@ message that says what happened.
   atomicity is per logical partition and `/id` keys mean nothing shares one. A handler must not
   assume a rollback. The class is documented as a no-op rather than quietly left implying a
   guarantee.
-- `CreateEventCommandHandler` publishes the integration event straight after the write, with no
-  outbox (rule 10). Wolverine is configured with RabbitMQ but no message persistence, so a crash
-  between the write and the publish loses the message and Bookings never creates tickets. This is
-  the most valuable remaining fix.
+- **`WolverineIntegrationEventPublisher` publishes inline, with no outbox (rule 10).** Wolverine is
+  configured with RabbitMQ but no message persistence, so a crash between the Cosmos write and the
+  publish loses the message. This is now worse than it was when only creation was published: a lost
+  `EventCancelled` or `EventRelocated` leaves Bookings' tickets permanently out of sync with the
+  catalogue, not merely missing. Still the most valuable remaining fix. Wolverine has **no Cosmos
+  message store** (Postgres/SqlServer/Marten only), so the options are a hand-rolled outbox document
+  plus a publisher loop, or a Postgres purely for messaging. Everything funnels through
+  `IIntegrationEventPublisher`, so it is a change in one place.
 
 **Missing:**
-- **Venues have full CRUD; events and performers are still POST-only.** Follow the venue slice when
-  adding reads for them: query + `QueryHandler`, point read where possible, cursor paging for lists.
-- No optimistic concurrency — `_etag` is not read or enforced, so concurrent venue updates
-  last-write-wins.
-- The delete guard on venues is **best-effort**. `CountUpcomingEventsAtVenueAsync` runs before the
-  delete, and an event can be created in between; with `/id` partition keys no transaction can
-  close that window. It prevents the accident, not the race.
+- All three aggregates now have full CRUD. Events use per-facet sub-resources
+  (`PUT /{id}/schedule`, `/venue`, `/lineup`, `POST /{id}/cancel`) rather than one PUT — a
+  **deliberate** inconsistency with venues and performers, because each event mutation has a
+  different downstream consequence and a combined PUT would have to infer which happened by diffing.
+- Events are cancelled, never deleted. There is no `DELETE /api/events/{id}` on purpose: tickets
+  exist downstream, so removal is a state transition, not a removal.
+- No optimistic concurrency — `_etag` is not read or enforced, so concurrent venue, performer or
+  event updates last-write-wins. `Event.Version` is **not** a substitute: it orders messages for
+  consumers, it does not guard the write.
+- `CreateEventCommandHandler` still throws `EventsDomainException` (→ 400) for a missing venue or
+  performer, where the newer handlers throw `NotFoundException` (→ 404). The newer behaviour is the
+  correct one; create was left alone rather than silently changing an existing endpoint's status
+  code.
+- The delete guards on venues and performers are **best-effort**.
+  `CountUpcomingEventsAtVenueAsync` / `CountUpcomingEventsWithPerformerAsync` run before the delete,
+  and an event can be created in between; with `/id` partition keys no transaction can close that
+  window. They prevent the accident, not the race.
+- The performer delete guard's `EXISTS` subquery over `c.performers` has not been run against
+  Cosmos or the emulator — only its shape is reviewed.
 - Emulator geospatial support is unverified; `ST_DISTANCE` has not been exercised against it.
 - Nothing in the Cosmos layer has been exercised against a running Cosmos instance.
 
@@ -215,8 +272,10 @@ message that says what happened.
 4. Decide the document shape first: embedded or referenced, and if embedded, snapshot or replica
    (`document-db` rule 4).
 5. Shape the read so it can be a point read if at all possible.
-6. If another service must learn about it, add the contract to `TicketMaster.Common` and publish
-   through an outbox — not inline after the write.
+6. If another service must learn about it, raise a domain event from the aggregate, add the contract
+   to `TicketMaster.Common`, map it in `IntegrationEventTranslator`, and publish via
+   `IIntegrationEventPublisher` — never build the contract by hand in a handler. Carry resulting
+   state and the aggregate `Version`, not a delta.
 
 ## Common mistakes
 
@@ -231,3 +290,8 @@ message that says what happened.
 | Reads cost far more RU than expected | A query was used where a point read would do |
 | Indexing policy change had no effect | `CreateContainerIfNotExistsAsync` matches on id only; needs `ReplaceContainerAsync` |
 | `Serializer`/`SerializerOptions` throws at startup | Set alongside `UseSystemTextJsonSerializerWithOptions` |
+| `"domainEvents":[{}]` in stored documents | `DomainBinding.DropDomainEventBookkeeping` removed or bypassed |
+| Consumers act on a change that was rolled back | Published before the write instead of after it |
+| A consumer reverts a newer change | A mutation didn't bump `Version`, so the consumer couldn't tell the message was stale |
+| Same domain event published twice | The aggregate was saved again without `ClearDomainEvents` — use `IIntegrationEventPublisher`, which clears for you |
+| A lineup change produces no message | Correct — it has no integration contract by design |

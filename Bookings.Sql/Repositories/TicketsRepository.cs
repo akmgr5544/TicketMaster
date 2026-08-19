@@ -33,6 +33,17 @@ internal class TicketsRepository : ITicketsRepository
         return await _context.Tickets.Where(x => ticketIds.Contains(x.Id)).ToArrayAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// Tracked on purpose — the caller mutates what comes back and saves. No <c>Update</c> call
+    /// follows, so only the columns that actually changed are written.
+    /// </summary>
+    public async ValueTask<Ticket[]> GetTicketsByEventAsync(string eventId, CancellationToken cancellationToken)
+    {
+        return await _context.Tickets
+            .Where(x => x.EventId == eventId)
+            .ToArrayAsync(cancellationToken);
+    }
+
     public async ValueTask AddTicketAsync(Ticket ticket, CancellationToken cancellationToken)
     {
         await _context.Tickets.AddAsync(ticket, cancellationToken);

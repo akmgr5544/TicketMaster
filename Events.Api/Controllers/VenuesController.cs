@@ -23,7 +23,7 @@ public class VenuesController : ControllerBase
     [HttpGet("{id}")]
     [ProducesResponseType<VenueDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<VenueDto>> GetVenueAsync(string id, CancellationToken cancellationToken)
+    public async Task<IActionResult> GetVenueAsync(string id, CancellationToken cancellationToken)
     {
         var venue = await _sender.Send(new GetVenueQuery(id), cancellationToken);
         return Ok(venue);
@@ -35,7 +35,7 @@ public class VenuesController : ControllerBase
     /// </summary>
     [HttpGet]
     [ProducesResponseType<PagedResult<VenueDto>>(StatusCodes.Status200OK)]
-    public async Task<ActionResult<PagedResult<VenueDto>>> ListVenuesAsync(
+    public async Task<IActionResult> ListVenuesAsync(
         [FromQuery] int pageSize = DefaultPageSize,
         [FromQuery] string? continuationToken = null,
         CancellationToken cancellationToken = default)
@@ -49,7 +49,7 @@ public class VenuesController : ControllerBase
     [HttpPost]
     [ProducesResponseType(StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    public async Task<ActionResult> AddVenueAsync([FromBody] AddVenueCommand command,
+    public async Task<IActionResult> AddVenueAsync([FromBody] AddVenueCommand command,
         CancellationToken cancellationToken)
     {
         var id = await _sender.Send(command, cancellationToken);
@@ -61,7 +61,7 @@ public class VenuesController : ControllerBase
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult> UpdateVenueAsync(string id,
+    public async Task<IActionResult> UpdateVenueAsync(string id,
         [FromBody] UpdateVenueCommand command,
         CancellationToken cancellationToken)
     {
@@ -75,7 +75,7 @@ public class VenuesController : ControllerBase
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
-    public async Task<ActionResult> DeleteVenueAsync(string id, CancellationToken cancellationToken)
+    public async Task<IActionResult> DeleteVenueAsync(string id, CancellationToken cancellationToken)
     {
         await _sender.Send(new DeleteVenueCommand(id), cancellationToken);
 

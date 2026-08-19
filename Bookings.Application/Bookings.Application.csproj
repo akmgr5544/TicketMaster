@@ -1,6 +1,11 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
     <ItemGroup>
+      <!-- Command handlers are internal by architecture rule; the tests still need to construct them. -->
+      <InternalsVisibleTo Include="BookingApplication" />
+    </ItemGroup>
+
+    <ItemGroup>
       <PackageReference Include="DistributedLock.Redis" />
       <PackageReference Include="MediatR" />
       <PackageReference Include="Microsoft.Extensions.Caching.StackExchangeRedis" />

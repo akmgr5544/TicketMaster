@@ -1,32 +1,31 @@
 using Events.Application.Commands;
+using Events.Application.IntegrationEvents;
 using Events.Domain.Exceptions;
 using Events.Domain.Repositories;
 using MediatR;
-using TicketMaster.Common.IntegrationEvents;
-using Wolverine;
 using Event = Events.Domain.Entities.Event;
 
 namespace Events.Application.CommandHandlers;
 
-internal class CreateEventCommandHandler : IRequestHandler<CreateEventCommand>
+internal sealed class CreateEventCommandHandler : IRequestHandler<CreateEventCommand, string>
 {
     private readonly IEventRepository _eventRepository;
     private readonly IVenueRepository _venueRepository;
     private readonly IPerformerRepository _performerRepository;
-    private readonly IMessageBus _messageBus;
+    private readonly IIntegrationEventPublisher _publisher;
 
     public CreateEventCommandHandler(IEventRepository eventRepository,
         IVenueRepository venueRepository,
         IPerformerRepository performerRepository,
-        IMessageBus messageBus)
+        IIntegrationEventPublisher publisher)
     {
         _eventRepository = eventRepository;
         _venueRepository = venueRepository;
         _performerRepository = performerRepository;
-        _messageBus = messageBus;
+        _publisher = publisher;
     }
 
-    public async Task Handle(CreateEventCommand request, CancellationToken cancellationToken)
+    public async Task<string> Handle(CreateEventCommand request, CancellationToken cancellationToken)
     {
         var performers = await _performerRepository.GetPerformersByIdsAsync(request.Performers, cancellationToken);
         if (performers.Count == 0)
@@ -42,9 +41,10 @@ internal class CreateEventCommandHandler : IRequestHandler<CreateEventCommand>
 
         await _eventRepository.AddEventAsync(@event, cancellationToken);
 
-        await _messageBus.PublishAsync(new EventCreatedIntegrationEvent(@event.Id,
-            venue.Id,
-            @event.StartDate,
-            [..venue.Seats]));
+        // The aggregate raised EventCreated in its constructor, so creation now travels the same
+        // path as every other change instead of building the contract by hand here.
+        await _publisher.PublishPendingAsync(@event, cancellationToken);
+
+        return @event.Id;
     }
 }

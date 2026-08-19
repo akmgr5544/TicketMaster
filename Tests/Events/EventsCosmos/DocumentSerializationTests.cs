@@ -82,6 +82,50 @@ public class DocumentSerializationTests
     }
 
     /// <summary>
+    /// Domain events are in-memory bookkeeping, not persisted state. They must not reach the
+    /// document: they would bloat every write, cost RU for data nobody reads back, and re-publish
+    /// nothing on load because there is no setter for them.
+    /// </summary>
+    [Fact]
+    public void Event_does_not_write_its_domain_events_to_the_document()
+    {
+        var @event = new Event(DateTime.UtcNow.AddDays(11), AVenue(), [APerformer()]);
+
+        var json = JsonSerializer.Serialize(@event, Options);
+
+        using var document = JsonDocument.Parse(json);
+        Assert.False(document.RootElement.TryGetProperty("domainEvents", out _), $"document was: {json}");
+    }
+
+    /// <summary>
+    /// Stored as a name, not an ordinal. Reordering or inserting a value in the enum would silently
+    /// reinterpret every document already written, and <c>c.status = "Cancelled"</c> is a query a
+    /// human can read.
+    /// </summary>
+    [Fact]
+    public void Event_status_is_written_as_a_name()
+    {
+        var @event = new Event(DateTime.UtcNow.AddDays(11), AVenue(), [APerformer()]);
+        @event.Cancel();
+
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(@event, Options));
+
+        Assert.Equal("Cancelled", document.RootElement.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public void Event_round_trip_keeps_its_status_and_version()
+    {
+        var @event = new Event(DateTime.UtcNow.AddDays(11), AVenue(), [APerformer()]);
+        @event.Reschedule(DateTime.UtcNow.AddDays(30));
+
+        var loaded = RoundTrip(@event);
+
+        Assert.Equal(@event.Version, loaded.Version);
+        Assert.Equal(@event.Status, loaded.Status);
+    }
+
+    /// <summary>
     /// The regression guard for the rehydration trap: an event stored years ago must still load.
     /// If deserialization ever routes through the public constructor again, the minimum lead-time
     /// rule fires on read and every historical event becomes unreadable.
