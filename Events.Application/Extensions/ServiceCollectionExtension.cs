@@ -1,3 +1,4 @@
+using Events.Application.IntegrationEvents;
 using Events.Application.Pipelines;
 using MediatR;
 using Microsoft.Extensions.DependencyInjection;
@@ -11,10 +12,14 @@ public static class ServiceCollectionExtension
 {
     public static IServiceCollection AddApplicationServices(this IServiceCollection services)
     {
-        
-        services.AddMediatR(cf => 
+
+        services.AddMediatR(cf =>
             cf.RegisterServicesFromAssembly(typeof(ServiceCollectionExtension).Assembly));
         services.AddTransient(typeof(IPipelineBehavior<,>), typeof(TransactionBehavior<,>));
+
+        // The one route to the broker. Scoped, because IMessageBus is.
+        services.AddScoped<IIntegrationEventPublisher, WolverineIntegrationEventPublisher>();
+
         return services;
     }
     

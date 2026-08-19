@@ -6,11 +6,8 @@ public class Performer
 {
     public Performer(string name, string description)
     {
-        if (string.IsNullOrWhiteSpace(name))
-            throw new EventsDomainException("Performer name must not be blank");
-
         Id = Guid.CreateVersion7().ToString();
-        Name = name;
+        Name = NotBlank(name);
         Description = description;
     }
 
@@ -27,4 +24,17 @@ public class Performer
     public string Id { get; private set; }
     public string Name { get; private set; }
     public string Description { get; private set; }
+
+    public void Rename(string name) => Name = NotBlank(name);
+
+    /// <summary>
+    /// A description is optional, so unlike the name this accepts blank — clearing it is a
+    /// legitimate edit, not a broken invariant.
+    /// </summary>
+    public void ChangeDescription(string description) => Description = description;
+
+    private static string NotBlank(string value) =>
+        string.IsNullOrWhiteSpace(value)
+            ? throw new EventsDomainException("Performer name must not be blank")
+            : value;
 }

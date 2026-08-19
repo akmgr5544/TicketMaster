@@ -57,6 +57,9 @@ namespace Bookings.Sql.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<long>("EventVersion")
+                        .HasColumnType("bigint");
+
                     b.Property<string>("Seat")
                         .IsRequired()
                         .HasColumnType("text");

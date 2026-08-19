@@ -18,9 +18,41 @@ internal class EventRepository : IEventRepository
         return _context.Events.PointReadAsync<Event>(id, cancellationToken);
     }
 
+    /// <summary>
+    /// A cross-partition query — with <c>/id</c> partition keys every event lives in its own logical
+    /// partition, so listing necessarily fans out. Cursor paging, because Cosmos charges for the
+    /// rows an OFFSET skips.
+    /// </summary>
+    public async Task<Page<Event>> ListEventsAsync(int pageSize,
+        string? continuationToken,
+        CancellationToken cancellationToken)
+    {
+        var query = new QueryDefinition("SELECT * FROM c ORDER BY c.startDate");
+
+        using var iterator = _context.Events.GetItemQueryIterator<Event>(query,
+            // An empty string is not a valid token; null means "start from the beginning".
+            continuationToken: string.IsNullOrWhiteSpace(continuationToken) ? null : continuationToken,
+            requestOptions: new QueryRequestOptions { MaxItemCount = pageSize });
+
+        if (!iterator.HasMoreResults)
+            return new Page<Event>([], null);
+
+        var response = await iterator.ReadNextAsync(cancellationToken);
+
+        return new Page<Event>([..response], response.ContinuationToken);
+    }
+
     public async Task AddEventAsync(Event @event, CancellationToken cancellationToken)
     {
         await _context.Events.CreateItemAsync(@event,
+            new PartitionKey(@event.Id),
+            cancellationToken: cancellationToken);
+    }
+
+    public async Task UpdateEventAsync(Event @event, CancellationToken cancellationToken)
+    {
+        await _context.Events.ReplaceItemAsync(@event,
+            @event.Id,
             new PartitionKey(@event.Id),
             cancellationToken: cancellationToken);
     }
@@ -33,7 +65,7 @@ internal class EventRepository : IEventRepository
     /// exists only to guard venue deletion, which is rare.
     /// </para>
     /// </summary>
-    public async Task<int> CountUpcomingEventsAtVenueAsync(string venueId,
+    public Task<int> CountUpcomingEventsAtVenueAsync(string venueId,
         DateTime asOf,
         CancellationToken cancellationToken)
     {
@@ -44,6 +76,40 @@ internal class EventRepository : IEventRepository
             // like-for-like rather than relying on two date formats happening to match.
             .WithParameter("@asOf", asOf);
 
+        return CountAsync(query, cancellationToken);
+    }
+
+    /// <summary>
+    /// Filters on the *embedded* performer snapshots because that is what an event document
+    /// actually carries — there is no join to the performers container.
+    /// <para>
+    /// A correlated EXISTS subquery rather than <c>ARRAY_CONTAINS</c>: matching an array of objects
+    /// with ARRAY_CONTAINS needs an object literal, which cannot carry a query parameter, and
+    /// interpolating the id into the text instead would be string-built SQL.
+    /// </para>
+    /// <para>Cross-partition, and it exists only to guard performer deletion, which is rare.</para>
+    /// </summary>
+    public Task<int> CountUpcomingEventsWithPerformerAsync(string performerId,
+        DateTime asOf,
+        CancellationToken cancellationToken)
+    {
+        var query = new QueryDefinition("""
+                SELECT VALUE COUNT(1) FROM c
+                WHERE c.startDate > @asOf
+                  AND EXISTS(SELECT VALUE p FROM p IN c.performers WHERE p.id = @performerId)
+                """)
+            .WithParameter("@performerId", performerId)
+            .WithParameter("@asOf", asOf);
+
+        return CountAsync(query, cancellationToken);
+    }
+
+    /// <summary>
+    /// Drains a <c>COUNT(1)</c> query. The count arrives per-partition rather than as a single
+    /// row, so the pages have to be summed rather than read once.
+    /// </summary>
+    private async Task<int> CountAsync(QueryDefinition query, CancellationToken cancellationToken)
+    {
         using var iterator = _context.Events.GetItemQueryIterator<int>(query);
 
         var total = 0;

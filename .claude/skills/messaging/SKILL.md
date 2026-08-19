@@ -12,7 +12,12 @@ only safe if the consumer can process it twice.
 ## Scope
 
 Cross-cutting — every TicketMaster service that publishes or consumes across a service boundary.
-Bookings is the only publisher/consumer today; Events will join it.
+
+Events publishes four contracts — `EventCreated`, `EventRescheduled`, `EventRelocated`,
+`EventCancelled` — all through `Events.Application/IntegrationEvents/IIntegrationEventPublisher`.
+Bookings consumes all four in `Bookings.Application/IntegrationEventHandlers`, translating each to a
+command in the `EventSync` slice. **Neither side has a working outbox** (see the Durability section
+and the Events skill), so rule 4 does not hold in practice today.
 
 **The rules below are written for the pattern, not the library.** Wolverine and RabbitMQ specifics
 live in their own sections, so replacing either changes those sections rather than the rules.
@@ -50,7 +55,22 @@ never published to the broker directly.
 5. **Consumers must be idempotent.** Delivery is at-least-once. Processing the same message twice
    must produce the same end state — key on the message id or a natural business key.
 6. **Consumers must tolerate out-of-order arrival.** Retries and redelivery reorder messages. Check
-   whether the change is still applicable rather than assuming a sequence.
+   whether the change is still applicable rather than assuming a sequence. Two things make this
+   tractable, and the Events → Bookings flow uses both:
+
+   - **Carry resulting state, not deltas.** `EventRelocated` says which seats the event now has, not
+     which were added or removed. Applying it twice lands in the same place, so redelivery is free.
+     A delta (`SeatsAdded`) is wrong under both redelivery and reorder.
+   - **Carry the producing aggregate's version, and have the consumer reject anything not newer.**
+     `Ticket.EventVersion` records how far each ticket has got; `Ticket.IsStale(version)` treats
+     equal-or-lower as stale, and each mutator guards itself so a new consumer cannot forget.
+     Equal counts as stale because that is the same message arriving twice.
+
+   **A guard on the entity is not enough when a message can create rows.** The venue reconcile also
+   rejects the whole message up front, comparing against the highest version already applied — a seat
+   that does not exist yet has no version to compare against, so a stale message would re-add seats a
+   newer one removed. Wherever a consumer inserts rather than only updating, check at the message
+   level too.
 7. **Every listener has an explicit failure policy and a terminal destination.** Decide what retries
    (transient faults), what goes straight to a dead letter queue (malformed, unprocessable), and
    what is discarded. Unbounded retry on a poison message blocks the queue behind it.
@@ -197,6 +217,9 @@ swap cheap — both are properties of your code, not the library.
 | Broker connection fails at startup | Connection string passed where a connection *name* was expected |
 | Outbox tables exist but messages still lost | Durability policy covers local queues only, not broker endpoints |
 | Consumer breaks after a producer deploy | Contract changed non-additively (rule 3) |
+| A newer change gets reverted | Consumer applied a stale message — no version guard (rule 6) |
+| Redelivery duplicates rows | Consumer inserts without a message-level version check (rule 6) |
+| Consumer must call the producer for a missing field | Contract too thin (rule 10) — e.g. reconciling seats needs the event's start date to create a ticket |
 | Every bound queue receives a command | Conventional routing publishes to a fanout exchange |
 
 ## Sources

@@ -20,6 +20,13 @@ public static class CosmosJson
         {
             Modifiers = { DomainBinding.Apply }
         },
-        Converters = { new GeoLocationConverter() }
+        Converters =
+        {
+            new GeoLocationConverter(),
+            // Enums are stored as names, not ordinals. Inserting or reordering a value would
+            // otherwise silently reinterpret every document already written, and a stored name is
+            // one a human can both read and write a query against.
+            new JsonStringEnumConverter()
+        }
     };
 }

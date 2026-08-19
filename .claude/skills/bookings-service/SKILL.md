@@ -65,6 +65,40 @@ Bookings.Api  ──►  Bookings.Application  ──►  Bookings.Domain
 9. **The domain project stays persistence-ignorant.** No EF attributes, no `DbContext`, no
    navigation shapes chosen for the ORM's benefit. Mapping is `Bookings.Sql`'s job.
 
+## Staying in sync with the events catalogue
+
+`Bookings.Application/EventSync` holds the commands and handlers that bring tickets back in line
+with a change published by Events; `IntegrationEventHandlers` holds the thin Wolverine `Consume`
+handlers that translate each contract into one of them.
+
+| Contract | Effect on tickets |
+|---|---|
+| `EventCreated` | bulk-create one ticket per seat |
+| `EventRescheduled` | move `EventDate` on every ticket for the event |
+| `EventCancelled` | set `Status = Cancelled`; never delete — a booking that pointed at them still has to be explicable |
+| `EventRelocated` | reconcile: move surviving seats, cancel seats that no longer exist, create tickets for seats that are new |
+
+1. **`Ticket.EventVersion` is how far that ticket has been brought in line.** `IsStale(version)`
+   treats equal-or-lower as stale, and `Reschedule`/`Relocate`/`Cancel` each guard themselves rather
+   than trusting the caller — a new consumer cannot reintroduce the bug by forgetting to check.
+2. **`ReconcileEventVenueCommandHandler` also rejects stale messages at the message level**, against
+   the highest version already applied. It is the only handler that *creates* tickets, and a seat that
+   does not exist yet has no version to compare against.
+3. **A cancelled ticket does not count as covering its seat.** If a seat leaves the event and later
+   returns, the holder has already been told their ticket is void, so the seat gets a fresh ticket
+   rather than the old one quietly coming back to life. Two rows for one seat — one cancelled, one
+   active — is the intended outcome.
+4. **New slices colocate command and handler in one namespace**, because `ColocationTest` requires it.
+   The four handlers in `Bookings.Application/CommandHandlers` predate the rule and still fail it.
+5. **Consume handlers stay `public`** so Wolverine discovers them; the MediatR handlers behind them
+   are `internal` per `VisibilityTest`, which is why `Bookings.Application.csproj` carries
+   `InternalsVisibleTo` for the test project.
+
+**Known loose end:** a relocation can cancel already-booked tickets, leaving the parent `Booking`
+pointing at cancelled tickets. Refunds, notifications and booking-level cancellation are not built —
+the tickets are cancelled and nothing else happens. Any work on `Booking` cancellation should start
+here.
+
 ## The reservation and booking flow
 
 ```
