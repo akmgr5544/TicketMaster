@@ -1,5 +1,6 @@
 using Bookings.Domain.Entities;
 using Bookings.Domain.Repositories;
+using Microsoft.EntityFrameworkCore;
 
 namespace Bookings.Sql.Repositories;
 
@@ -20,5 +21,16 @@ internal class BookingRepository : IBookingRepository
     public async ValueTask AddAsync(Booking booking)
     {
         await _context.Bookings.AddAsync(booking);
+    }
+
+    /// <summary>
+    /// Tracked on purpose — the caller changes the booking's status and saves. <c>BookedTickets</c> is
+    /// an owned collection, so it is loaded without an explicit include, and the cancel path needs it
+    /// to know which seats to put back.
+    /// </summary>
+    public async ValueTask<Booking?> GetByIdAsync(long bookingId, CancellationToken cancellationToken)
+    {
+        return await _context.Bookings
+            .FirstOrDefaultAsync(booking => booking.Id == bookingId, cancellationToken);
     }
 }

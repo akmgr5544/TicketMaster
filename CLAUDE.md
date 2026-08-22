@@ -22,7 +22,7 @@ dotnet run --project TicketMaster.ApiGateway/TicketMaster.ApiGateway.csproj
 dotnet test Tests/Bookings/BookingArchitecture/BookingArchitecture.csproj
 dotnet test Tests/Bookings/BookingDomain/BookingDomain.csproj        # Ticket rules, incl. staleness
 dotnet test Tests/Bookings/BookingApplication/BookingApplication.csproj  # EventSync consumers
-dotnet test Tests/Bookings/BookingIntegration/BookingIntegration.csproj
+dotnet test Tests/Bookings/BookingIntegration/BookingIntegration.csproj  # interceptor + transactions, SQLite
 dotnet test Tests/Events/EventsArchitecture/EventsArchitecture.csproj
 dotnet test Tests/Events/EventsDomain/EventsDomain.csproj            # Events domain rules
 dotnet test Tests/Events/EventsApplication/EventsApplication.csproj  # handlers, with fake repositories
@@ -105,7 +105,13 @@ Each project has a marker interface (`IApiAssemblyMarker`, `IApplicationAssembly
 - **Layout**: test projects are grouped by service — `Tests/Bookings/`, `Tests/Events/`, `Tests/Users/` — so that everything belonging to one service can be extracted together when a module is split out into its own deployable. Put new test projects under the folder for the service they test.
 - **Architecture tests** (`Tests/<Service>/*Architecture`) use **ArchUnitNET.xUnit**. Each project has a `BaseTest` that loads the service's assemblies via marker interfaces into a shared `Architecture` instance; concrete tests assert dependencies, naming, visibility, and colocation rules. Adding a new layer/project means updating `BaseTest.cs` to include its assembly.
 - **Unit tests**: `Tests/Events/EventsDomain` covers the Events domain rules; `Tests/Events/EventsCosmos` covers Cosmos document serialization against the real `CosmosJson.Options`, with no emulator needed.
-- **Integration tests**: `Tests/Bookings/BookingIntegration` (currently a scaffold).
+- **Integration tests**: `Tests/Bookings/BookingIntegration` runs the real `BookingDomainContext`,
+  domain event interceptor and transaction behavior against SQLite in-memory (`Microsoft.EntityFrameworkCore.Sqlite`,
+  a test-only package). It exists for the questions fakes cannot answer — whether EF tolerates the
+  nested `SaveChangesAsync` that domain event dispatch performs, and whether dependency injection
+  really skips an open-generic pipeline behavior whose generic constraint does not match. It needs
+  no running database. `Bookings.Sql` carries `InternalsVisibleTo("BookingIntegration")` so the tests
+  can construct the internal context and repositories.
 - **Known pre-existing failure**: 4 of the `BookingArchitecture` tests fail on a clean tree.
   `ColocationTest` requires a handler to live in the same namespace as its command, and the four
   handlers in `Bookings.Application/CommandHandlers` predate that rule. New Bookings slices —

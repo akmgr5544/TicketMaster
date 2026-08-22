@@ -1,8 +1,9 @@
 using Bookings.Application.Commands;
 using Bookings.Application.Dtos;
 using Bookings.Application.Exceptions;
+using Bookings.Application.Locking;
 using Bookings.Application.Services.Interfaces;
-using Bookings.Domain.DomainEvents;
+using Bookings.Domain.Abstractions;
 using Bookings.Domain.Entities;
 using Bookings.Domain.Enums;
 using Bookings.Domain.Repositories;
@@ -15,38 +16,43 @@ internal class MakeBookingCommandHandler : IRequestHandler<MakeBookingCommand>
     private readonly IBookingRepository _bookingRepository;
     private readonly ITicketsRepository _ticketsRepository;
     private readonly ICacheService _cacheService;
+    private readonly IAfterCommitQueue _afterCommit;
     private const int TicketCountConfig = 2;
 
     public MakeBookingCommandHandler(IBookingRepository bookingRepository,
         ITicketsRepository ticketsRepository,
-        ICacheService cacheService)
+        ICacheService cacheService,
+        IAfterCommitQueue afterCommit)
     {
         _bookingRepository = bookingRepository;
         _ticketsRepository = ticketsRepository;
         _cacheService = cacheService;
+        _afterCommit = afterCommit;
     }
 
     public async Task Handle(MakeBookingCommand request, CancellationToken cancellationToken)
     {
-        var tickets = await GetValidTicketsAsync(request.Tickets,
+        var ticketIds = await GetValidTicketIdsAsync(request.Tickets,
             request.EventId,
             request.UserId,
             cancellationToken);
 
-        var booking = Booking.Create(request.UserId, BookingStatus.Booked, request.Tickets.Length);
-
-        foreach (var ticket in tickets)
-        {
-            booking.AddBookedTicket(ticket.Id);
-        }
-
-        booking.AddDomainEvent(new BookingCreatedDomainEvent(tickets));
+        // Create raises BookingCreatedDomainEvent itself, and the handler for that event is what
+        // marks these tickets as booked.
+        var booking = Booking.Create(request.UserId, BookingStatus.Booked, ticketIds);
 
         await _bookingRepository.AddAsync(booking);
         await _bookingRepository.SaveChangesAsync(cancellationToken);
+
+        // The reservation has done its job: the seats are held by the tickets' own status now, which
+        // is durable where the reservation was not. Queued rather than deleted here because this runs
+        // inside the transaction and Redis would not roll back with it — if the booking fails after
+        // this point the user keeps the reservation they still hold and can try again.
+        var reservationKeys = ticketIds.Select(ReservationKeys.Reservation).ToArray();
+        _afterCommit.Enqueue(_ => _cacheService.RemoveAsync(reservationKeys));
     }
 
-    private async Task<Ticket[]> GetValidTicketsAsync(long[] ticketIds,
+    private async Task<long[]> GetValidTicketIdsAsync(long[] ticketIds,
         string eventId,
         string userId,
         CancellationToken cancellationToken)
@@ -57,9 +63,12 @@ internal class MakeBookingCommandHandler : IRequestHandler<MakeBookingCommand>
         if (ticketIds.Length > TicketCountConfig)
             throw new BookingException("Too many tickets");
 
-        var keys = ticketIds.Select(id => id.ToString()).ToArray();
+        var keys = ticketIds.Select(ReservationKeys.Reservation).ToArray();
         var reservedTickets = await _cacheService.GetByKeysAsync<ReserveTicketDto>(keys);
-        if (reservedTickets.Count == 0)
+
+        // Every ticket has to still be reserved, not merely one of them. A reservation that has partly
+        // expired is not something to book the remainder of.
+        if (reservedTickets.Count != ticketIds.Length)
             throw new BookingException("No reserved tickets found");
 
         if (reservedTickets.Any(x => !ticketIds.Contains(x.TicketId)))
@@ -75,9 +84,11 @@ internal class MakeBookingCommandHandler : IRequestHandler<MakeBookingCommand>
             eventId,
             cancellationToken);
 
-        if (tickets.Length == 0)
-            throw new BookingException("No tickets found");
+        // Every requested ticket has to be bookable, not just some of them. Returning the subset
+        // would create a booking for fewer seats than the user reserved and asked for.
+        if (tickets.Length != ticketIds.Length)
+            throw new BookingException("Some of the tickets are no longer available");
 
-        return tickets;
+        return tickets.Select(ticket => ticket.Id).ToArray();
     }
 }

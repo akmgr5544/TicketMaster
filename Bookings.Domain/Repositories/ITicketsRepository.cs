@@ -19,6 +19,14 @@ public interface ITicketsRepository : IUnitOfWork
     /// </summary>
     ValueTask<Ticket[]> GetTicketsByEventAsync(string eventId, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// The tickets with these ids, untracked, for deciding whether they can be reserved. By id alone
+    /// rather than filtered by availability, so the caller can tell a ticket that does not exist from
+    /// one that exists but is not for sale — and say which.
+    /// </summary>
+    ValueTask<Ticket[]> GetTicketsForReservationAsync(ImmutableArray<long> ticketIds,
+        CancellationToken cancellationToken);
+
     ValueTask AddTicketsAsync(Ticket[] ticket);
 
     ValueTask AddTicketAsync(Ticket ticket, CancellationToken cancellationToken);

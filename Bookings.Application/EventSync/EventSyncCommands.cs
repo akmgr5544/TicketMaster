@@ -1,3 +1,4 @@
+using Bookings.Domain.Abstractions;
 using MediatR;
 
 namespace Bookings.Application.EventSync;
@@ -10,9 +11,10 @@ namespace Bookings.Application.EventSync;
 /// Commands and their handlers share this namespace because <c>ColocationTest</c> requires it.
 /// </para>
 /// </summary>
-public record RescheduleEventTicketsCommand(string EventId, long Version, DateTime StartDate) : IRequest;
+public record RescheduleEventTicketsCommand(string EventId, long Version, DateTime StartDate)
+    : IRequest, ITransactionalRequest;
 
-public record CancelEventTicketsCommand(string EventId, long Version) : IRequest;
+public record CancelEventTicketsCommand(string EventId, long Version) : IRequest, ITransactionalRequest;
 
 /// <summary>
 /// <paramref name="Seats"/> is the full set the event now has, not the seats added or removed — the
@@ -22,4 +24,4 @@ public record ReconcileEventVenueCommand(string EventId,
     long Version,
     string VenueId,
     DateTime StartDate,
-    string[] Seats) : IRequest;
+    string[] Seats) : IRequest, ITransactionalRequest;

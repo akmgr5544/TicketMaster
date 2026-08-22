@@ -1,3 +1,4 @@
+using Bookings.Domain.Abstractions;
 using MediatR;
 
 namespace Bookings.Application.Commands;
@@ -5,4 +6,4 @@ namespace Bookings.Application.Commands;
 public record CreateTicketCommand(string EventId,
     string VenueId,
     string Seat,
-    DateTime EventDate): IRequest;
+    DateTime EventDate): IRequest, ITransactionalRequest;

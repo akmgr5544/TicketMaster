@@ -1,3 +1,4 @@
+using Bookings.Domain.Abstractions;
 using Bookings.Domain.Repositories;
 using Bookings.Sql.Interceptors;
 using Bookings.Sql.Pipelines;
@@ -16,6 +17,8 @@ public static class ServiceCollectionExtension
         IConfiguration configuration)
     {
         services.AddTransient(typeof(IPipelineBehavior<,>), typeof(TransactionBehavior<,>));
+
+        services.AddScoped<IAfterCommitQueue, AfterCommitQueue>();
 
         services.AddScoped<IBookingRepository, BookingRepository>();
         services.AddScoped<ITicketsRepository, TicketsRepository>();
