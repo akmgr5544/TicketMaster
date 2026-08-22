@@ -1,6 +1,7 @@
 using Bookings.Domain.Abstractions;
 using Bookings.Domain.DomainEvents;
 using Bookings.Domain.Enums;
+using Bookings.Domain.Exceptions;
 
 namespace Bookings.Domain.Entities;
 
@@ -51,7 +52,7 @@ public sealed class Booking : Entity, IAggregateRoot
             return;
 
         if (Status != BookingStatus.Booked)
-            throw new InvalidOperationException($"A {Status} booking cannot be paid for.");
+            throw new BookingsDomainException($"A {Status} booking cannot be paid for.");
 
         Status = BookingStatus.Payed;
         BookingHistories.Add(new BookingHistory(Status, BookedTickets.Count));
@@ -71,7 +72,7 @@ public sealed class Booking : Entity, IAggregateRoot
             return;
 
         if (Status != BookingStatus.Booked)
-            throw new InvalidOperationException($"A {Status} booking cannot be cancelled.");
+            throw new BookingsDomainException($"A {Status} booking cannot be cancelled.");
 
         Status = BookingStatus.Cancelled;
         BookingHistories.Add(new BookingHistory(Status, BookedTickets.Count));
@@ -87,7 +88,7 @@ public sealed class Booking : Entity, IAggregateRoot
     public static Booking Create(string userId, BookingStatus status, long[] ticketIds)
     {
         if (ticketIds.Length == 0)
-            throw new InvalidOperationException("A booking must cover at least one ticket.");
+            throw new BookingsDomainException("A booking must cover at least one ticket.");
 
         var booking = new Booking(userId, status);
 

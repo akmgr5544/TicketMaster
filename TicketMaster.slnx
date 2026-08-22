@@ -22,6 +22,7 @@
     <Project Path="Tests/Bookings/BookingApplication/BookingApplication.csproj" />
     <Project Path="Tests/Bookings/BookingArchitecture/BookingArchitecture.csproj" />
     <Project Path="Tests/Bookings/BookingDomain/BookingDomain.csproj" />
+    <Project Path="Tests/Bookings/BookingApi/BookingApi.csproj" />
     <Project Path="Tests/Bookings/BookingIntegration/BookingIntegration.csproj" />
   </Folder>
   <Folder Name="/Tests/Events/">

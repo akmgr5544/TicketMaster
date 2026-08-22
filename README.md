@@ -79,6 +79,21 @@ PUT    /api/events/{id}/lineup        # change performers
 POST   /api/events/{id}/cancel        # idempotent; no DELETE exists
 ```
 
+Bookings exposes the checkout, with every action scoped to the caller the gateway resolved:
+
+```
+POST   /api/tickets/reserve             # hold seats for 5 minutes
+POST   /api/bookings                    # 201 + { id }
+GET    /api/bookings/{id}               # the caller's own; somebody else's is a 404
+GET    /api/bookings?page=&pageSize=    # the caller's own, newest first
+POST   /api/bookings/{id}/cancel        # 204; a paid booking is refused with 400
+```
+
+No request body carries a user id. Identity comes from the gateway's `X-Identity-UserId` header and
+an action answers 401 without it, so a caller cannot book as somebody else by editing the body. A
+booking belonging to another user answers exactly as a nonexistent one does — telling them apart
+would confirm the id exists to someone with no business knowing.
+
 Each event mutation has a different downstream consequence — relocating changes which seats exist,
 rescheduling does not — so they are separate sub-resources rather than one `PUT` that would have to
 infer intent by diffing. And an event is cancelled rather than deleted: tickets exist downstream, so
@@ -188,7 +203,7 @@ independently deployable microservice:
 
 ```
 Tests/
-├── Bookings/   BookingArchitecture, BookingDomain, BookingApplication, BookingIntegration
+├── Bookings/   BookingArchitecture, BookingDomain, BookingApplication, BookingIntegration, BookingApi
 ├── Events/     EventsArchitecture, EventsDomain, EventsApplication, EventsCosmos, EventsApi
 └── Users/      UsersArchitecture
 ```
@@ -232,6 +247,7 @@ dotnet test Tests/Events/EventsArchitecture/EventsArchitecture.csproj
 dotnet test Tests/Bookings/BookingDomain/BookingDomain.csproj
 dotnet test Tests/Bookings/BookingApplication/BookingApplication.csproj
 dotnet test Tests/Bookings/BookingIntegration/BookingIntegration.csproj
+dotnet test Tests/Bookings/BookingApi/BookingApi.csproj
 dotnet test Tests/Bookings/BookingArchitecture/BookingArchitecture.csproj
 dotnet test Tests/Users/UsersArchitecture/UsersArchitecture.csproj
 ```
@@ -309,10 +325,18 @@ Being explicit about what is not finished:
 - **The venue and performer delete guards are best-effort.** Each counts upcoming events before
   deleting, but an event can be created in that window and no transaction can span two logical
   partitions. Events are cancelled rather than deleted, so they have no equivalent guard.
-- **Nothing drives the booking half.** No endpoint creates a booking — `TicketsController` exposes
-  ticket creation and reservation only — and nothing publishes a payment request, so the seam Bookings
-  consumes has no producer. Until a payment service publishes, a booking stays `Booked` forever and its
-  seats are never released. Bookings has no outbound publishing at all today; it is purely a consumer.
+- **Nothing pays for a booking.** The endpoints exist and a booking can be made and cancelled, but
+  nothing publishes a payment request and no payment service consumes one, so a booking stays `Booked`
+  indefinitely and its seats are never released unless the owner cancels it. Bookings has no outbound
+  publishing at all today; it is purely a consumer.
+- **The gateway cannot populate `X-Identity-UserId` yet.** Bookings reads it and refuses without it,
+  but `AuthTransformProvider` appends rather than replaces, `api/users/auth` does not exist in
+  Users.Api, and every cluster address is empty. Calling Bookings directly means setting the header by
+  hand.
+- **`Booking` has no timestamp.** The list endpoint orders by key descending as a proxy for "newest
+  first" and no response can say when a booking was made. Adding `CreatedAt` needs a migration. The
+  list also returns a bare array, so "is there more?" is inferred from receiving a full page.
+- **`UserId` is a `string` in Bookings and a `long` in Users.** Aligning them means a migration.
 - **A relocation can still strand a paid booking.** Cancelling tickets for seats the new venue lacks
   includes already-booked ones, leaving the parent `Booking` pointing at cancelled tickets. Unpaid
   bookings can now be cancelled and their seats released, but `Booking.Cancel()` deliberately refuses a
@@ -332,10 +356,14 @@ Being explicit about what is not finished:
   and the `"UsersService"` client's `BaseAddress` is unset. Fill both in before running the gateway.
 - **`compose.yaml` is stale** — service paths such as `BookingApi/Dockerfile` no longer match the
   project layout. Only the `cosmos` service is currently usable.
-- **Exception-to-status mapping exists in Events only.** Bookings and Users still surface unhandled
-  failures as bare 500s.
+- **Users still surfaces unhandled failures as bare 500s.** Events and Bookings both map exceptions
+  to status codes at the edge; Users, which uses `Result<T>` rather than exceptions, has no equivalent
+  translation for what escapes it.
 - **`Bookings.Sql` still exposes `IMongoAssemblyMarker`**, a leftover name from before it was
   Postgres. Harmless, but confusing.
+- **`Bookings`' `NamingConventionTest` asserted nothing** until now — it built an ArchUnit rule and
+  never called `Check(Architecture)`, so it passed unconditionally. Fixed. The Events copy has the same
+  latent trap with generic handler names and passes only because Events has no generic handlers.
 
 ## 🗺️ Roadmap
 
@@ -351,5 +379,5 @@ Being explicit about what is not finished:
 - Integration tests against the Cosmos emulator for Events, as Bookings now has against SQLite
 - Colocating the four legacy Bookings handlers with their commands, so the architecture suite is green
 - Saga / process-manager work for the full booking flow in Wolverine
-- Exception-to-status mapping in Bookings and Users, as Events now has
+- Exception-to-status mapping in Users, as Events and Bookings now have
 - A working `compose.yaml` covering every service

@@ -198,6 +198,44 @@ there, not here.
     override is a deadlock waiting for the right synchronization context. Bookings dispatches on
     async saves only, and the sync override throws rather than silently dropping the event.
 
+## The HTTP surface
+
+```
+POST   /api/tickets                     create a ticket (needs IEventsService, still a stub)
+POST   /api/tickets/reserve             hold seats, 5 minute TTL
+
+POST   /api/bookings                    201 + { id }
+GET    /api/bookings/{id}               the caller's own
+GET    /api/bookings?page=&pageSize=    the caller's own, newest first
+POST   /api/bookings/{id}/cancel        204; refuses a paid booking with 400
+```
+
+27. **Identity comes from `X-Identity-UserId` and nowhere else.** `BaseController.TryGetUserId`
+    reads it and the action answers 401 when it is absent — never a default, never the body. The
+    request records in `Bookings.Api/Requests` deliberately carry no user id, so model binding cannot
+    let a caller act as somebody else. `ReserveTicketCommand` and `MakeBookingCommand` still have a
+    `UserId`, but the controller supplies it.
+28. **A read scoped by caller *is* the authorization check.** `FindForUserAsync` and
+    `ListForUserAsync` put the user in the query, so somebody else's booking is indistinguishable from
+    one that does not exist. Do not "improve" this into a 403 — that confirms the id exists to someone
+    with no business knowing.
+29. **Endpoints dispatch and map.** They take `ISender`, not `IMediator`. `TicketsController` used to
+    take `IMediator`; it no longer does.
+30. **Exceptions map at the edge, in most-derived-first order.** `Bookings.Api/Handlers/BookingsExceptionHandler`
+    maps `NotFoundException` (404), `BookingsApplicationException` (409) and `BookingsDomainException`
+    (400), and returns `false` for anything else so a genuine bug stays a 500. `NotFoundException`
+    derives from `BookingsApplicationException`, so reordering the switch fails the build with CS8510
+    rather than quietly turning 404s into 409s. Covered by `Tests/Bookings/BookingApi`.
+
+| Failure | Type | Status |
+|---|---|---|
+| Malformed request; an aggregate refused the change | `BookingsDomainException` (Domain) | 400 |
+| Asked for something that is not there | `NotFoundException` | 404 |
+| Well-formed, but the world says no | `BookingsApplicationException` | 409 |
+
+`BookingException` is gone — it was one type for all three meanings, and nothing mapped it, so every
+refused booking answered 500.
+
 ## Settling a booking
 
 The payment service is not built. What exists here is the seam it publishes into: two contracts in
@@ -251,9 +289,10 @@ known list rather than the complete one.
 - `IAggregateRoot` is an empty marker that nothing enforces.
 
 **Incomplete:**
-- No endpoint creates a booking. `TicketsController` exposes ticket creation and reservation only, so
-  `MakeBookingCommand` is unreachable over HTTP and the booking half of the flow is exercised only by
-  tests. Adding one means deciding where `UserId` comes from — see the gateway header note below.
+- `NamingConventionTest` asserted nothing until now — it built an ArchUnit rule and never called
+  `Check(Architecture)`. Fixed, and it matches by pattern rather than suffix because reflected names
+  carry the generic arity suffix (`IdentifiedCommandHandler` reports as ``IdentifiedCommandHandler`2``).
+  The Events copy has the same latent trap and passes only because Events has no generic handlers.
 - Nothing publishes the payment contracts. Until a payment service does, a booking stays `Booked`
   forever and its seats are never released (see **Settling a booking**).
 - A command that queues after-commit work cannot be sent from a Wolverine message handler: the
@@ -263,9 +302,17 @@ known list rather than the complete one.
   idempotency mechanism is inert.
 - `EventsService.GetEventByIdAsync` throws `NotImplementedException`, which makes
   `CreateTicketCommand` unusable regardless of its transaction marker.
-- `BaseController.UserId` is an unused `protected long`; nothing reads the gateway's
-  `X-Identity-UserId` header, so no request is attributed to a real user — `ReserveTicketCommand` and
-  `MakeBookingCommand` both take `UserId` from the request body.
+- `Booking` has no timestamp of any kind, so the list endpoint orders by key descending as a proxy
+  for "newest first" and no response can report when a booking was made. Adding `CreatedAt` needs a
+  migration.
+- The list endpoint returns a bare array, so a caller infers "there may be more" from receiving a full
+  page. No total count and no cursor.
+- The gateway cannot actually populate `X-Identity-UserId` yet: its `AuthTransformProvider` appends
+  rather than replaces, `api/users/auth` does not exist in Users.Api, and every cluster address is
+  empty. Bookings reads the header correctly; nothing upstream sets it correctly. Calling Bookings
+  directly means supplying the header by hand.
+- `UserId` is a `string` throughout Bookings while `Users.Api` keys users by `long`. Aligning them
+  means a migration on `Bookings.UserId`.
 - Repositories use `AddAsync`/`AddRangeAsync` (`efcore` rule 1) and each expose their own
   `SaveChangesAsync`, so `IUnitOfWork` is implemented twice over one context.
 - `CacheService` uses Newtonsoft.Json while the rest of the stack is on System.Text.Json.

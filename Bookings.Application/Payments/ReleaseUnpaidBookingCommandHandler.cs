@@ -23,7 +23,7 @@ internal sealed class ReleaseUnpaidBookingCommandHandler : IRequestHandler<Relea
         var booking = await _bookings.GetByIdAsync(request.BookingId, cancellationToken);
 
         if (booking is null)
-            throw new BookingException($"Booking {request.BookingId} was not found");
+            throw new NotFoundException("Booking", request.BookingId.ToString());
 
         booking.Cancel();
         await _bookings.SaveChangesAsync(cancellationToken);

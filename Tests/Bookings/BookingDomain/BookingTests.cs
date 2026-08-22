@@ -1,6 +1,7 @@
 using Bookings.Domain.DomainEvents;
 using Bookings.Domain.Entities;
 using Bookings.Domain.Enums;
+using Bookings.Domain.Exceptions;
 
 namespace BookingDomain;
 
@@ -58,7 +59,7 @@ public class BookingTests
     [Fact]
     public void Refuses_to_be_created_without_tickets()
     {
-        Assert.Throws<InvalidOperationException>(() =>
+        Assert.Throws<BookingsDomainException>(() =>
             Booking.Create("user-1", BookingStatus.Booked, []));
     }
 
@@ -160,7 +161,7 @@ public class BookingTests
         var booking = ABooking();
         booking.MarkPaid();
 
-        Assert.Throws<InvalidOperationException>(() => booking.Cancel());
+        Assert.Throws<BookingsDomainException>(() => booking.Cancel());
         Assert.Equal(BookingStatus.Payed, booking.Status);
     }
 
@@ -170,7 +171,7 @@ public class BookingTests
         var booking = ABooking();
         booking.Cancel();
 
-        Assert.Throws<InvalidOperationException>(() => booking.MarkPaid());
+        Assert.Throws<BookingsDomainException>(() => booking.MarkPaid());
         Assert.Equal(BookingStatus.Cancelled, booking.Status);
     }
 }

@@ -1,10 +1,12 @@
 using Bookings.Domain.Abstractions;
-using Bookings.Domain.Enums;
 using MediatR;
 
 namespace Bookings.Application.Commands;
 
+/// <summary>
+/// Returns the id of the booking it created, so the endpoint can answer 201 with a location the
+/// caller can read back.
+/// </summary>
 public record MakeBookingCommand(string UserId,
     string EventId,
-    BookingStatus Status,
-    long[] Tickets) : IRequest, ITransactionalRequest;
+    long[] Tickets) : IRequest<long>, ITransactionalRequest;

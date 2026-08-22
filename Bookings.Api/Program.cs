@@ -1,8 +1,13 @@
+using Bookings.Api.Handlers;
 using Bookings.Application.Extensions;
 using Bookings.Sql.Extensions;
 
 var builder = WebApplication.CreateBuilder(args);
 var configuration = builder.Configuration;
+
+// Handlers break the flow by throwing; this maps those throws to status codes.
+builder.Services.AddProblemDetails();
+builder.Services.AddExceptionHandler<BookingsExceptionHandler>();
 
 builder.Services.AddInfrastructureServices(configuration);
 builder.Services.AddApplicationServices(configuration);
@@ -16,6 +21,8 @@ builder.Services.AddOpenApi();
 builder.Host.ConfigureRabbitMq(configuration);
 
 var app = builder.Build();
+
+app.UseExceptionHandler();
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())

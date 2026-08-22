@@ -2,6 +2,7 @@ using Bookings.Application.Commands;
 using Bookings.Application.Exceptions;
 using Bookings.Application.Services.Interfaces;
 using Bookings.Domain.Entities;
+using Bookings.Domain.Exceptions;
 using Bookings.Domain.Repositories;
 using MediatR;
 
@@ -22,13 +23,13 @@ internal class CreateTicketCommandHandler : IRequestHandler<CreateTicketCommand>
         var @event = await _eventsService.GetEventByIdAsync(request.EventId, cancellationToken);
         
         if (@event == null)
-            throw new BookingException("Event not found");
+            throw new NotFoundException("Event", request.EventId);
 
         if (@event.Venue.Id != request.VenueId)
-            throw new BookingException("Wrong venue");
+            throw new BookingsDomainException("Wrong venue");
         
         if(!@event.Venue.Seats.Contains(request.Seat))
-            throw new BookingException("Wrong seat");
+            throw new BookingsDomainException("Wrong seat");
         
         var ticket = new Ticket(request.Seat,
             request.VenueId,

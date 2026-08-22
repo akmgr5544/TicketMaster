@@ -3,6 +3,7 @@ using Bookings.Application.Dtos;
 using Bookings.Application.Exceptions;
 using Bookings.Application.Locking;
 using Bookings.Application.Services.Interfaces;
+using Bookings.Domain.Exceptions;
 using Bookings.Domain.Repositories;
 using Medallion.Threading;
 using MediatR;
@@ -50,23 +51,23 @@ internal class ReserveTicketCommandHandler : IRequestHandler<ReserveTicketComman
         var ticketIds = request.Tickets;
 
         if (ticketIds.Length == 0)
-            throw new BookingException("Select tickets to book");
+            throw new BookingsDomainException("Select tickets to book");
 
         if (ticketIds.Length > TicketCountConfig)
-            throw new BookingException("Too many tickets");
+            throw new BookingsDomainException("Too many tickets");
 
         // Rejected rather than deduplicated: the locks are not reentrant, so a repeated id would have
         // this request waiting on a lock it already holds and then reporting that somebody else has
         // the ticket. A request asking twice for one seat is a caller bug worth surfacing.
         if (ticketIds.Distinct().Count() != ticketIds.Length)
-            throw new BookingException("The same ticket was selected more than once");
+            throw new BookingsDomainException("The same ticket was selected more than once");
 
         var ticketLocks = await _lockProvider.TryAcquireTicketLocksAsync(ticketIds,
             LockWaitTimeout,
             cancellationToken);
 
         if (ticketLocks is null)
-            throw new BookingException("Tickets reservation is in progress");
+            throw new BookingsApplicationException("Tickets reservation is in progress");
 
         await using (ticketLocks)
         {
@@ -76,7 +77,7 @@ internal class ReserveTicketCommandHandler : IRequestHandler<ReserveTicketComman
             var reservedTickets = await _cacheService.GetByKeysAsync<ReserveTicketDto>(keys);
 
             if (reservedTickets.Count > 0)
-                throw new BookingException("One of the tickets already reserved");
+                throw new BookingsApplicationException("One of the tickets already reserved");
 
             // Only meaningful once the check above has passed: a seat nobody holds a reservation for
             // cannot be part of a booking in flight, because booking requires a reservation. So its
@@ -104,16 +105,16 @@ internal class ReserveTicketCommandHandler : IRequestHandler<ReserveTicketComman
         var tickets = await _ticketsRepository.GetTicketsForReservationAsync([..ticketIds], cancellationToken);
 
         if (tickets.Length != ticketIds.Length)
-            throw new BookingException("Some of the selected tickets do not exist");
+            throw new NotFoundException("Some of the selected tickets do not exist");
 
         // Separated from availability because it means the caller asked the wrong question, rather
         // than the seat having been taken.
         if (tickets.Any(ticket => ticket.EventId != eventId))
-            throw new BookingException("Some of the selected tickets belong to another event");
+            throw new BookingsDomainException("Some of the selected tickets belong to another event");
 
         // Covers sold and paid-for seats, seats cancelled because the event was called off, and seats
         // for an event that has already come and gone.
         if (tickets.Any(ticket => !ticket.IsAvailableFor(eventId, DateTime.UtcNow)))
-            throw new BookingException("Some of the selected tickets are no longer available");
+            throw new BookingsApplicationException("Some of the selected tickets are no longer available");
     }
 }

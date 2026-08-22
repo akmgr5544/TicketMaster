@@ -4,6 +4,7 @@ using Bookings.Application.Dtos;
 using Bookings.Application.Exceptions;
 using Bookings.Application.Locking;
 using Bookings.Domain.Entities;
+using Bookings.Domain.Exceptions;
 using BookingApplication.Fakes;
 
 namespace BookingApplication;
@@ -82,7 +83,7 @@ public class ReserveTicketCommandHandlerTests
     {
         _cache.Seed(ReservationKeys.Reservation(7), new ReserveTicketDto(7, EventId, "other-user"));
 
-        await Assert.ThrowsAsync<BookingException>(() => Reserve(7));
+        await Assert.ThrowsAsync<BookingsApplicationException>(() => Reserve(7));
     }
 
     /// <summary>
@@ -94,7 +95,7 @@ public class ReserveTicketCommandHandlerTests
     {
         _cache.Seed(ReservationKeys.Reservation(9), new ReserveTicketDto(9, EventId, "other-user"));
 
-        await Assert.ThrowsAsync<BookingException>(() => Reserve(7, 9));
+        await Assert.ThrowsAsync<BookingsApplicationException>(() => Reserve(7, 9));
 
         Assert.Equal([ReservationKeys.Reservation(9)], _cache.Keys);
     }
@@ -104,7 +105,7 @@ public class ReserveTicketCommandHandlerTests
     {
         _locks.HoldElsewhere(ReservationKeys.Lock(7));
 
-        await Assert.ThrowsAsync<BookingException>(() => Reserve(7));
+        await Assert.ThrowsAsync<BookingsApplicationException>(() => Reserve(7));
         Assert.Empty(_cache.Keys);
     }
 
@@ -150,7 +151,7 @@ public class ReserveTicketCommandHandlerTests
     {
         _locks.HoldElsewhere(ReservationKeys.Lock(9));
 
-        await Assert.ThrowsAsync<BookingException>(() => Reserve(7, 9));
+        await Assert.ThrowsAsync<BookingsApplicationException>(() => Reserve(7, 9));
 
         Assert.Equal([ReservationKeys.Lock(7)], _locks.Released);
     }
@@ -160,7 +161,7 @@ public class ReserveTicketCommandHandlerTests
     {
         _cache.Seed(ReservationKeys.Reservation(9), new ReserveTicketDto(9, EventId, "other-user"));
 
-        await Assert.ThrowsAsync<BookingException>(() => Reserve(7, 9));
+        await Assert.ThrowsAsync<BookingsApplicationException>(() => Reserve(7, 9));
 
         Assert.Equal(
             [ReservationKeys.Lock(7), ReservationKeys.Lock(9)],
@@ -172,13 +173,13 @@ public class ReserveTicketCommandHandlerTests
     [Fact]
     public async Task Refuses_a_request_with_no_tickets()
     {
-        await Assert.ThrowsAsync<BookingException>(() => Reserve());
+        await Assert.ThrowsAsync<BookingsDomainException>(() => Reserve());
     }
 
     [Fact]
     public async Task Refuses_more_tickets_than_allowed()
     {
-        await Assert.ThrowsAsync<BookingException>(() => Reserve(7, 9, 11));
+        await Assert.ThrowsAsync<BookingsDomainException>(() => Reserve(7, 9, 11));
     }
 
     /// <summary>
@@ -188,7 +189,7 @@ public class ReserveTicketCommandHandlerTests
     [Fact]
     public async Task Refuses_the_same_ticket_twice()
     {
-        await Assert.ThrowsAsync<BookingException>(() => Reserve(7, 7));
+        await Assert.ThrowsAsync<BookingsDomainException>(() => Reserve(7, 7));
         Assert.Empty(_locks.Acquired);
     }
 
@@ -201,14 +202,14 @@ public class ReserveTicketCommandHandlerTests
     [Fact]
     public async Task Refuses_a_ticket_that_does_not_exist()
     {
-        await Assert.ThrowsAsync<BookingException>(() => Reserve(404));
+        await Assert.ThrowsAsync<NotFoundException>(() => Reserve(404));
         Assert.Empty(_cache.Keys);
     }
 
     [Fact]
     public async Task Refuses_when_only_some_of_the_tickets_exist()
     {
-        await Assert.ThrowsAsync<BookingException>(() => Reserve(7, 404));
+        await Assert.ThrowsAsync<NotFoundException>(() => Reserve(7, 404));
         Assert.Empty(_cache.Keys);
     }
 
@@ -217,7 +218,7 @@ public class ReserveTicketCommandHandlerTests
     {
         _tickets.Seed(ATicket(21, "B1", eventId: "event-2"));
 
-        await Assert.ThrowsAsync<BookingException>(() => Reserve(21));
+        await Assert.ThrowsAsync<BookingsDomainException>(() => Reserve(21));
         Assert.Empty(_cache.Keys);
     }
 
@@ -230,7 +231,7 @@ public class ReserveTicketCommandHandlerTests
     {
         Ticket(7).Book();
 
-        await Assert.ThrowsAsync<BookingException>(() => Reserve(7));
+        await Assert.ThrowsAsync<BookingsApplicationException>(() => Reserve(7));
         Assert.Empty(_cache.Keys);
     }
 
@@ -239,7 +240,7 @@ public class ReserveTicketCommandHandlerTests
     {
         Ticket(7).Cancel(eventVersion: 2);
 
-        await Assert.ThrowsAsync<BookingException>(() => Reserve(7));
+        await Assert.ThrowsAsync<BookingsApplicationException>(() => Reserve(7));
         Assert.Empty(_cache.Keys);
     }
 
@@ -263,7 +264,7 @@ public class ReserveTicketCommandHandlerTests
     {
         Ticket(9).Book();
 
-        await Assert.ThrowsAsync<BookingException>(() => Reserve(7, 9));
+        await Assert.ThrowsAsync<BookingsApplicationException>(() => Reserve(7, 9));
 
         Assert.Empty(_cache.Keys);
     }
@@ -273,7 +274,7 @@ public class ReserveTicketCommandHandlerTests
     {
         Ticket(9).Book();
 
-        await Assert.ThrowsAsync<BookingException>(() => Reserve(7, 9));
+        await Assert.ThrowsAsync<BookingsApplicationException>(() => Reserve(7, 9));
 
         Assert.Equal(
             [ReservationKeys.Lock(7), ReservationKeys.Lock(9)],

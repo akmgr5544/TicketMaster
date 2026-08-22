@@ -1,5 +1,6 @@
 using Bookings.Domain.Abstractions;
 using Bookings.Domain.Enums;
+using Bookings.Domain.Exceptions;
 
 namespace Bookings.Domain.Entities;
 
@@ -86,7 +87,7 @@ public sealed class Ticket : Entity, IAggregateRoot
     public void Book()
     {
         if (Status != TicketStatus.None)
-            throw new InvalidOperationException(
+            throw new BookingsDomainException(
                 $"Ticket {Id} cannot be booked because it is already {Status}.");
 
         Status = TicketStatus.Booked;

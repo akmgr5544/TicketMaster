@@ -5,13 +5,14 @@ using Bookings.Application.Locking;
 using Bookings.Application.Services.Interfaces;
 using Bookings.Domain.Abstractions;
 using Bookings.Domain.Entities;
+using Bookings.Domain.Exceptions;
 using Bookings.Domain.Enums;
 using Bookings.Domain.Repositories;
 using MediatR;
 
 namespace Bookings.Application.CommandHandlers;
 
-internal class MakeBookingCommandHandler : IRequestHandler<MakeBookingCommand>
+internal class MakeBookingCommandHandler : IRequestHandler<MakeBookingCommand, long>
 {
     private readonly IBookingRepository _bookingRepository;
     private readonly ITicketsRepository _ticketsRepository;
@@ -30,7 +31,7 @@ internal class MakeBookingCommandHandler : IRequestHandler<MakeBookingCommand>
         _afterCommit = afterCommit;
     }
 
-    public async Task Handle(MakeBookingCommand request, CancellationToken cancellationToken)
+    public async Task<long> Handle(MakeBookingCommand request, CancellationToken cancellationToken)
     {
         var ticketIds = await GetValidTicketIdsAsync(request.Tickets,
             request.EventId,
@@ -50,6 +51,9 @@ internal class MakeBookingCommandHandler : IRequestHandler<MakeBookingCommand>
         // this point the user keeps the reservation they still hold and can try again.
         var reservationKeys = ticketIds.Select(ReservationKeys.Reservation).ToArray();
         _afterCommit.Enqueue(_ => _cacheService.RemoveAsync(reservationKeys));
+
+        // Populated by the database during the save above.
+        return booking.Id;
     }
 
     private async Task<long[]> GetValidTicketIdsAsync(long[] ticketIds,
@@ -58,10 +62,10 @@ internal class MakeBookingCommandHandler : IRequestHandler<MakeBookingCommand>
         CancellationToken cancellationToken)
     {
         if (ticketIds.Length == 0)
-            throw new BookingException("Select tickets to book");
+            throw new BookingsDomainException("Select tickets to book");
 
         if (ticketIds.Length > TicketCountConfig)
-            throw new BookingException("Too many tickets");
+            throw new BookingsDomainException("Too many tickets");
 
         var keys = ticketIds.Select(ReservationKeys.Reservation).ToArray();
         var reservedTickets = await _cacheService.GetByKeysAsync<ReserveTicketDto>(keys);
@@ -69,16 +73,16 @@ internal class MakeBookingCommandHandler : IRequestHandler<MakeBookingCommand>
         // Every ticket has to still be reserved, not merely one of them. A reservation that has partly
         // expired is not something to book the remainder of.
         if (reservedTickets.Count != ticketIds.Length)
-            throw new BookingException("No reserved tickets found");
+            throw new BookingsApplicationException("No reserved tickets found");
 
         if (reservedTickets.Any(x => !ticketIds.Contains(x.TicketId)))
-            throw new BookingException("Some of the tickets don't reserved");
+            throw new BookingsApplicationException("Some of the tickets are not reserved");
 
         if (reservedTickets.Any(x => x.EventId != eventId))
-            throw new BookingException("Wrong event");
+            throw new BookingsDomainException("Wrong event");
 
         if (reservedTickets.Any(x => x.UserId != userId))
-            throw new BookingException("Wrong user");
+            throw new BookingsApplicationException("Those tickets are reserved by somebody else");
 
         var tickets = await _ticketsRepository.GetTicketsForBookingAsync([..ticketIds],
             eventId,
@@ -87,7 +91,7 @@ internal class MakeBookingCommandHandler : IRequestHandler<MakeBookingCommand>
         // Every requested ticket has to be bookable, not just some of them. Returning the subset
         // would create a booking for fewer seats than the user reserved and asked for.
         if (tickets.Length != ticketIds.Length)
-            throw new BookingException("Some of the tickets are no longer available");
+            throw new BookingsApplicationException("Some of the tickets are no longer available");
 
         return tickets.Select(ticket => ticket.Id).ToArray();
     }

@@ -28,7 +28,7 @@ public class BookingCancelledDomainEventHandler : INotificationHandler<BookingCa
         var tickets = await _ticketsRepository.GetTicketsByIdAsync([..notification.TicketIds], cancellationToken);
 
         if (tickets.Length != notification.TicketIds.Length)
-            throw new BookingException("Some of the cancelled booking's tickets no longer exist");
+            throw new BookingsApplicationException("Some of the cancelled booking's tickets no longer exist");
 
         foreach (var ticket in tickets)
         {

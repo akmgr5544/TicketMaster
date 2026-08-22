@@ -5,6 +5,7 @@ using Bookings.Application.Exceptions;
 using Bookings.Application.Locking;
 using Bookings.Domain.DomainEvents;
 using Bookings.Domain.Entities;
+using Bookings.Domain.Exceptions;
 using Bookings.Domain.Enums;
 using BookingApplication.Fakes;
 
@@ -37,10 +38,9 @@ public class MakeBookingCommandHandlerTests
     private void Reserved(long ticketId, string userId = UserId, string eventId = EventId) =>
         _cache.Seed(ReservationKeys.Reservation(ticketId), new ReserveTicketDto(ticketId, eventId, userId));
 
-    private Task Book(params long[] ticketIds) =>
+    private Task<long> Book(params long[] ticketIds) =>
         new MakeBookingCommandHandler(_bookings, _tickets, _cache, _afterCommit)
-            .Handle(new MakeBookingCommand(UserId, EventId, BookingStatus.Booked, ticketIds),
-                CancellationToken.None);
+            .Handle(new MakeBookingCommand(UserId, EventId, ticketIds), CancellationToken.None);
 
     [Fact]
     public async Task Creates_a_booking_for_the_reserved_tickets()
@@ -84,7 +84,7 @@ public class MakeBookingCommandHandlerTests
         _tickets.Seed(ATicket(7, "A1"));
         _cache.Seed("7", new ReserveTicketDto(7, EventId, UserId));
 
-        await Assert.ThrowsAsync<BookingException>(() => Book(7));
+        await Assert.ThrowsAsync<BookingsApplicationException>(() => Book(7));
     }
 
     [Fact]
@@ -93,7 +93,7 @@ public class MakeBookingCommandHandlerTests
         _tickets.Seed(ATicket(7, "A1"), ATicket(9, "A2"));
         Reserved(7);
 
-        await Assert.ThrowsAsync<BookingException>(() => Book(7, 9));
+        await Assert.ThrowsAsync<BookingsApplicationException>(() => Book(7, 9));
         Assert.Empty(_bookings.Bookings);
     }
 
@@ -104,7 +104,7 @@ public class MakeBookingCommandHandlerTests
         Reserved(7);
         Reserved(9);
 
-        await Assert.ThrowsAsync<BookingException>(() => Book(7, 9));
+        await Assert.ThrowsAsync<BookingsApplicationException>(() => Book(7, 9));
         Assert.Empty(_bookings.Bookings);
     }
 
@@ -114,7 +114,7 @@ public class MakeBookingCommandHandlerTests
         _tickets.Seed(ATicket(7, "A1"));
         Reserved(7, userId: "other-user");
 
-        await Assert.ThrowsAsync<BookingException>(() => Book(7));
+        await Assert.ThrowsAsync<BookingsApplicationException>(() => Book(7));
     }
 
     [Fact]
@@ -123,19 +123,19 @@ public class MakeBookingCommandHandlerTests
         _tickets.Seed(ATicket(7, "A1"));
         Reserved(7, eventId: "event-2");
 
-        await Assert.ThrowsAsync<BookingException>(() => Book(7));
+        await Assert.ThrowsAsync<BookingsDomainException>(() => Book(7));
     }
 
     [Fact]
     public async Task Refuses_more_tickets_than_allowed()
     {
-        await Assert.ThrowsAsync<BookingException>(() => Book(7, 9, 11));
+        await Assert.ThrowsAsync<BookingsDomainException>(() => Book(7, 9, 11));
     }
 
     [Fact]
     public async Task Refuses_a_request_with_no_tickets()
     {
-        await Assert.ThrowsAsync<BookingException>(() => Book());
+        await Assert.ThrowsAsync<BookingsDomainException>(() => Book());
     }
 
     // --- Handing the reservation over ---
@@ -176,7 +176,7 @@ public class MakeBookingCommandHandlerTests
     {
         _tickets.Seed(ATicket(7, "A1"));
 
-        await Assert.ThrowsAsync<BookingException>(() => Book(7));
+        await Assert.ThrowsAsync<BookingsApplicationException>(() => Book(7));
 
         Assert.False(_afterCommit.HasWork);
     }

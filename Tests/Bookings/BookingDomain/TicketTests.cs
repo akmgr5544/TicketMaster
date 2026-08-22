@@ -1,5 +1,6 @@
 using Bookings.Domain.Entities;
 using Bookings.Domain.Enums;
+using Bookings.Domain.Exceptions;
 
 namespace BookingDomain;
 
@@ -159,7 +160,7 @@ public class TicketTests
         var ticket = ATicket(eventVersion: 1);
         ticket.Cancel(eventVersion: 2);
 
-        Assert.Throws<InvalidOperationException>(() => ticket.Book());
+        Assert.Throws<BookingsDomainException>(() => ticket.Book());
         Assert.Equal(TicketStatus.Cancelled, ticket.Status);
     }
 
@@ -173,7 +174,7 @@ public class TicketTests
         var ticket = ATicket();
         ticket.Book();
 
-        Assert.Throws<InvalidOperationException>(() => ticket.Book());
+        Assert.Throws<BookingsDomainException>(() => ticket.Book());
     }
 
     // --- Release ---

@@ -22,7 +22,7 @@ internal sealed class ConfirmBookingPaymentCommandHandler : IRequestHandler<Conf
         var booking = await _bookings.GetByIdAsync(request.BookingId, cancellationToken);
 
         if (booking is null)
-            throw new BookingException($"Booking {request.BookingId} was not found");
+            throw new NotFoundException("Booking", request.BookingId.ToString());
 
         booking.MarkPaid();
         await _bookings.SaveChangesAsync(cancellationToken);

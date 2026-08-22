@@ -53,10 +53,17 @@ public sealed class TransactionBehaviorRegistrationTests : IAsyncLifetime
         return scope.ServiceProvider.GetServices<IPipelineBehavior<TRequest, Unit>>().ToArray();
     }
 
+    private IPipelineBehavior<TRequest, TResponse>[] BehaviorsFor<TRequest, TResponse>()
+        where TRequest : IRequest<TResponse>
+    {
+        using var scope = _provider.CreateScope();
+        return scope.ServiceProvider.GetServices<IPipelineBehavior<TRequest, TResponse>>().ToArray();
+    }
+
     [Fact]
     public void Wraps_a_command_that_writes_to_the_database()
     {
-        Assert.Single(BehaviorsFor<MakeBookingCommand>());
+        Assert.Single(BehaviorsFor<MakeBookingCommand, long>());
     }
 
     [Fact]

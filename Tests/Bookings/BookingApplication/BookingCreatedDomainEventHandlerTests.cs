@@ -2,6 +2,7 @@ using Bookings.Application.DomainEventHandlers;
 using Bookings.Application.Exceptions;
 using Bookings.Domain.DomainEvents;
 using Bookings.Domain.Entities;
+using Bookings.Domain.Exceptions;
 using Bookings.Domain.Enums;
 using BookingApplication.Fakes;
 
@@ -77,7 +78,7 @@ public class BookingCreatedDomainEventHandlerTests
     {
         _tickets.Seed(ATicket(7, "A1"));
 
-        await Assert.ThrowsAsync<BookingException>(() => Handle(7, 9));
+        await Assert.ThrowsAsync<BookingsApplicationException>(() => Handle(7, 9));
     }
 
     /// <summary>
@@ -91,7 +92,7 @@ public class BookingCreatedDomainEventHandlerTests
         cancelled.Cancel(eventVersion: 2);
         _tickets.Seed(cancelled);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => Handle(7));
+        await Assert.ThrowsAsync<BookingsDomainException>(() => Handle(7));
         Assert.Equal(0, _tickets.SaveCount);
     }
 }

@@ -3,6 +3,7 @@ using Bookings.Application.Exceptions;
 using Bookings.Application.Payments;
 using Bookings.Domain.DomainEvents;
 using Bookings.Domain.Entities;
+using Bookings.Domain.Exceptions;
 using Bookings.Domain.Enums;
 using BookingApplication.Fakes;
 
@@ -158,7 +159,7 @@ public class PaymentHandlerTests
         var booking = await ABookingFor(7);
         await Confirm(booking.Id);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => Release(booking.Id));
+        await Assert.ThrowsAsync<BookingsDomainException>(() => Release(booking.Id));
         Assert.Equal(BookingStatus.Payed, booking.Status);
     }
 
@@ -168,7 +169,7 @@ public class PaymentHandlerTests
         var booking = await ABookingFor(7);
         await Release(booking.Id);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => Confirm(booking.Id));
+        await Assert.ThrowsAsync<BookingsDomainException>(() => Confirm(booking.Id));
         Assert.Equal(BookingStatus.Cancelled, booking.Status);
     }
 
@@ -177,12 +178,12 @@ public class PaymentHandlerTests
     [Fact]
     public async Task Refuses_to_confirm_a_booking_that_does_not_exist()
     {
-        await Assert.ThrowsAsync<BookingException>(() => Confirm(404));
+        await Assert.ThrowsAsync<NotFoundException>(() => Confirm(404));
     }
 
     [Fact]
     public async Task Refuses_to_release_a_booking_that_does_not_exist()
     {
-        await Assert.ThrowsAsync<BookingException>(() => Release(404));
+        await Assert.ThrowsAsync<NotFoundException>(() => Release(404));
     }
 }

@@ -1,6 +1,5 @@
 using Bookings.Application.Commands;
 using Bookings.Domain.Entities;
-using Bookings.Domain.Enums;
 using Bookings.Sql;
 using Bookings.Sql.Pipelines;
 using MediatR;
@@ -47,12 +46,12 @@ public sealed class TransactionBehaviorTests : IAsyncLifetime
     }
 
     private static readonly MakeBookingCommand ACommand =
-        new("user-1", "event-1", BookingStatus.Booked, [1L]);
+        new("user-1", "event-1", [1L]);
 
-    private Task<Unit> Run(RequestHandlerDelegate<Unit> handler) =>
-        new TransactionBehavior<MakeBookingCommand, Unit>(_context,
+    private Task<long> Run(RequestHandlerDelegate<long> handler) =>
+        new TransactionBehavior<MakeBookingCommand, long>(_context,
                 _afterCommit,
-                NullLogger<TransactionBehavior<MakeBookingCommand, Unit>>.Instance)
+                NullLogger<TransactionBehavior<MakeBookingCommand, long>>.Instance)
             .Handle(ACommand, handler, CancellationToken.None);
 
     private Task AddATicketAsync()
@@ -68,7 +67,7 @@ public sealed class TransactionBehaviorTests : IAsyncLifetime
         await Run(async _ =>
         {
             await AddATicketAsync();
-            return Unit.Value;
+            return 1L;
         });
 
         _context.ChangeTracker.Clear();
@@ -109,7 +108,7 @@ public sealed class TransactionBehaviorTests : IAsyncLifetime
         await Run(async _ =>
         {
             await AddATicketAsync();
-            return Unit.Value;
+            return 1L;
         });
 
         Assert.NotNull(_context.Database.CurrentTransaction);
@@ -128,7 +127,7 @@ public sealed class TransactionBehaviorTests : IAsyncLifetime
             await Run(async _ =>
             {
                 await AddATicketAsync();
-                return Unit.Value;
+                return 1L;
             });
 
             await outer.RollbackAsync();
@@ -158,7 +157,7 @@ public sealed class TransactionBehaviorTests : IAsyncLifetime
                 transactionWhenItRan.Add(_context.Database.CurrentTransaction is not null);
                 return Task.CompletedTask;
             });
-            return Unit.Value;
+            return 1L;
         });
 
         Assert.Equal([false], transactionWhenItRan);
@@ -193,7 +192,7 @@ public sealed class TransactionBehaviorTests : IAsyncLifetime
         {
             await AddATicketAsync();
             _afterCommit.Enqueue(_ => throw new InvalidOperationException("redis is down"));
-            return Unit.Value;
+            return 1L;
         });
 
         _context.ChangeTracker.Clear();
@@ -235,7 +234,7 @@ public sealed class TransactionBehaviorTests : IAsyncLifetime
                 ran = true;
                 return Task.CompletedTask;
             });
-            return Unit.Value;
+            return 1L;
         });
 
         Assert.False(ran);
@@ -251,7 +250,7 @@ public sealed class TransactionBehaviorTests : IAsyncLifetime
         await Run(async _ =>
         {
             await AddATicketAsync();
-            return Unit.Value;
+            return 1L;
         });
 
         Assert.NotNull(_context.Database.CurrentTransaction);
