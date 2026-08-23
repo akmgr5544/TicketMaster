@@ -44,6 +44,18 @@ internal class TicketsRepository : ITicketsRepository
             .ToArrayAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// Untracked: the caller only reads these to decide whether the seats can be held.
+    /// </summary>
+    public async ValueTask<Ticket[]> GetTicketsForReservationAsync(ImmutableArray<long> ticketIds,
+        CancellationToken cancellationToken)
+    {
+        return await _context.Tickets
+            .AsNoTracking()
+            .Where(x => ticketIds.Contains(x.Id))
+            .ToArrayAsync(cancellationToken);
+    }
+
     public async ValueTask AddTicketAsync(Ticket ticket, CancellationToken cancellationToken)
     {
         await _context.Tickets.AddAsync(ticket, cancellationToken);

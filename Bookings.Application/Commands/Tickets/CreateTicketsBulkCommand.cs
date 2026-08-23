@@ -1,0 +1,10 @@
+using Bookings.Domain.Abstractions;
+using MediatR;
+
+namespace Bookings.Application.Commands.Tickets;
+
+public record CreateTicketsBulkCommand(
+    string EventId,
+    string VenueId,
+    DateTime EventDate,
+    string[] Seats):IRequest, ITransactionalRequest;

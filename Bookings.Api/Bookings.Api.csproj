@@ -1,6 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
     <ItemGroup>
+        <!-- BookingsExceptionHandler is internal; the mapping tests still need to construct it. -->
+        <InternalsVisibleTo Include="BookingApi" />
+    </ItemGroup>
+
+    <ItemGroup>
         <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
     </ItemGroup>
 

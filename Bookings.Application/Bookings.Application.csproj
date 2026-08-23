@@ -9,6 +9,7 @@
       <PackageReference Include="DistributedLock.Redis" />
       <PackageReference Include="MediatR" />
       <PackageReference Include="Microsoft.Extensions.Caching.StackExchangeRedis" />
+      <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
       <PackageReference Include="Newtonsoft.Json" />
       <PackageReference Include="WolverineFx" />
       <PackageReference Include="WolverineFx.EntityFrameworkCore" />
@@ -23,6 +24,7 @@
 
     <ItemGroup>
       <Folder Include="Pipelines\" />
+      <Folder Include="QueryHandlers\" />
     </ItemGroup>
 
 </Project>

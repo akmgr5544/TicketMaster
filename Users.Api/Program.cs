@@ -18,7 +18,7 @@ builder.Services.AddDbContext<UsersDomainContext>(options =>
     options.UseNpgsql(configuration.GetConnectionString("UsersDatabase"));
     //More configurations
 });
-//builder.Services.AddDatabase(configuration);
+builder.Services.AddDatabase(configuration);
 builder.Services.AddBusinessServices(configuration);
 
 var section = configuration.GetSection("AuthConfigs");

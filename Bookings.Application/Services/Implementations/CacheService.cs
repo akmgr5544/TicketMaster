@@ -46,4 +46,9 @@ internal class CacheService : ICacheService
         batch.Execute();
         await Task.WhenAll(tasks);
     }
+
+    public async Task RemoveAsync(string[] keys)
+    {
+        await _cacheDb.KeyDeleteAsync(keys.Select(key => new RedisKey(key)).ToArray());
+    }
 }

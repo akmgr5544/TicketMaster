@@ -4,4 +4,5 @@ public interface ICacheService
 {
     Task<List<T>> GetByKeysAsync<T>(string[] keys);
     Task SetToCacheAsync<T>(KeyValuePair<string, T>[] data, TimeSpan? expiration = null);
+    Task RemoveAsync(string[] keys);
 }

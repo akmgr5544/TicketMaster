@@ -21,12 +21,23 @@ internal sealed class FakeTicketsRepository : ITicketsRepository
     public ValueTask<Ticket[]> GetTicketsByEventAsync(string eventId, CancellationToken cancellationToken) =>
         ValueTask.FromResult(_tickets.Where(t => t.EventId == eventId).ToArray());
 
+    /// <summary>
+    /// Mirrors the real query by going through <c>IsAvailableFor</c> — the same rule the production
+    /// predicate expresses in SQL. A fake that only matched on id would be more permissive than the
+    /// database and would let a test pass on a seat that is actually sold.
+    /// </summary>
     public ValueTask<Ticket[]> GetTicketsForBookingAsync(ImmutableArray<long> ticketIds,
         string eventId,
         CancellationToken cancellationToken) =>
-        ValueTask.FromResult(_tickets.Where(t => ticketIds.Contains(t.Id) && t.EventId == eventId).ToArray());
+        ValueTask.FromResult(_tickets
+            .Where(t => ticketIds.Contains(t.Id) && t.IsAvailableFor(eventId, DateTime.UtcNow))
+            .ToArray());
 
     public ValueTask<Ticket[]> GetTicketsByIdAsync(ImmutableArray<long> ticketIds,
+        CancellationToken cancellationToken) =>
+        ValueTask.FromResult(_tickets.Where(t => ticketIds.Contains(t.Id)).ToArray());
+
+    public ValueTask<Ticket[]> GetTicketsForReservationAsync(ImmutableArray<long> ticketIds,
         CancellationToken cancellationToken) =>
         ValueTask.FromResult(_tickets.Where(t => ticketIds.Contains(t.Id)).ToArray());
 

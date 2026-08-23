@@ -22,7 +22,7 @@ dotnet run --project TicketMaster.ApiGateway/TicketMaster.ApiGateway.csproj
 dotnet test Tests/Bookings/BookingArchitecture/BookingArchitecture.csproj
 dotnet test Tests/Bookings/BookingDomain/BookingDomain.csproj        # Ticket rules, incl. staleness
 dotnet test Tests/Bookings/BookingApplication/BookingApplication.csproj  # EventSync consumers
-dotnet test Tests/Bookings/BookingIntegration/BookingIntegration.csproj
+dotnet test Tests/Bookings/BookingIntegration/BookingIntegration.csproj  # interceptor + transactions, SQLite
 dotnet test Tests/Events/EventsArchitecture/EventsArchitecture.csproj
 dotnet test Tests/Events/EventsDomain/EventsDomain.csproj            # Events domain rules
 dotnet test Tests/Events/EventsApplication/EventsApplication.csproj  # handlers, with fake repositories
@@ -105,20 +105,39 @@ Each project has a marker interface (`IApiAssemblyMarker`, `IApplicationAssembly
 - **Layout**: test projects are grouped by service — `Tests/Bookings/`, `Tests/Events/`, `Tests/Users/` — so that everything belonging to one service can be extracted together when a module is split out into its own deployable. Put new test projects under the folder for the service they test.
 - **Architecture tests** (`Tests/<Service>/*Architecture`) use **ArchUnitNET.xUnit**. Each project has a `BaseTest` that loads the service's assemblies via marker interfaces into a shared `Architecture` instance; concrete tests assert dependencies, naming, visibility, and colocation rules. Adding a new layer/project means updating `BaseTest.cs` to include its assembly.
 - **Unit tests**: `Tests/Events/EventsDomain` covers the Events domain rules; `Tests/Events/EventsCosmos` covers Cosmos document serialization against the real `CosmosJson.Options`, with no emulator needed.
-- **Integration tests**: `Tests/Bookings/BookingIntegration` (currently a scaffold).
-- **Known pre-existing failure**: 4 of the `BookingArchitecture` tests fail on a clean tree.
-  `ColocationTest` requires a handler to live in the same namespace as its command, and the four
-  handlers in `Bookings.Application/CommandHandlers` predate that rule. New Bookings slices —
-  `Bookings.Application/EventSync` — colocate command and handler and do pass. Don't read those 4
-  failures as damage from your change; check the failing type names first.
+- **Integration tests**: `Tests/Bookings/BookingIntegration` runs the real `BookingDomainContext`,
+  domain event interceptor and transaction behavior against SQLite in-memory (`Microsoft.EntityFrameworkCore.Sqlite`,
+  a test-only package). It exists for the questions fakes cannot answer — whether EF tolerates the
+  nested `SaveChangesAsync` that domain event dispatch performs, and whether dependency injection
+  really skips an open-generic pipeline behavior whose generic constraint does not match. It needs
+  no running database. `Bookings.Sql` carries `InternalsVisibleTo("BookingIntegration")` so the tests
+  can construct the internal context and repositories.
+- **The whole test suite is green**, including `BookingArchitecture`. There are no expected failures
+  to look past any more, so a red test means something actually broke. `ColocationTest` used to fail by
+  design and is gone: Bookings organises `Bookings.Application` by type first — `Commands/` and
+  `CommandHandlers/<Area>/` — so a handler is never in its command's namespace. `LayoutTest` guards
+  that arrangement instead.
 - Handlers are `internal` by architecture rule, so a test project that constructs them needs an
   `InternalsVisibleTo` entry in the production `.csproj` (see `Bookings.Application.csproj`,
   `Events.Application.csproj`).
 - Test-only package versions live in `Tests/Directory.Packages.props` (xUnit, Microsoft.NET.Test.Sdk, ArchUnitNET, coverlet). It imports the root `Directory.Packages.props` first, so all versions stay centrally managed.
+
+## Comments
+
+Comment the non-obvious and nothing else. Explain a decision a reader would otherwise undo — why a
+value is what it is, why an order matters, why a case is handled that way. Do not write an XML summary
+for a record, DTO, marker interface, constructor, or handler whose name and body already say it, and
+prefer one line at the point of confusion over a paragraph above the type.
 
 ## Conventions worth knowing
 
 - Solution uses `.slnx` (XML) — some older tooling may not read it; prefer commands that take project paths directly.
 - `csharp_style_var_*` in `.editorconfig` prefers `var` everywhere; indent is 4 spaces.
 - Files with `.DS_Store` are already present throughout the tree — leave them alone in diffs.
+- **Don't reorganise folders.** The layout is deliberate; add files to the structure that is there
+  rather than restructuring around them. `Bookings.Application` is organised by type then area — see
+  the `bookings-service` skill for the layout.
+- **A namespace mirrors its folder.** Rider's *namespace does not correspond to file location*
+  inspection enforces this and silently restores it, so don't hand-maintain a namespace that differs
+  from its path — it will be reverted under you.
 - The `Users.Api.csproj` exposes `InternalsVisibleTo("ArchitectureTests")` — internal types are intentionally visible to arch tests.
