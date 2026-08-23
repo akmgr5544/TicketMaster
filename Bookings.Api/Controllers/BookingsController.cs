@@ -5,6 +5,7 @@ using Bookings.Application.Dtos;
 using Bookings.Application.Queries;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+using Bookings.Application.Commands.Bookings;
 
 namespace Bookings.Api.Controllers;
 

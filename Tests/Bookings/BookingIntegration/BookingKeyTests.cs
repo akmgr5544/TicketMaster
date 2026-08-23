@@ -3,6 +3,7 @@ using Bookings.Domain.Enums;
 using Bookings.Sql;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Bookings.Application.Commands.Bookings;
 
 namespace BookingIntegration;
 

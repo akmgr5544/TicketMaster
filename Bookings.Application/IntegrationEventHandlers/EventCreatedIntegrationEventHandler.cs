@@ -1,6 +1,7 @@
 using Bookings.Application.Commands;
 using MediatR;
 using TicketMaster.Common.IntegrationEvents;
+using Bookings.Application.Commands.Tickets;
 
 namespace Bookings.Application.IntegrationEventHandlers;
 

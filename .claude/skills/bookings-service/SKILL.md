@@ -46,27 +46,34 @@ Organised **by type first, then by area** — not by feature slice. Do not reorg
 feature folders.
 
 ```
-Commands/            MakeBookingCommand, EventSyncCommands, ReserveTicketCommand, …
-Commands/<Area>/         Bookings/  Payments/  Tickets/     — folders group; see the namespace rule
+Commands/                EventSyncCommands.cs        (no area folder)
+Commands/<Area>/         Bookings/  Payments/  Tickets/
 CommandHandlers/<Area>/  Bookings/  EventSync/  Tickets/
-Queries/             CustomerBookingQueries
+Queries/                 CustomerBookingQueries.cs
 QueryHandlers/<Area>/    CustomerBookings/
-Dtos/                BookingDto, ReserveTicketDto, EventsServiceDtos/
-Extensions/          ServiceCollectionExtension, TicketLockExtensions (+ ReservationKeys)
-DomainEventHandlers/ IntegrationEventHandlers/ Services/ Exceptions/ Abstractions/
+Dtos/                    BookingDto, ReserveTicketDto, EventsServiceDtos/
+Extensions/              ServiceCollectionExtension, TicketLockExtensions (+ ReservationKeys)
+DomainEventHandlers/  IntegrationEventHandlers/  Services/  Exceptions/  Abstractions/
 ```
 
-**The namespace rule differs between the two halves, and it is not an accident of the folders:**
+**A namespace always mirrors its folder.** Rider's *namespace does not correspond to file location*
+inspection enforces this and will restore it, so a hand-kept flat namespace erodes file by file
+instead of failing loudly. Follow the folders.
 
-| | Folder | Namespace |
-|---|---|---|
-| Commands | `Commands/<Area>/MakeBookingCommand.cs` | `Bookings.Application.Commands` — flat, the area folder is *not* in it |
-| Queries | `Queries/CustomerBookingQueries.cs` | `Bookings.Application.Queries` |
-| Handlers | `CommandHandlers/<Area>/MakeBookingCommandHandler.cs` | `Bookings.Application.CommandHandlers.<Area>` — the area folder *is* in it |
+| Folder | Namespace |
+|---|---|
+| `Commands/Bookings/MakeBookingCommand.cs` | `Bookings.Application.Commands.Bookings` |
+| `Commands/EventSyncCommands.cs` (no area folder) | `Bookings.Application.Commands` |
+| `CommandHandlers/Bookings/MakeBookingCommandHandler.cs` | `Bookings.Application.CommandHandlers.Bookings` |
+| `Queries/CustomerBookingQueries.cs` | `Bookings.Application.Queries` |
 
-So a handler is never in its command's namespace, and a handler always needs a
-`using Bookings.Application.Commands;`. Several command records may share one file when they belong to
-the same area (`EventSyncCommands.cs`, `PaymentCommands.cs`).
+A handler is therefore never in its command's namespace and always needs a
+`using Bookings.Application.Commands.<Area>;`. Several command records may share one file when they
+belong to the same area (`EventSyncCommands.cs`, `PaymentCommands.cs`).
+
+A folder named for an aggregate is fine despite appearances: `Bookings.Application.Commands.Bookings`
+compiles alongside `using Bookings.Domain.Entities;` without ambiguity, as the handler namespaces
+already demonstrate.
 
 `LayoutTest` enforces both halves: a handler resides under the root its own suffix claims, so a
 `QueryHandler` cannot sit among the command handlers, and every request resides under `Commands` or

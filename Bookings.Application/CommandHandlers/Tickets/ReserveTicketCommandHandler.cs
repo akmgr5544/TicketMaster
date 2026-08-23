@@ -7,6 +7,7 @@ using Bookings.Domain.Exceptions;
 using Bookings.Domain.Repositories;
 using Medallion.Threading;
 using MediatR;
+using Bookings.Application.Commands.Tickets;
 
 namespace Bookings.Application.CommandHandlers.Tickets;
 

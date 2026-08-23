@@ -2,6 +2,7 @@ using Bookings.Application.Commands;
 using Bookings.Domain.Entities;
 using Bookings.Domain.Repositories;
 using MediatR;
+using Bookings.Application.Commands.Tickets;
 
 namespace Bookings.Application.CommandHandlers.Tickets;
 

@@ -3,6 +3,7 @@ using Bookings.Api.Requests;
 using Bookings.Application.Commands;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+using Bookings.Application.Commands.Tickets;
 
 namespace Bookings.Api.Controllers;
 

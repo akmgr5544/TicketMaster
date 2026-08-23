@@ -136,5 +136,8 @@ prefer one line at the point of confusion over a paragraph above the type.
 - Files with `.DS_Store` are already present throughout the tree — leave them alone in diffs.
 - **Don't reorganise folders.** The layout is deliberate; add files to the structure that is there
   rather than restructuring around them. `Bookings.Application` is organised by type then area — see
-  the `bookings-service` skill for the layout and its namespace rule.
+  the `bookings-service` skill for the layout.
+- **A namespace mirrors its folder.** Rider's *namespace does not correspond to file location*
+  inspection enforces this and silently restores it, so don't hand-maintain a namespace that differs
+  from its path — it will be reverted under you.
 - The `Users.Api.csproj` exposes `InternalsVisibleTo("ArchitectureTests")` — internal types are intentionally visible to arch tests.

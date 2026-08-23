@@ -1,6 +1,6 @@
 using MediatR;
 
-namespace Bookings.Application.Commands;
+namespace Bookings.Application.Commands.Tickets;
 
 public record ReserveTicketCommand(
     string UserId,

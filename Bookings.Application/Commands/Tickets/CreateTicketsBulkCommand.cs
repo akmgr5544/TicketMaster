@@ -1,7 +1,7 @@
 using Bookings.Domain.Abstractions;
 using MediatR;
 
-namespace Bookings.Application.Commands;
+namespace Bookings.Application.Commands.Tickets;
 
 public record CreateTicketsBulkCommand(
     string EventId,

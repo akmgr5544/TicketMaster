@@ -9,6 +9,7 @@ using Bookings.Domain.Enums;
 using Bookings.Domain.Exceptions;
 using Bookings.Domain.Repositories;
 using MediatR;
+using Bookings.Application.Commands.Bookings;
 
 namespace Bookings.Application.CommandHandlers.Bookings;
 

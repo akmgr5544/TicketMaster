@@ -6,6 +6,7 @@ using MediatR;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
+using Bookings.Application.Commands.Bookings;
 
 namespace BookingIntegration;
 

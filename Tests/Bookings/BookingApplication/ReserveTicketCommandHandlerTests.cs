@@ -6,6 +6,7 @@ using Bookings.Domain.Exceptions;
 using BookingApplication.Fakes;
 using Bookings.Application.CommandHandlers.Tickets;
 using Bookings.Application.Extensions;
+using Bookings.Application.Commands.Tickets;
 
 namespace BookingApplication;
 
