@@ -1,4 +1,5 @@
 using Bookings.Application.Commands;
+using Bookings.Application.Commands.Payments;
 using MediatR;
 using TicketMaster.Common.IntegrationEvents;
 

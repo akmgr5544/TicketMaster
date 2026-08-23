@@ -1,11 +1,12 @@
 using Bookings.Application.Commands;
+using Bookings.Application.Commands.Payments;
 using Bookings.Application.Exceptions;
 using Bookings.Domain.Repositories;
 using MediatR;
 
 namespace Bookings.Application.CommandHandlers.Bookings;
 
-internal sealed class ConfirmBookingCommandHandler : IRequestHandler<ConfirmBookingPaymentCommand>
+internal sealed class ConfirmBookingCommandHandler : IRequestHandler<ConfirmBookingCommand>
 {
     private readonly IBookingRepository _bookings;
 
@@ -14,7 +15,7 @@ internal sealed class ConfirmBookingCommandHandler : IRequestHandler<ConfirmBook
         _bookings = bookings;
     }
 
-    public async Task Handle(ConfirmBookingPaymentCommand request, CancellationToken cancellationToken)
+    public async Task Handle(ConfirmBookingCommand request, CancellationToken cancellationToken)
     {
         var booking = await _bookings.GetByIdAsync(request.BookingId, cancellationToken);
 

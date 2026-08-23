@@ -1,4 +1,5 @@
 using Bookings.Application.Commands;
+using Bookings.Application.Commands.Payments;
 using MediatR;
 using TicketMaster.Common.IntegrationEvents;
 
@@ -15,6 +16,6 @@ public class BookingPaidIntegrationEventHandler
 
     public async Task Consume(BookingPaidIntegrationEvent request, CancellationToken cancellationToken)
     {
-        await _mediator.Send(new ConfirmBookingPaymentCommand(request.BookingId), cancellationToken);
+        await _mediator.Send(new ConfirmBookingCommand(request.BookingId), cancellationToken);
     }
 }

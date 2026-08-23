@@ -7,6 +7,7 @@ using Bookings.Domain.Enums;
 using BookingApplication.Fakes;
 using Bookings.Application.CommandHandlers.Bookings;
 using Bookings.Application.Commands;
+using Bookings.Application.Commands.Payments;
 
 namespace BookingApplication;
 
@@ -49,7 +50,7 @@ public class PaymentHandlerTests
 
     private Task Confirm(long bookingId) =>
         new ConfirmBookingCommandHandler(_bookings)
-            .Handle(new ConfirmBookingPaymentCommand(bookingId), CancellationToken.None);
+            .Handle(new ConfirmBookingCommand(bookingId), CancellationToken.None);
 
     private Task Release(long bookingId) =>
         new ReleaseUnpaidBookingCommandHandler(_bookings)

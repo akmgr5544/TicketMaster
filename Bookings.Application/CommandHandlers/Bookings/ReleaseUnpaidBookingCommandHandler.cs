@@ -1,4 +1,5 @@
 using Bookings.Application.Commands;
+using Bookings.Application.Commands.Payments;
 using Bookings.Application.Exceptions;
 using Bookings.Domain.Repositories;
 using MediatR;
