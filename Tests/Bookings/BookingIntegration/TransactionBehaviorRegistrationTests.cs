@@ -69,9 +69,9 @@ public sealed class TransactionBehaviorRegistrationTests : IAsyncLifetime
     [Fact]
     public void Wraps_the_commands_that_reconcile_tickets_with_the_catalogue()
     {
-        Assert.Single(BehaviorsFor<Bookings.Application.EventSync.CancelEventTicketsCommand>());
-        Assert.Single(BehaviorsFor<Bookings.Application.EventSync.RescheduleEventTicketsCommand>());
-        Assert.Single(BehaviorsFor<Bookings.Application.EventSync.ReconcileEventVenueCommand>());
+        Assert.Single(BehaviorsFor<CancelEventTicketsCommand>());
+        Assert.Single(BehaviorsFor<RescheduleEventTicketsCommand>());
+        Assert.Single(BehaviorsFor<ReconcileEventVenueCommand>());
     }
 
     /// <summary>

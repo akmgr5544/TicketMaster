@@ -24,6 +24,7 @@
 
     <ItemGroup>
       <Folder Include="Pipelines\" />
+      <Folder Include="QueryHandlers\" />
     </ItemGroup>
 
 </Project>

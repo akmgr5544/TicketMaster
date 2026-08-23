@@ -1,11 +1,12 @@
 using Bookings.Application.DomainEventHandlers;
 using Bookings.Application.Exceptions;
-using Bookings.Application.Payments;
 using Bookings.Domain.DomainEvents;
 using Bookings.Domain.Entities;
 using Bookings.Domain.Exceptions;
 using Bookings.Domain.Enums;
 using BookingApplication.Fakes;
+using Bookings.Application.CommandHandlers.Bookings;
+using Bookings.Application.Commands;
 
 namespace BookingApplication;
 
@@ -47,7 +48,7 @@ public class PaymentHandlerTests
     }
 
     private Task Confirm(long bookingId) =>
-        new ConfirmBookingPaymentCommandHandler(_bookings)
+        new ConfirmBookingCommandHandler(_bookings)
             .Handle(new ConfirmBookingPaymentCommand(bookingId), CancellationToken.None);
 
     private Task Release(long bookingId) =>

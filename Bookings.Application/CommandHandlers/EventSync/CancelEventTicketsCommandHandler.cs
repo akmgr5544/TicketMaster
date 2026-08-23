@@ -1,7 +1,8 @@
+using Bookings.Application.Commands;
 using Bookings.Domain.Repositories;
 using MediatR;
 
-namespace Bookings.Application.EventSync;
+namespace Bookings.Application.CommandHandlers.EventSync;
 
 internal sealed class CancelEventTicketsCommandHandler : IRequestHandler<CancelEventTicketsCommand>
 {
@@ -12,10 +13,6 @@ internal sealed class CancelEventTicketsCommandHandler : IRequestHandler<CancelE
         _tickets = tickets;
     }
 
-    /// <summary>
-    /// Cancels rather than deletes, matching the catalogue: Events keeps the cancelled event document,
-    /// and a booking that pointed at these tickets still needs to be explicable afterwards.
-    /// </summary>
     public async Task Handle(CancelEventTicketsCommand request, CancellationToken cancellationToken)
     {
         var tickets = await _tickets.GetTicketsByEventAsync(request.EventId, cancellationToken);

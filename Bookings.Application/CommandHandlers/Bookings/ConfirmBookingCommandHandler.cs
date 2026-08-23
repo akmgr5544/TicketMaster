@@ -1,22 +1,19 @@
+using Bookings.Application.Commands;
 using Bookings.Application.Exceptions;
 using Bookings.Domain.Repositories;
 using MediatR;
 
-namespace Bookings.Application.Payments;
+namespace Bookings.Application.CommandHandlers.Bookings;
 
-internal sealed class ConfirmBookingPaymentCommandHandler : IRequestHandler<ConfirmBookingPaymentCommand>
+internal sealed class ConfirmBookingCommandHandler : IRequestHandler<ConfirmBookingPaymentCommand>
 {
     private readonly IBookingRepository _bookings;
 
-    public ConfirmBookingPaymentCommandHandler(IBookingRepository bookings)
+    public ConfirmBookingCommandHandler(IBookingRepository bookings)
     {
         _bookings = bookings;
     }
 
-    /// <summary>
-    /// The tickets are left exactly as they are. They were already booked when the booking was made,
-    /// and paying for them does not change which seats are taken — it only settles the booking.
-    /// </summary>
     public async Task Handle(ConfirmBookingPaymentCommand request, CancellationToken cancellationToken)
     {
         var booking = await _bookings.GetByIdAsync(request.BookingId, cancellationToken);

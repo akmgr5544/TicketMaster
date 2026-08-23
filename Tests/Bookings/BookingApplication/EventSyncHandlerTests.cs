@@ -1,7 +1,8 @@
-using Bookings.Application.EventSync;
 using Bookings.Domain.Entities;
 using Bookings.Domain.Enums;
 using BookingApplication.Fakes;
+using Bookings.Application.CommandHandlers.EventSync;
+using Bookings.Application.Commands;
 
 namespace BookingApplication;
 

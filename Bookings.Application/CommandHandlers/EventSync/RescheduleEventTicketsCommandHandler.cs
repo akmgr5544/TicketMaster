@@ -1,7 +1,8 @@
+using Bookings.Application.Commands;
 using Bookings.Domain.Repositories;
 using MediatR;
 
-namespace Bookings.Application.EventSync;
+namespace Bookings.Application.CommandHandlers.EventSync;
 
 internal sealed class RescheduleEventTicketsCommandHandler : IRequestHandler<RescheduleEventTicketsCommand>
 {
@@ -12,10 +13,6 @@ internal sealed class RescheduleEventTicketsCommandHandler : IRequestHandler<Res
         _tickets = tickets;
     }
 
-    /// <summary>
-    /// The tickets come back tracked, so mutating them and saving is enough — no <c>Update</c> call,
-    /// which would rewrite every column instead of just the date and version.
-    /// </summary>
     public async Task Handle(RescheduleEventTicketsCommand request, CancellationToken cancellationToken)
     {
         var tickets = await _tickets.GetTicketsByEventAsync(request.EventId, cancellationToken);

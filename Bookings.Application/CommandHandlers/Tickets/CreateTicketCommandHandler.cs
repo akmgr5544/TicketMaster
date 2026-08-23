@@ -6,7 +6,7 @@ using Bookings.Domain.Exceptions;
 using Bookings.Domain.Repositories;
 using MediatR;
 
-namespace Bookings.Application.CommandHandlers;
+namespace Bookings.Application.CommandHandlers.Tickets;
 
 internal class CreateTicketCommandHandler : IRequestHandler<CreateTicketCommand>
 {

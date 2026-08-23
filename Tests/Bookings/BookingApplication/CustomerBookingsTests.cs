@@ -1,10 +1,13 @@
-using Bookings.Application.CustomerBookings;
 using Bookings.Application.Exceptions;
 using Bookings.Domain.DomainEvents;
 using Bookings.Domain.Entities;
 using Bookings.Domain.Enums;
 using Bookings.Domain.Exceptions;
 using BookingApplication.Fakes;
+using Bookings.Application.CommandHandlers.Bookings;
+using Bookings.Application.Dtos;
+using Bookings.Application.Queries;
+using Bookings.Application.QueryHandlers.CustomerBookings;
 
 namespace BookingApplication;
 

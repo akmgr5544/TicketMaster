@@ -40,6 +40,39 @@ Bookings.Api  ──►  Bookings.Application  ──►  Bookings.Domain
 
 `Program.cs` calls `AddInfrastructureServices` then `AddApplicationServices`.
 
+### Where things go in `Bookings.Application`
+
+Organised **by type first, then by area** — not by feature slice. Do not reorganise this into
+feature folders.
+
+```
+Commands/            MakeBookingCommand, EventSyncCommands, ReserveTicketCommand, …
+Commands/<Area>/         Bookings/  Payments/  Tickets/     — folders group; see the namespace rule
+CommandHandlers/<Area>/  Bookings/  EventSync/  Tickets/
+Queries/             CustomerBookingQueries
+QueryHandlers/<Area>/    CustomerBookings/
+Dtos/                BookingDto, ReserveTicketDto, EventsServiceDtos/
+Extensions/          ServiceCollectionExtension, TicketLockExtensions (+ ReservationKeys)
+DomainEventHandlers/ IntegrationEventHandlers/ Services/ Exceptions/ Abstractions/
+```
+
+**The namespace rule differs between the two halves, and it is not an accident of the folders:**
+
+| | Folder | Namespace |
+|---|---|---|
+| Commands | `Commands/<Area>/MakeBookingCommand.cs` | `Bookings.Application.Commands` — flat, the area folder is *not* in it |
+| Queries | `Queries/CustomerBookingQueries.cs` | `Bookings.Application.Queries` |
+| Handlers | `CommandHandlers/<Area>/MakeBookingCommandHandler.cs` | `Bookings.Application.CommandHandlers.<Area>` — the area folder *is* in it |
+
+So a handler is never in its command's namespace, and a handler always needs a
+`using Bookings.Application.Commands;`. Several command records may share one file when they belong to
+the same area (`EventSyncCommands.cs`, `PaymentCommands.cs`).
+
+`LayoutTest` enforces both halves: a handler resides under the root its own suffix claims, so a
+`QueryHandler` cannot sit among the command handlers, and every request resides under `Commands` or
+`Queries`. It does not enforce which of those two, which is why `CancelBookingCommand` can live in
+`Queries/CustomerBookingQueries.cs` alongside the queries it is used with.
+
 ## DDD rules
 
 1. **An aggregate root is the only entry point to its contents.** Load it, change it through its
@@ -88,8 +121,9 @@ handlers that translate each contract into one of them.
    returns, the holder has already been told their ticket is void, so the seat gets a fresh ticket
    rather than the old one quietly coming back to life. Two rows for one seat — one cancelled, one
    active — is the intended outcome.
-4. **New slices colocate command and handler in one namespace**, because `ColocationTest` requires it.
-   The four handlers in `Bookings.Application/CommandHandlers` predate the rule and still fail it.
+4. **Commands and handlers are deliberately *not* colocated.** The commands live under `Commands/`,
+   their handlers under `CommandHandlers/<Area>/`. `LayoutTest` guards that arrangement; the old
+   `ColocationTest`, which required the opposite, is gone.
 5. **Consume handlers stay `public`** so Wolverine discovers them; the MediatR handlers behind them
    are `internal` per `VisibilityTest`, which is why `Bookings.Application.csproj` carries
    `InternalsVisibleTo` for the test project.
@@ -289,10 +323,12 @@ known list rather than the complete one.
 - `IAggregateRoot` is an empty marker that nothing enforces.
 
 **Incomplete:**
-- `NamingConventionTest` asserted nothing until now — it built an ArchUnit rule and never called
+- `NamingConventionTest` asserted nothing for a long time — it built an ArchUnit rule and never called
   `Check(Architecture)`. Fixed, and it matches by pattern rather than suffix because reflected names
   carry the generic arity suffix (`IdentifiedCommandHandler` reports as ``IdentifiedCommandHandler`2``).
   The Events copy has the same latent trap and passes only because Events has no generic handlers.
+- The architecture suite is green. There is no longer a set of expected failures to look past, so a
+  red test means something actually broke.
 - Nothing publishes the payment contracts. Until a payment service does, a booking stays `Booked`
   forever and its seats are never released (see **Settling a booking**).
 - A command that queues after-commit work cannot be sent from a Wolverine message handler: the
@@ -323,10 +359,9 @@ known list rather than the complete one.
    domain event there, inside the method that makes the change.
 2. Add the command record, and implement `ITransactionalRequest` on it if its handler writes to the
    database. Without the marker it runs with no transaction and nothing says so (rule 17).
-3. Add the handler `internal`, one operation, **in the same namespace as its command** —
-   `ColocationTest` requires it. Put both in a folder named for the slice, the way
-   `Bookings.Application/EventSync` does; the four handlers in `CommandHandlers` predate the rule and
-   are the four failing tests.
+3. Add the handler `internal sealed`, one operation, under `CommandHandlers/<Area>/` (or
+   `QueryHandlers/<Area>/`), in the namespace that folder implies. Put the command itself under
+   `Commands/<Area>/` in the flat `Bookings.Application.Commands` namespace.
 4. If it needs new persistence, add the repository method to the interface in `Bookings.Domain` and
    implement it in `Bookings.Sql`.
    If it changes Redis, queue that on `IAfterCommitQueue` rather than doing it in the handler — the
@@ -334,6 +369,17 @@ known list rather than the complete one.
 5. Add the controller action in `Bookings.Api` — dispatch and map only.
 6. If another service must learn about it, translate to an integration event in
    `TicketMaster.Common` and publish through the outbox (see `messaging`).
+
+## Comments
+
+Comment the non-obvious and nothing else. A name that already says what a thing is does not need a
+summary repeating it.
+
+- **Do** explain a decision a reader would otherwise undo: why a value is what it is, why an order
+  matters, why a case is handled the way it is.
+- **Do not** write an XML summary for a record, a DTO, a marker interface, a constructor, or a handler
+  whose name and body already say it.
+- Prefer one line at the point of confusion over a paragraph above the type.
 
 ## Common mistakes
 

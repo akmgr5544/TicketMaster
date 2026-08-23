@@ -1,9 +1,11 @@
+using Bookings.Application.Dtos;
 using Bookings.Application.Exceptions;
+using Bookings.Application.Queries;
 using Bookings.Domain.Entities;
 using Bookings.Domain.Repositories;
 using MediatR;
 
-namespace Bookings.Application.CustomerBookings;
+namespace Bookings.Application.QueryHandlers.CustomerBookings;
 
 internal sealed class GetBookingQueryHandler : IRequestHandler<GetBookingQuery, BookingDto>
 {

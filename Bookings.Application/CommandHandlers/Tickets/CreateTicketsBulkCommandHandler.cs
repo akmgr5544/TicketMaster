@@ -3,7 +3,7 @@ using Bookings.Domain.Entities;
 using Bookings.Domain.Repositories;
 using MediatR;
 
-namespace Bookings.Application.CommandHandlers;
+namespace Bookings.Application.CommandHandlers.Tickets;
 
 internal class CreateTicketsBulkCommandHandler : IRequestHandler<CreateTicketsBulkCommand>
 {

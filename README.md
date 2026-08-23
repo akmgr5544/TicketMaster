@@ -208,7 +208,7 @@ Tests/
 └── Users/      UsersArchitecture
 ```
 
-**Architecture tests** (ArchUnitNET) assert layer dependencies, naming, visibility and colocation.
+**Architecture tests** (ArchUnitNET) assert layer dependencies, naming, visibility and layout.
 The Events suite additionally forbids any database driver, `System.Drawing`, or DI abstraction from
 appearing in `Events.Domain` — the rules that keep the store swappable.
 
@@ -273,10 +273,12 @@ Target: `Testcontainers.PostgreSql`, `Testcontainers.Redis` and `Testcontainers.
 shared xUnit fixture, with the SQLite suite kept for the fast cases that genuinely need no container.
 Worth doing per service so a module still lifts out whole.
 
-**Four `BookingArchitecture` tests fail on a clean checkout.** `ColocationTest` requires a handler to
-live in its command's namespace, and the four handlers in `Bookings.Application/CommandHandlers`
-predate that rule. Newer slices such as `Bookings.Application/EventSync` colocate and pass. Check the
-failing type names before assuming your change caused it.
+**The suite is green on a clean checkout**, architecture tests included, so a red test means
+something actually broke rather than something known. `Bookings.Application` is organised by type then
+area — a request under `Commands/` or `Queries/`, its handler under `CommandHandlers/<Area>/` or
+`QueryHandlers/<Area>/` — so a handler is never in its command's namespace. `LayoutTest` asserts that a
+handler sits under the root its own suffix claims, which is what stops a query handler drifting in
+among the command handlers.
 
 ## ▶️ Running locally
 
@@ -377,7 +379,6 @@ Being explicit about what is not finished:
 - Refunds and notifications for a paid booking voided by a relocation or cancellation
 - Optimistic concurrency on the Events aggregates via `_etag`
 - Integration tests against the Cosmos emulator for Events, as Bookings now has against SQLite
-- Colocating the four legacy Bookings handlers with their commands, so the architecture suite is green
 - Saga / process-manager work for the full booking flow in Wolverine
 - Exception-to-status mapping in Users, as Events and Bookings now have
 - A working `compose.yaml` covering every service

@@ -1,7 +1,9 @@
+using Bookings.Application.Dtos;
+using Bookings.Application.Queries;
 using Bookings.Domain.Repositories;
 using MediatR;
 
-namespace Bookings.Application.CustomerBookings;
+namespace Bookings.Application.QueryHandlers.CustomerBookings;
 
 internal sealed class ListBookingsQueryHandler : IRequestHandler<ListBookingsQuery, BookingDto[]>
 {
