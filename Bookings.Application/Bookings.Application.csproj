@@ -2,6 +2,7 @@
 
     <ItemGroup>
       <!-- Command handlers are internal by architecture rule; the tests still need to construct them. -->
+      <InternalsVisibleTo Include="BookingIntegration" />
       <InternalsVisibleTo Include="BookingApplication" />
     </ItemGroup>
 

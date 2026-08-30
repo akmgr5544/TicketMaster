@@ -1,14 +1,16 @@
 using Bookings.Application.Commands;
+using Bookings.Application.Commands.Bookings;
+using Bookings.Domain.Abstractions;
 using Bookings.Domain.Entities;
 using Bookings.Sql;
 using Bookings.Sql.Pipelines;
+using BookingIntegration.Fixtures;
 using MediatR;
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
-using Bookings.Application.Commands.Bookings;
 
-namespace BookingIntegration;
+namespace BookingIntegration.Mechanics;
 
 /// <summary>
 /// What the transaction behavior does around a handler, against a real provider: commit on success,
@@ -21,45 +23,29 @@ namespace BookingIntegration;
 /// exists to provide.
 /// </para>
 /// </summary>
-public sealed class TransactionBehaviorTests : IAsyncLifetime
+public sealed class TransactionBehaviorTests : IntegrationTest
 {
-    private SqliteConnection _connection = null!;
-    private BookingDomainContext _context = null!;
-    private AfterCommitQueue _afterCommit = null!;
-
-    public async Task InitializeAsync()
+    public TransactionBehaviorTests(BookingsFixture fixture) : base(fixture)
     {
-        _connection = new SqliteConnection("DataSource=:memory:");
-        await _connection.OpenAsync();
-
-        _context = new BookingDomainContext(new DbContextOptionsBuilder<BookingDomainContext>()
-            .UseSqlite(_connection)
-            .Options);
-
-        await _context.Database.EnsureCreatedAsync();
-        _afterCommit = new AfterCommitQueue();
     }
 
-    public async Task DisposeAsync()
-    {
-        await _context.DisposeAsync();
-        await _connection.DisposeAsync();
-    }
+    private BookingDomainContext Context => Act.GetRequiredService<BookingDomainContext>();
+
+    private IAfterCommitQueue AfterCommit => Act.GetRequiredService<IAfterCommitQueue>();
 
     private static readonly MakeBookingCommand ACommand =
         new("user-1", "event-1", [1L]);
 
     private Task<long> Run(RequestHandlerDelegate<long> handler) =>
-        new TransactionBehavior<MakeBookingCommand, long>(_context,
-                _afterCommit,
+        new TransactionBehavior<MakeBookingCommand, long>(Context,
+                AfterCommit,
                 NullLogger<TransactionBehavior<MakeBookingCommand, long>>.Instance)
             .Handle(ACommand, handler, CancellationToken.None);
 
     private Task AddATicketAsync()
     {
-        _context.Tickets.Add(new Ticket("A1", "venue-1", "event-1",
-            new DateTime(2030, 1, 1, 20, 0, 0, DateTimeKind.Utc)));
-        return _context.SaveChangesAsync();
+        Context.Tickets.Add(new Ticket("A1", "venue-1", "event-1", Seed.Soon));
+        return Context.SaveChangesAsync();
     }
 
     [Fact]
@@ -71,8 +57,8 @@ public sealed class TransactionBehaviorTests : IAsyncLifetime
             return 1L;
         });
 
-        _context.ChangeTracker.Clear();
-        Assert.Equal(1, await _context.Tickets.CountAsync());
+        Context.ChangeTracker.Clear();
+        Assert.Equal(1, await Context.Tickets.CountAsync());
     }
 
     [Fact]
@@ -84,8 +70,8 @@ public sealed class TransactionBehaviorTests : IAsyncLifetime
             throw new InvalidOperationException("handler failed");
         }));
 
-        _context.ChangeTracker.Clear();
-        Assert.Equal(0, await _context.Tickets.CountAsync());
+        Context.ChangeTracker.Clear();
+        Assert.Equal(0, await Context.Tickets.CountAsync());
     }
 
     [Fact]
@@ -104,7 +90,7 @@ public sealed class TransactionBehaviorTests : IAsyncLifetime
     [Fact]
     public async Task Defers_to_a_transaction_that_is_already_open()
     {
-        await using var outer = await _context.Database.BeginTransactionAsync();
+        await using var outer = await Context.Database.BeginTransactionAsync();
 
         await Run(async _ =>
         {
@@ -112,8 +98,8 @@ public sealed class TransactionBehaviorTests : IAsyncLifetime
             return 1L;
         });
 
-        Assert.NotNull(_context.Database.CurrentTransaction);
-        Assert.Equal(outer.TransactionId, _context.Database.CurrentTransaction!.TransactionId);
+        Assert.NotNull(Context.Database.CurrentTransaction);
+        Assert.Equal(outer.TransactionId, Context.Database.CurrentTransaction!.TransactionId);
     }
 
     /// <summary>
@@ -123,7 +109,7 @@ public sealed class TransactionBehaviorTests : IAsyncLifetime
     [Fact]
     public async Task Work_it_deferred_on_is_still_the_owner_s_to_roll_back()
     {
-        await using (var outer = await _context.Database.BeginTransactionAsync())
+        await using (var outer = await Context.Database.BeginTransactionAsync())
         {
             await Run(async _ =>
             {
@@ -134,8 +120,8 @@ public sealed class TransactionBehaviorTests : IAsyncLifetime
             await outer.RollbackAsync();
         }
 
-        _context.ChangeTracker.Clear();
-        Assert.Equal(0, await _context.Tickets.CountAsync());
+        Context.ChangeTracker.Clear();
+        Assert.Equal(0, await Context.Tickets.CountAsync());
     }
 
     // --- After-commit work ---
@@ -153,9 +139,9 @@ public sealed class TransactionBehaviorTests : IAsyncLifetime
         await Run(async _ =>
         {
             await AddATicketAsync();
-            _afterCommit.Enqueue(_ =>
+            AfterCommit.Enqueue(_ =>
             {
-                transactionWhenItRan.Add(_context.Database.CurrentTransaction is not null);
+                transactionWhenItRan.Add(Context.Database.CurrentTransaction is not null);
                 return Task.CompletedTask;
             });
             return 1L;
@@ -171,7 +157,7 @@ public sealed class TransactionBehaviorTests : IAsyncLifetime
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => Run(_ =>
         {
-            _afterCommit.Enqueue(_ =>
+            AfterCommit.Enqueue(_ =>
             {
                 ran = true;
                 return Task.CompletedTask;
@@ -192,26 +178,31 @@ public sealed class TransactionBehaviorTests : IAsyncLifetime
         await Run(async _ =>
         {
             await AddATicketAsync();
-            _afterCommit.Enqueue(_ => throw new InvalidOperationException("redis is down"));
+            AfterCommit.Enqueue(_ => throw new InvalidOperationException("redis is down"));
             return 1L;
         });
 
-        _context.ChangeTracker.Clear();
-        Assert.Equal(1, await _context.Tickets.CountAsync());
+        Context.ChangeTracker.Clear();
+        Assert.Equal(1, await Context.Tickets.CountAsync());
     }
 
     /// <summary>
     /// This is why the behavior stands aside instead of opening its own transaction: a second one on
     /// the same context is not something EF permits. Without deferring, every command sent from a
     /// Wolverine message handler — all the catalogue sync and payment paths — would fail right here.
+    /// <para>
+    /// Npgsql's message is "The connection is already in a transaction." — asserted on the exception
+    /// type plus this stable substring rather than the full message, since it is still provider text
+    /// and not a contract.
+    /// </para>
     /// </summary>
     [Fact]
     public async Task A_second_transaction_on_one_context_is_not_possible()
     {
-        await using var outer = await _context.Database.BeginTransactionAsync();
+        await using var outer = await Context.Database.BeginTransactionAsync();
 
         var thrown = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => _context.Database.BeginTransactionAsync());
+            () => Context.Database.BeginTransactionAsync());
 
         Assert.Contains("already in a transaction", thrown.Message);
     }
@@ -224,13 +215,13 @@ public sealed class TransactionBehaviorTests : IAsyncLifetime
     [Fact]
     public async Task Says_so_when_it_cannot_run_queued_work()
     {
-        await using var outer = await _context.Database.BeginTransactionAsync();
+        await using var outer = await Context.Database.BeginTransactionAsync();
         var ran = false;
 
         await Run(async _ =>
         {
             await AddATicketAsync();
-            _afterCommit.Enqueue(_ =>
+            AfterCommit.Enqueue(_ =>
             {
                 ran = true;
                 return Task.CompletedTask;
@@ -239,14 +230,14 @@ public sealed class TransactionBehaviorTests : IAsyncLifetime
         });
 
         Assert.False(ran);
-        Assert.True(_afterCommit.HasWork);
-        Assert.NotNull(_context.Database.CurrentTransaction);
+        Assert.True(AfterCommit.HasWork);
+        Assert.NotNull(Context.Database.CurrentTransaction);
     }
 
     [Fact]
     public async Task Defers_quietly_when_there_is_no_queued_work()
     {
-        await using var outer = await _context.Database.BeginTransactionAsync();
+        await using var outer = await Context.Database.BeginTransactionAsync();
 
         await Run(async _ =>
         {
@@ -254,6 +245,6 @@ public sealed class TransactionBehaviorTests : IAsyncLifetime
             return 1L;
         });
 
-        Assert.NotNull(_context.Database.CurrentTransaction);
+        Assert.NotNull(Context.Database.CurrentTransaction);
     }
 }

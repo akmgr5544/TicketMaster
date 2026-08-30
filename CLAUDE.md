@@ -21,8 +21,8 @@ dotnet run --project TicketMaster.ApiGateway/TicketMaster.ApiGateway.csproj
 # Tests are grouped by service under Tests/<Service>/ so a service can be lifted out whole.
 dotnet test Tests/Bookings/BookingArchitecture/BookingArchitecture.csproj
 dotnet test Tests/Bookings/BookingDomain/BookingDomain.csproj        # Ticket rules, incl. staleness
-dotnet test Tests/Bookings/BookingApplication/BookingApplication.csproj  # EventSync consumers
-dotnet test Tests/Bookings/BookingIntegration/BookingIntegration.csproj  # interceptor + transactions, SQLite
+dotnet test Tests/Bookings/BookingApplication/BookingApplication.csproj  # EventSync, Payments, CustomerBookings — still on fakes
+dotnet test Tests/Bookings/BookingIntegration/BookingIntegration.csproj  # handlers + interceptor + transactions, Testcontainers (needs Docker)
 dotnet test Tests/Events/EventsArchitecture/EventsArchitecture.csproj
 dotnet test Tests/Events/EventsDomain/EventsDomain.csproj            # Events domain rules
 dotnet test Tests/Events/EventsApplication/EventsApplication.csproj  # handlers, with fake repositories
@@ -106,12 +106,16 @@ Each project has a marker interface (`IApiAssemblyMarker`, `IApplicationAssembly
 - **Architecture tests** (`Tests/<Service>/*Architecture`) use **ArchUnitNET.xUnit**. Each project has a `BaseTest` that loads the service's assemblies via marker interfaces into a shared `Architecture` instance; concrete tests assert dependencies, naming, visibility, and colocation rules. Adding a new layer/project means updating `BaseTest.cs` to include its assembly.
 - **Unit tests**: `Tests/Events/EventsDomain` covers the Events domain rules; `Tests/Events/EventsCosmos` covers Cosmos document serialization against the real `CosmosJson.Options`, with no emulator needed.
 - **Integration tests**: `Tests/Bookings/BookingIntegration` runs the real `BookingDomainContext`,
-  domain event interceptor and transaction behavior against SQLite in-memory (`Microsoft.EntityFrameworkCore.Sqlite`,
-  a test-only package). It exists for the questions fakes cannot answer — whether EF tolerates the
-  nested `SaveChangesAsync` that domain event dispatch performs, and whether dependency injection
-  really skips an open-generic pipeline behavior whose generic constraint does not match. It needs
-  no running database. `Bookings.Sql` carries `InternalsVisibleTo("BookingIntegration")` so the tests
-  can construct the internal context and repositories.
+  domain event interceptor, transaction behavior and command/query handlers against **real Postgres and
+  Redis in Testcontainers** — one container of each, shared across the project by a single fixture. It
+  proves properties fakes could only simulate (lock ordering and contention, reservation TTL, rollback
+  behavior) alongside the DI and EF questions the suite always answered (whether dependency injection
+  really skips an open-generic pipeline behavior whose constraint does not match, whether EF tolerates
+  the nested `SaveChangesAsync` that domain event dispatch performs). **Needs a running Docker daemon**;
+  with it down, the whole project fails at fixture initialisation and nothing else reports why. See the
+  `testing` skill for the fixture, isolation model and known gaps. `Bookings.Sql` and
+  `Bookings.Application` both carry `InternalsVisibleTo("BookingIntegration")` so the tests can
+  construct the internal context, repositories and handlers.
 - **The whole test suite is green**, including `BookingArchitecture`. There are no expected failures
   to look past any more, so a red test means something actually broke. `ColocationTest` used to fail by
   design and is gone: Bookings organises `Bookings.Application` by type first — `Commands/` and
@@ -120,7 +124,13 @@ Each project has a marker interface (`IApiAssemblyMarker`, `IApplicationAssembly
 - Handlers are `internal` by architecture rule, so a test project that constructs them needs an
   `InternalsVisibleTo` entry in the production `.csproj` (see `Bookings.Application.csproj`,
   `Events.Application.csproj`).
-- Test-only package versions live in `Tests/Directory.Packages.props` (xUnit, Microsoft.NET.Test.Sdk, ArchUnitNET, coverlet). It imports the root `Directory.Packages.props` first, so all versions stay centrally managed.
+- Test-only package versions live in `Tests/Directory.Packages.props` (xUnit, Microsoft.NET.Test.Sdk, ArchUnitNET, coverlet, Testcontainers.PostgreSql, Testcontainers.Redis, Respawn). It imports the root `Directory.Packages.props` first, so all versions stay centrally managed.
+- **Bookings is mid-migration, not finished.** `BookingIntegration` (65 tests) now covers the Postgres/EF
+  mechanics plus the ReserveTicket and MakeBooking handlers on real infrastructure. `BookingApplication`
+  (35 tests) still exists and is still green — it holds EventSync, Payments and CustomerBookings, which
+  still run against the five hand-written fakes in `Tests/Bookings/BookingApplication/Fakes/`. Deleting
+  `BookingApplication` is the last step of the migration, not something to do piecemeal; see the
+  `testing` skill's "Known gaps" section for what remains and why.
 
 ## Comments
 

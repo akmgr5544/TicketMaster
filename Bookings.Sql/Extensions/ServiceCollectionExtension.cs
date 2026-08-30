@@ -23,7 +23,11 @@ public static class ServiceCollectionExtension
         services.AddScoped<IBookingRepository, BookingRepository>();
         services.AddScoped<ITicketsRepository, TicketsRepository>();
 
-        services.AddSingleton<DomainEventPublisherInterceptor>();
+        // Scoped, not singleton. The interceptor holds an IPublisher, and a singleton would capture one
+        // resolved from the root container — putting every domain event handler on its own DbContext,
+        // outside the transaction the caller is saving inside. A rolled-back booking then leaves its
+        // tickets Booked and the seat stranded.
+        services.AddScoped<DomainEventPublisherInterceptor>();
 
         var connectionString = configuration.GetConnectionString("DefaultConnection")!;
         services.AddDbContext<BookingDomainContext>((serviceProvider, options) =>
