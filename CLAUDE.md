@@ -21,7 +21,6 @@ dotnet run --project TicketMaster.ApiGateway/TicketMaster.ApiGateway.csproj
 # Tests are grouped by service under Tests/<Service>/ so a service can be lifted out whole.
 dotnet test Tests/Bookings/BookingArchitecture/BookingArchitecture.csproj
 dotnet test Tests/Bookings/BookingDomain/BookingDomain.csproj        # Ticket rules, incl. staleness
-dotnet test Tests/Bookings/BookingApplication/BookingApplication.csproj  # EventSync, Payments, CustomerBookings — still on fakes
 dotnet test Tests/Bookings/BookingIntegration/BookingIntegration.csproj  # handlers + interceptor + transactions, Testcontainers (needs Docker)
 dotnet test Tests/Events/EventsArchitecture/EventsArchitecture.csproj
 dotnet test Tests/Events/EventsDomain/EventsDomain.csproj            # Events domain rules
@@ -125,12 +124,11 @@ Each project has a marker interface (`IApiAssemblyMarker`, `IApplicationAssembly
   `InternalsVisibleTo` entry in the production `.csproj` (see `Bookings.Application.csproj`,
   `Events.Application.csproj`).
 - Test-only package versions live in `Tests/Directory.Packages.props` (xUnit, Microsoft.NET.Test.Sdk, ArchUnitNET, coverlet, Testcontainers.PostgreSql, Testcontainers.Redis, Respawn). It imports the root `Directory.Packages.props` first, so all versions stay centrally managed.
-- **Bookings is mid-migration, not finished.** `BookingIntegration` (65 tests) now covers the Postgres/EF
-  mechanics plus the ReserveTicket and MakeBooking handlers on real infrastructure. `BookingApplication`
-  (35 tests) still exists and is still green — it holds EventSync, Payments and CustomerBookings, which
-  still run against the five hand-written fakes in `Tests/Bookings/BookingApplication/Fakes/`. Deleting
-  `BookingApplication` is the last step of the migration, not something to do piecemeal; see the
-  `testing` skill's "Known gaps" section for what remains and why.
+- **Bookings' handler tests all run against real Postgres and Redis now.** `BookingIntegration` covers
+  the Postgres/EF mechanics and every handler group — ReserveTicket, MakeBooking, EventSync, Payments
+  and CustomerBookings. The old fake-based `BookingApplication` project and its `Fakes/` folder are
+  gone; there is no hand-written fake for a Bookings handler dependency anywhere in the solution. See
+  the `testing` skill's "Known gaps" section for what remains open in the current suite.
 
 ## Comments
 

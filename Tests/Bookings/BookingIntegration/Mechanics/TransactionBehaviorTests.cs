@@ -199,6 +199,8 @@ public sealed class TransactionBehaviorTests : IntegrationTest
     [Fact]
     public async Task A_second_transaction_on_one_context_is_not_possible()
     {
+        // outer is never read - the using is the point, keeping a transaction open on Context for the
+        // second BeginTransactionAsync below to collide with.
         await using var outer = await Context.Database.BeginTransactionAsync();
 
         var thrown = await Assert.ThrowsAsync<InvalidOperationException>(
@@ -215,6 +217,8 @@ public sealed class TransactionBehaviorTests : IntegrationTest
     [Fact]
     public async Task Says_so_when_it_cannot_run_queued_work()
     {
+        // outer is never read - the using is the point, keeping a transaction open for Run() below to
+        // defer to instead of committing its own.
         await using var outer = await Context.Database.BeginTransactionAsync();
         var ran = false;
 
@@ -237,6 +241,8 @@ public sealed class TransactionBehaviorTests : IntegrationTest
     [Fact]
     public async Task Defers_quietly_when_there_is_no_queued_work()
     {
+        // outer is never read - the using is the point, keeping a transaction open for Run() below to
+        // defer to instead of committing its own.
         await using var outer = await Context.Database.BeginTransactionAsync();
 
         await Run(async _ =>

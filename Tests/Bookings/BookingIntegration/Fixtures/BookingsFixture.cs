@@ -67,7 +67,19 @@ public sealed class BookingsFixture : IAsyncLifetime
         services.AddScoped<AfterHandlerFailureSwitch>();
         services.AddTransient(typeof(IPipelineBehavior<,>), typeof(AfterHandlerFailureBehavior<,>));
 
-        Services = services.BuildServiceProvider();
+        // ValidateScopes catches the exact shape of bug this suite exists for: DomainEventPublisherInterceptor
+        // was once registered AddSingleton while holding IPublisher, which resolved every domain-event
+        // handler's scoped BookingDomainContext from the root container - outside the caller's transaction -
+        // and stranded seats on any rollback. ValidateScopes checks every resolution against the root
+        // provider at runtime, so a regression of that shape fails immediately, naming the offending
+        // service, instead of surfacing as a handful of confusing behavioural failures. ValidateOnBuild
+        // catches the same class of mistake earlier, at container-build time, for the cases it can see
+        // statically.
+        Services = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateScopes = true,
+            ValidateOnBuild = true
+        });
 
         await using (var scope = Services.CreateAsyncScope())
         {

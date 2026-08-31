@@ -136,6 +136,22 @@ public sealed class MakeBookingTests : IntegrationTest
             Sender.Send(new MakeBookingCommand("user-1", "evt-1", [tickets[0].Id, missingId])));
     }
 
+    /// <summary>
+    /// The database-side mirror of <c>Ticket.IsAvailableFor</c>'s sale-window rule, in
+    /// <c>TicketsRepository.GetTicketsForBookingAsync</c>, filters the row out before any domain method
+    /// runs — so the reservation is valid but the ticket itself never comes back from the lookup, and
+    /// the handler's "some of the tickets are no longer available" path is what fires.
+    /// </summary>
+    [Fact]
+    public async Task Refuses_a_ticket_whose_event_is_past_the_sale_window()
+    {
+        var tickets = await Seed.TicketsAsync("evt-1", Seed.LongPast, eventVersion: 0, "A1");
+        await Seed.ReservationAsync("user-1", "evt-1", tickets[0].Id);
+
+        await Assert.ThrowsAsync<BookingsApplicationException>(() =>
+            Sender.Send(new MakeBookingCommand("user-1", "evt-1", [tickets[0].Id])));
+    }
+
     [Fact]
     public async Task Refuses_a_reservation_belonging_to_somebody_else()
     {

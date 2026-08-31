@@ -203,7 +203,7 @@ independently deployable microservice:
 
 ```
 Tests/
-├── Bookings/   BookingArchitecture, BookingDomain, BookingApplication, BookingIntegration, BookingApi
+├── Bookings/   BookingArchitecture, BookingDomain, BookingIntegration, BookingApi
 ├── Events/     EventsArchitecture, EventsDomain, EventsApplication, EventsCosmos, EventsApi
 └── Users/      UsersArchitecture
 ```
@@ -212,19 +212,18 @@ Tests/
 The Events suite additionally forbids any database driver, `System.Drawing`, or DI abstraction from
 appearing in `Events.Domain` — the rules that keep the store swappable.
 
-**Unit tests** cover the domain rules of both aggregates, the application handlers against in-memory
-fake repositories, and Cosmos document serialization. The serialization tests exercise the same
-`JsonSerializerOptions` the `CosmosClient` is built with, so they verify the real document shape
-without needing an emulator. The Bookings fakes are real in-memory implementations rather than mocks,
-so tests assert on what happened to the tickets instead of on which methods were called — and
-`FakeTicketsRepository` routes its availability query through the same `Ticket.IsAvailableFor` the
-production predicate mirrors, so it cannot be more permissive than the database.
+**Unit tests** cover the domain rules of both aggregates and Cosmos document serialization, plus the
+Events application handlers against in-memory fake repositories. The serialization tests exercise the
+same `JsonSerializerOptions` the `CosmosClient` is built with, so they verify the real document shape
+without needing an emulator.
 
 **Integration tests** (`Tests/Bookings/BookingIntegration`) run the real `BookingDomainContext`,
-domain event interceptor and transaction behavior against SQLite in-memory. They exist for the
-questions fakes cannot answer, and each one settles a claim the design depends on rather than
-restating a unit test:
+domain event interceptor, transaction behavior and every Bookings command/query handler against real
+Postgres and Redis in Testcontainers — one container of each, shared across the project by a single
+fixture. They exist for questions a fake cannot answer, and each one settles a claim the design
+depends on rather than restating a unit test:
 
+- Redis lock ordering, contention and TTL expiry behave the way the handlers assume
 - EF Core tolerates the nested `SaveChangesAsync` that domain event dispatch performs, and clearing
   events before publishing is what stops it recurring
 - a second transaction on one context really does throw — which is why the behavior defers instead
@@ -232,8 +231,10 @@ restating a unit test:
   the request does not satisfy, rather than failing to build it
 - after-commit work runs only once the transaction has gone, and not at all when it rolls back
 
-No database needs to be running. `Bookings.Sql` carries `InternalsVisibleTo("BookingIntegration")` so
-the tests can construct the internal context and repositories.
+**Needs a running Docker daemon** — every test starts containers; with the daemon down the whole
+project fails at fixture initialisation. `Bookings.Sql` and `Bookings.Application` carry
+`InternalsVisibleTo("BookingIntegration")` so the tests can construct the internal context,
+repositories and handlers.
 
 Handlers are `internal` by architecture rule, so each test project that constructs them relies on an
 `InternalsVisibleTo` entry in the production `.csproj`.
@@ -245,33 +246,17 @@ dotnet test Tests/Events/EventsApi/EventsApi.csproj
 dotnet test Tests/Events/EventsCosmos/EventsCosmos.csproj
 dotnet test Tests/Events/EventsArchitecture/EventsArchitecture.csproj
 dotnet test Tests/Bookings/BookingDomain/BookingDomain.csproj
-dotnet test Tests/Bookings/BookingApplication/BookingApplication.csproj
 dotnet test Tests/Bookings/BookingIntegration/BookingIntegration.csproj
 dotnet test Tests/Bookings/BookingApi/BookingApi.csproj
 dotnet test Tests/Bookings/BookingArchitecture/BookingArchitecture.csproj
 dotnet test Tests/Users/UsersArchitecture/UsersArchitecture.csproj
 ```
 
-### 📋 TODO — move handler tests onto Testcontainers
-
-Command handlers and integration event handlers are currently tested against in-memory fakes. That
-verifies the logic but not the infrastructure it actually runs on, and everything interesting about
-these handlers lives in that gap:
-
-- **Command handlers** — reservation's correctness rests entirely on real Redis distributed locks and
-  key expiry, neither of which a dictionary reproduces. A fake cannot lose a lock, expire a key
-  mid-operation, or serialize two concurrent callers, so the concurrency the design is built around is
-  the one thing currently untested.
-- **Integration event handlers** — these run inside Wolverine's transaction, with its inbox and
-  conventional routing. The `Consume` methods, the broker topology, at-least-once redelivery and the
-  version-based staleness guards under genuine out-of-order delivery are all untested today; the tests
-  invoke the MediatR command directly and skip Wolverine entirely.
-- **Transaction ownership** — the SQLite suite proves nesting fails and that deferring works, but not
-  that Wolverine and `TransactionBehavior` actually cooperate on a live Postgres connection.
-
-Target: `Testcontainers.PostgreSql`, `Testcontainers.Redis` and `Testcontainers.RabbitMq` behind a
-shared xUnit fixture, with the SQLite suite kept for the fast cases that genuinely need no container.
-Worth doing per service so a module still lifts out whole.
+**Not covered, deliberately:** Wolverine `Consume` handlers need a broker and each is a two-line
+delegation to a command that is already covered, so testing them would only prove Wolverine works.
+The broker topology, at-least-once redelivery and version-based staleness guards under genuine
+out-of-order delivery are therefore untested by design, not by gap. See the `testing` skill's "Not
+covered, deliberately" for the rest of that list.
 
 **The suite is green on a clean checkout**, architecture tests included, so a red test means
 something actually broke rather than something known. `Bookings.Application` is organised by type then

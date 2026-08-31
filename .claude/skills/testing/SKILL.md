@@ -16,15 +16,6 @@ Everything between those two — a handler's guard clause, a repository method, 
 is an integration test. There is no third tier of fake-backed handler tests, and reintroducing one is
 a regression: see [Why the fakes went away](#why-the-fakes-went-away).
 
-## Status
-
-**Partially landed.** `BookingIntegration` is on Testcontainers now — Postgres and Redis, real
-handlers, 65 tests — and everything below describes that code, not a target. What has not moved yet:
-EventSync, Payments and CustomerBookings still run against the five hand-written fakes in
-`BookingApplication` (35 tests). That project stays in the solution until those three groups migrate;
-deleting it is the last step, not something to do piecemeal. See "Known gaps" below for the rest of
-what a reader should know before touching either project.
-
 Events and Users are out of scope and still test as they always did — layered projects with fakes and
 no containers. Do not "fix" them to match this document.
 
@@ -36,12 +27,11 @@ folder for the service they test — do not reorganise the tree.
 ```
 Tests/Bookings/
   BookingDomain/          unit — Booking, Ticket, Entity. No infrastructure.
-  BookingIntegration/     handler-shaped tests migrated so far, on containers
+  BookingIntegration/     every handler group, on containers
     Fixtures/             the fixture, the collection, the base class, seed helpers
     Mechanics/            EF, DI and transaction behavior
-    Handlers/             one file per handler area (ReserveTicket, MakeBooking)
-  BookingApplication/     EventSync, Payments, CustomerBookings — not yet migrated, five fakes
-    Fakes/                the five hand-written fakes; see "Why the fakes went away"
+    Handlers/             one file per handler area (ReserveTicket, MakeBooking, EventSync,
+                           Payments, CustomerBookings)
   BookingApi/             exception-to-status mapping
   BookingArchitecture/    ArchUnit rules
 
@@ -64,8 +54,9 @@ dotnet test Tests/Bookings/BookingIntegration/BookingIntegration.csproj \
   --filter "FullyQualifiedName~ReserveTicket"
 ```
 
-The first run pulls the Postgres and Redis images. Expect the integration project to take tens of
-seconds; it is serial by design (see below).
+The first run pulls the Postgres and Redis images. Once the images are cached, the whole project —
+containers included — runs in well under a minute; measured around ten seconds. It is serial by
+design (see below).
 
 ## The fixture
 
@@ -92,6 +83,14 @@ on a different connection, outside the caller's transaction; a rolled-back booki
 holding the same context by construction, so they proved the design and never touched the wiring. This
 fixture resolves the interceptor the way `Program.cs` does, so the same mistake shows up here.
 `Mechanics/DomainEventAtomicityTests.cs` is the test that pins the fix — it is scoped now.
+
+The fixture also builds its provider with `ValidateScopes: true` and `ValidateOnBuild: true`
+(`Fixtures/BookingsFixture.cs`). `ValidateScopes` checks every resolution against the root provider at
+runtime, which is exactly where the captive-`IPublisher` bug above lived — re-applying the `AddSingleton`
+regression turns it back into 37 named failures reading `Cannot resolve
+IEnumerable<INotificationHandler<BookingCreatedDomainEvent>> from root provider because it requires
+scoped service ITicketsRepository`, instead of a handful of confusing behavioural ones. Don't strip it
+as ceremony.
 
 **Never hand-copy a registration into a test.** If a test needs the container wired a particular way,
 it calls the production extension method. A hand-rolled `services.AddDbContext<...>` that mirrors
@@ -170,9 +169,6 @@ Worth knowing so you assert on the right thing — these are the properties fake
 | `Ticket.Book()` persistence | the `Status` column, read in a fresh scope |
 | Rollback and the second-transaction guard | Npgsql's actual behavior, which is what production runs |
 
-Not in this table yet: a paged booking list (`ORDER BY` / `OFFSET` / `LIMIT`) is a `CustomerBookings`
-property, and that group has not migrated — see "Why the fakes went away".
-
 ## Why the fakes went away
 
 `BookingApplication` used to drive every handler through five hand-written fakes. They were not bad
@@ -182,15 +178,14 @@ two overlapping reservations cannot deadlock, that a partly-acquired set of lock
 reservation survives a failed booking — are properties of Redis and Postgres semantics. A fake can
 only restate the assumption under test.
 
-ReserveTicket and MakeBooking have moved onto the fixture. EventSync, Payments and CustomerBookings
-have not: they still run against the fakes in `BookingApplication`, which is why that project and its
-`Fakes/` folder are both still in the solution. See "Known gaps" for why the rest were deferred rather
-than moved in the same pass.
+Every handler group — ReserveTicket, MakeBooking, EventSync, Payments and CustomerBookings — now runs
+against the fixture. `BookingApplication` and its `Fakes/` folder are gone; there is no hand-written
+fake for a Bookings handler dependency anywhere in the solution.
 
 If you find yourself adding a fake for `ICacheService`, `IDistributedLockProvider`,
-`IBookingRepository`, `ITicketsRepository` or `IAfterCommitQueue` on a handler that has already
-migrated, that is the signal to use the fixture instead — but do not take that as license to migrate
-EventSync, Payments or CustomerBookings unprompted; that work is deliberately deferred.
+`IBookingRepository`, `ITicketsRepository` or `IAfterCommitQueue` on a Bookings handler test, that is
+the signal to use the fixture instead — hand-written fakes for these are a regression, not a
+shortcut.
 
 `IEventsService` is different — it is an outbound HTTP client to another service, and stubbing it is
 correct. It currently throws `NotImplementedException`, which is why `CreateTicketCommand` has no
@@ -218,13 +213,11 @@ a paid booking refuses cancellation.
 - **`InternalsVisibleTo` is needed more often than it looks.** Handlers are `internal` by
   architecture rule, and so are `BookingDomainContext`, the repositories and `ReservationKeys` —
   which integration tests need in order to build the cache keys a handler will look for. Entries:
-  `Bookings.Application → BookingIntegration`, `Bookings.Application → BookingApplication`,
-  `Bookings.Sql → BookingIntegration`, `Bookings.Api → BookingApi`,
-  `Events.Application → EventsApplication`, `Events.Api → EventsApi`, `Users.Api → ArchitectureTests`.
-  `Bookings.Application` grants to both Bookings test projects because the handlers still on fakes live
-  in the same assembly as the ones on the fixture — splitting the grant is not possible without
-  splitting the assembly. Dispatching through `ISender` does not by itself require access to a handler
-  — the internals that matter are the keys, the context and the repositories used to seed and assert.
+  `Bookings.Application → BookingIntegration`, `Bookings.Sql → BookingIntegration`,
+  `Bookings.Api → BookingApi`, `Events.Application → EventsApplication`, `Events.Api → EventsApi`,
+  `Users.Api → ArchitectureTests`. Dispatching through `ISender` does not by itself require access to
+  a handler — the internals that matter are the keys, the context and the repositories used to seed
+  and assert.
 - **Architecture suites:** adding a layer or project means updating that suite's `BaseTest.cs` to load
   the assembly via its marker interface.
 
@@ -243,20 +236,22 @@ a paid booking refuses cancellation.
 Reviewed and accepted for now — not a to-do list, but a reader should know these before trusting a
 green run more than it has earned, or before "fixing" one and making things worse.
 
-**Not migrated yet** — the reason `BookingApplication` still exists:
-- EventSync (11 tests), Payments (11) and CustomerBookings (13) still run against the five
-  hand-written fakes in `Tests/Bookings/BookingApplication/Fakes/`. Migrating them onto the fixture is
-  future work, not something to start unprompted; see "Why the fakes went away".
-- `Tests/Bookings/BookingApplication` and its fakes are therefore still in the solution. Deleting them
-  is the last step of the migration, not something to do piecemeal — a partial deletion just leaves
-  three handler groups with no coverage at all.
-
 **Test-quality gaps, reviewed and accepted for now:**
-- `BookingsFixture` builds its provider with plain `BuildServiceProvider()`. Passing
-  `ValidateScopes: true` is one line and would make a captive-dependency regression fail loudly — but
-  it would not have caught the *original* bug, because the captured `IPublisher` is Transient, not
-  Scoped, and validation only catches a narrower-lifetime service captured by a wider-lived one.
-  Separately, switching the context registration to `AddDbContextPool`, `AddDbContextFactory`, or
+- `Handlers/EventSyncTests.Cancel_applied_twice_is_the_same_as_once` cannot distinguish guarded from
+  unguarded behaviour. `Ticket.Cancel` is idempotent by construction rather than by its `IsStale`
+  guard, so removing the guard produces the same end state. Inherited unchanged from the fake-based
+  original.
+- `Ticket.Cancel`'s and `Ticket.Relocate`'s own `IsStale` guards are covered, and verified by
+  mutation: `BookingDomain.TicketTests.Ignores_a_cancellation_that_is_not_newer` and
+  `Ignores_a_relocation_that_is_not_newer` both fail when the guard is removed from the method they
+  name.
+- Empirical nuance worth recording, NOT a correction: the message-level staleness guard in
+  `ReconcileEventVenueCommandHandler` is redundant with that handler's `Except(covered)` filter for
+  the specific case of redelivering a message whose seats already exist un-cancelled. It is NOT
+  redundant for the case rule 2 of the `bookings-service` skill actually describes — a stale message
+  naming a seat with no existing ticket — which was verified to regress when the guard was removed.
+  Do not change rule 2.
+- Switching the context registration to `AddDbContextPool`, `AddDbContextFactory`, or
   giving `AddDbContext` an `optionsLifetime: Singleton` would hand the options-factory lambda the root
   provider and silently reopen the exact hole `Mechanics/DomainEventAtomicityTests` exists to close —
   don't make that change without re-deriving why the interceptor needs the request's scope.
@@ -272,10 +267,15 @@ green run more than it has earned, or before "fixing" one and making things wors
 - `Handlers/ReserveTicketTests.Releases_the_locks_it_took_before_hitting_one_it_could_not_have` proves
   the lock is free *afterwards*, not that the handler ever held it and gave it back. The name reads as
   a stronger claim than the assertion makes.
-- `Seed.LongPast` is defined but never referenced. The sale-window branch of `Ticket.IsAvailableFor` —
-  a seat past its `SaleGracePeriod` — has no test anywhere in the suite. The pre-migration fake-based
-  tests had the same gap, so this is not a regression the migration introduced, but it is a real hole
-  a new contributor could mistake for coverage that exists.
+- The sale-window rule lives in two places, because a query cannot call into the domain:
+  `Ticket.IsAvailableFor` on the entity, and its database-side mirror in
+  `TicketsRepository.GetTicketsForBookingAsync`. Both are now covered —
+  `BookingDomain.TicketTests.Availability_ends_a_while_after_the_event_starts` for the entity,
+  `BookingIntegration.Handlers.MakeBookingTests.Refuses_a_ticket_whose_event_is_past_the_sale_window`
+  (using `Seed.LongPast`) for the SQL mirror, verified by mutation: replacing the repository's
+  `x.EventDate > DateTime.UtcNow.AddHours(-5)` clause with `true` turns the latter red. The SQL copy
+  still hardcodes `-5` rather than deriving it from `Ticket.SaleGracePeriod`, so the two can still
+  drift apart silently if one changes and not the other — that remains a real, deferred improvement.
 - `Mechanics/DomainEventAtomicityTests.The_handler_saves_through_the_requests_context` asserts scope
   identity via `context.ChangeTracker.Entries<Ticket>().Count() == 1` — a white-box proxy for "this is
   the same context the handler used." Switching the repository's read to `AsNoTracking` would fail this

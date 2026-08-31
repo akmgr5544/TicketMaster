@@ -121,7 +121,7 @@ Run the test projects for the service you touched — there is no aggregating pr
 
 ```bash
 dotnet test Tests/Bookings/BookingArchitecture/BookingArchitecture.csproj
-dotnet test Tests/Bookings/BookingApplication/BookingApplication.csproj
+dotnet test Tests/Bookings/BookingIntegration/BookingIntegration.csproj
 ```
 
 The architecture suites are the ones most likely to catch a bad removal, so always run the

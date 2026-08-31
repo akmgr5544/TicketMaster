@@ -56,7 +56,10 @@ public sealed class Seed
         var booking = Booking.Create(userId, BookingStatus.Booked, ticketIds);
 
         // Create raises BookingCreatedDomainEvent, whose handler books the tickets. Seeding through
-        // the context means the interceptor dispatches it, so the seeded state is coherent.
+        // the context means the interceptor dispatches it, so the seeded state is coherent. That
+        // dispatch happens in this method's own scope, though, not the test's Act scope - a test that
+        // seeds a booking and then asserts a publish count via BookingCreatedPublishCounter resolved
+        // from Act would silently observe 0.
         context.Bookings.Add(booking);
         await context.SaveChangesAsync();
 
