@@ -18,7 +18,7 @@ listed honestly under [Known gaps](#-known-gaps) rather than left for you to dis
 | Document store | Azure Cosmos DB, NoSQL API (Events) |
 | Caching / locking | Redis via StackExchange.Redis + Medallion.Threading.Redis |
 | Edge | YARP reverse proxy with a custom authentication scheme |
-| Testing | xUnit + ArchUnitNET, plus EF Core SQLite for the Bookings integration suite |
+| Testing | xUnit + ArchUnitNET, plus Testcontainers (Postgres + Redis) for the Bookings integration suite |
 
 ## 🏗️ Architecture
 
@@ -82,6 +82,7 @@ POST   /api/events/{id}/cancel        # idempotent; no DELETE exists
 Bookings exposes the checkout, with every action scoped to the caller the gateway resolved:
 
 ```
+POST   /api/tickets                     # create a ticket — unusable, see Known gaps
 POST   /api/tickets/reserve             # hold seats for 5 minutes
 POST   /api/bookings                    # 201 + { id }
 GET    /api/bookings/{id}               # the caller's own; somebody else's is a 404
@@ -346,24 +347,30 @@ Being explicit about what is not finished:
 - **Users still surfaces unhandled failures as bare 500s.** Events and Bookings both map exceptions
   to status codes at the edge; Users, which uses `Result<T>` rather than exceptions, has no equivalent
   translation for what escapes it.
+- **The sale-window rule lives in two places.** `Ticket.IsAvailableFor` expresses it in the domain
+  and `TicketsRepository.GetTicketsForBookingAsync` mirrors it in SQL, because a query cannot call into
+  the domain. The SQL copy hardcodes `AddHours(-5)` rather than deriving from `Ticket.SaleGracePeriod`,
+  so changing the constant silently changes only half the rule. Both halves are now covered by tests,
+  which makes deriving the cutoff a safe change — it just has not been made.
+- **`POST /api/tickets` cannot succeed.** `CreateTicketCommandHandler` depends on
+  `IEventsService.GetEventByIdAsync`, which throws `NotImplementedException`, so the endpoint answers
+  500. Tickets reach Bookings through `EventCreated` instead; this endpoint predates that path.
 - **`Bookings.Sql` still exposes `IMongoAssemblyMarker`**, a leftover name from before it was
   Postgres. Harmless, but confusing.
-- **`Bookings`' `NamingConventionTest` asserted nothing** until now — it built an ArchUnit rule and
-  never called `Check(Architecture)`, so it passed unconditionally. Fixed. The Events copy has the same
-  latent trap with generic handler names and passes only because Events has no generic handlers.
+- **`Events`' `NamingConventionTest` matches by suffix, not by pattern.** Reflected names carry the
+  generic arity suffix, so a generic handler reports as ``IdentifiedCommandHandler`2`` and slips the
+  check. It passes today only because Events has no generic handlers. The Bookings copy had the same
+  trap plus a rule it never called `Check(Architecture)` on; both are fixed there.
 
 ## 🗺️ Roadmap
 
 - A durable outbox for Events, and full inbox/outbox enrolment in Bookings, so catalogue changes
   cannot be silently lost
-- **Migrating command and integration handler tests to Testcontainers** — see the TODO under
-  [Testing](#-testing). The highest-value testing work: real Redis locks and real Wolverine delivery
-  are what these handlers are built around, and neither is covered today.
 - A payment service, plus the endpoint and outbound publish that would let a booking actually be paid
   for end to end
 - Refunds and notifications for a paid booking voided by a relocation or cancellation
 - Optimistic concurrency on the Events aggregates via `_etag`
-- Integration tests against the Cosmos emulator for Events, as Bookings now has against SQLite
+- Integration tests against the Cosmos emulator for Events, as Bookings now has against real Postgres and Redis
 - Saga / process-manager work for the full booking flow in Wolverine
 - Exception-to-status mapping in Users, as Events and Bookings now have
 - A working `compose.yaml` covering every service
