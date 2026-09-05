@@ -273,9 +273,14 @@ green run more than it has earned, or before "fixing" one and making things wors
   `BookingDomain.TicketTests.Availability_ends_a_while_after_the_event_starts` for the entity,
   `BookingIntegration.Handlers.MakeBookingTests.Refuses_a_ticket_whose_event_is_past_the_sale_window`
   (using `Seed.LongPast`) for the SQL mirror, verified by mutation: replacing the repository's
-  `x.EventDate > DateTime.UtcNow.AddHours(-5)` clause with `true` turns the latter red. The SQL copy
-  still hardcodes `-5` rather than deriving it from `Ticket.SaleGracePeriod`, so the two can still
-  drift apart silently if one changes and not the other — that remains a real, deferred improvement.
+  `x.EventDate > saleWindowStart` clause with `true` turns the latter red. The grace period itself is
+  no longer duplicated — the repository computes its cutoff from `Ticket.SaleWindowStart(DateTime.UtcNow)`,
+  which is verified by a second mutation: widening `Ticket.SaleGracePeriod` to 4000 days turns the SQL
+  test red, which it would not have done while the query carried its own `-5`. What is still stated
+  twice is the *shape* of the predicate — status, event id and the date comparison — so adding a
+  condition to `Ticket.IsAvailableFor` still means editing `GetTicketsForBookingAsync` by hand. A query
+  cannot call into the domain, so closing that would take an `Expression<Func<Ticket, bool>>` on the
+  entity; not judged worth it yet.
 - `Mechanics/DomainEventAtomicityTests.The_handler_saves_through_the_requests_context` asserts scope
   identity via `context.ChangeTracker.Entries<Ticket>().Count() == 1` — a white-box proxy for "this is
   the same context the handler used." Switching the repository's read to `AsNoTracking` would fail this

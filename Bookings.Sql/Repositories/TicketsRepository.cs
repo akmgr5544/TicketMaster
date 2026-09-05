@@ -19,10 +19,12 @@ internal class TicketsRepository : ITicketsRepository
     public async ValueTask<Ticket[]> GetTicketsForBookingAsync(ImmutableArray<long> ticketIds,
         string eventId,
         CancellationToken cancellationToken)
-    {
-        var tickets = _context.Tickets.Where(x => ticketIds.Contains(x.Id) && 
+    { 
+        var saleWindowStart = Ticket.SaleWindowStart(DateTime.UtcNow);
+
+        var tickets = _context.Tickets.Where(x => ticketIds.Contains(x.Id) &&
                                                   x.EventId == eventId &&
-                                                  x.EventDate > DateTime.UtcNow.AddHours(-5) &&
+                                                  x.EventDate > saleWindowStart &&
                                                   x.Status == TicketStatus.None);
         return await tickets.ToArrayAsync(cancellationToken);
     }
