@@ -13,7 +13,7 @@ listed honestly under [Known gaps](#-known-gaps) rather than left for you to dis
 | Language / runtime | C# 14, .NET 10 (`net10.0`, stable SDK — see `global.json`) |
 | Architecture | Clean Architecture + DDD (Bookings, Events), vertical slice (Users) |
 | CQRS | MediatR — commands, handlers, pipeline behaviors |
-| Messaging | WolverineFx over RabbitMQ (outbox storage configured in Bookings, not yet enrolled — see [Known gaps](#-known-gaps)) |
+| Messaging | WolverineFx over RabbitMQ (Postgres-backed durable inbox/outbox in Bookings; Events has none — see [Known gaps](#-known-gaps)) |
 | Relational store | PostgreSQL via EF Core (Bookings, Users) |
 | Document store | Azure Cosmos DB, NoSQL API (Events) |
 | Caching / locking | Redis via StackExchange.Redis + Medallion.Threading.Redis |
@@ -184,9 +184,9 @@ newer one. Reconciling a relocation can create tickets, so that handler addition
 messages as a whole — a seat that does not exist yet has no version to compare against.
 
 **Transactional outbox storage (Bookings).** `PersistMessagesWithPostgresql` plus
-`UseEntityFrameworkCoreTransactions` puts the message store alongside the state it describes. Note
-that only `UseDurableLocalQueues()` is applied today, which covers in-process queues rather than the
-RabbitMQ endpoints — so the guarantee is not yet in force. See [Known gaps](#-known-gaps).
+`UseEntityFrameworkCoreTransactions` puts the message store alongside the state it describes, and all
+three durability policies are applied, so the broker endpoints are enrolled rather than just the
+in-process queues. No test observes it — see [Known gaps](#-known-gaps).
 
 **Persistence-ignorant domain (Events).** `Events.Domain` has *zero* package and project
 references — no driver types, no DI abstractions — enforced by architecture tests. Entity ids are
@@ -301,10 +301,11 @@ Being explicit about what is not finished:
   are a hand-rolled outbox document with a publisher loop, or a Postgres purely for messaging. Every
   publish funnels through `IIntegrationEventPublisher`, so it is a change in one place.
   Highest-value fix.
-- **Bookings' outbox is configured but not enrolled.** The Postgres message store and EF transaction
-  integration are wired up, but only `Policies.UseDurableLocalQueues()` is applied — which covers
-  in-process queues, not the RabbitMQ endpoints. `UseDurableInboxOnAllListeners()` /
-  `UseDurableOutboxOnAllSendingEndpoints()` are what would make the guarantee real.
+- **Bookings' inbox/outbox enrolment is unverified.** All three durability policies are applied now,
+  so RabbitMQ listeners are durable rather than just the in-process queues — but nothing tests it.
+  The `BookingIntegration` fixture deliberately never calls `ConfigureRabbitMq`, so proving it needs a
+  second fixture with a RabbitMQ container that boots the real host and asserts the listeners came up
+  in durable mode. The outbox half is inert either way until something in Bookings publishes.
 - **`Events.Application.Pipelines.TransactionBehavior` is a no-op**, and documented as one. Under
   Cosmos there is no honest implementation available: atomicity is confined to a single logical
   partition, and with `/id` partition keys no two documents ever share one.

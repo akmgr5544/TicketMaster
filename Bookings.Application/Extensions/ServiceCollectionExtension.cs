@@ -67,6 +67,16 @@ public static class ServiceCollectionExtension
             options.UseEntityFrameworkCoreTransactions();
             
             options.Policies.UseDurableLocalQueues();
+
+            // UseDurableLocalQueues covers in-process queues only, so without these the Postgres
+            // message store above is configured and unused for anything arriving from RabbitMQ.
+            // The inbox is what the six consumers already assume: persisted before handling, so a
+            // crash mid-handler redelivers instead of losing, and a redelivery is deduplicated.
+            options.Policies.UseDurableInboxOnAllListeners();
+
+            // Bookings publishes nothing today. Enrolled anyway so the first thing that does is
+            // durable by default rather than by remembering.
+            options.Policies.UseDurableOutboxOnAllSendingEndpoints();
         });
     }
 }

@@ -88,7 +88,7 @@ Each project has a marker interface (`IApiAssemblyMarker`, `IApplicationAssembly
 - **CQRS via MediatR**: commands live in `*.Application/Commands`, handlers in `CommandHandlers`.
 - **Transactional pipeline**: `Bookings.Sql/Pipelines/TransactionBehavior.cs` is registered as an open-generic `IPipelineBehavior<,>` so every MediatR request runs inside a DB transaction (commit on success, rollback + rethrow on exception).
 - **Domain event dispatch**: `Bookings.Sql/Interceptors/DomainEventPublisherInterceptor` is a `SaveChangesInterceptor` — domain events are published when the DbContext saves. Wired via `options.AddInterceptors(...)` in `AddInfrastructureServices`.
-- **Outbox / messaging**: `Bookings.Application.Extensions.ConfigureRabbitMq` sets up **WolverineFx** with RabbitMQ transport, Postgres-backed outbox (`PersistMessagesWithPostgresql`), EF Core transactions, and `UseDurableLocalQueues`. Uses conventional routing and auto-provisioning.
+- **Outbox / messaging**: `Bookings.Application.Extensions.ConfigureRabbitMq` sets up **WolverineFx** with RabbitMQ transport, Postgres-backed outbox (`PersistMessagesWithPostgresql`), EF Core transactions, and all three durability policies — `UseDurableLocalQueues`, `UseDurableInboxOnAllListeners` and `UseDurableOutboxOnAllSendingEndpoints`. Uses conventional routing and auto-provisioning.
 - **Caching / distributed locks**: Redis via `StackExchange.Redis` + `Medallion.Threading.Redis`. `ICacheService` (`Bookings.Application.Services`) is the abstraction; `IDistributedLockProvider` is registered for cross-instance coordination.
 - **Shared integration contracts**: `TicketMaster.Common/IntegrationEvents` — any message crossing service boundaries lives here so producers and consumers share the type.
 
