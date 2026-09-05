@@ -356,17 +356,16 @@ known list rather than the complete one.
   `MakeBookingCommand` queues any, and only over HTTP, so nothing hits this today.
 - `IRequestManager` has no implementation, so `IdentifiedCommandHandler` fails on first use — the
   idempotency mechanism is inert.
-- `EventsService.GetEventByIdAsync` throws `NotImplementedException`, which makes
-  `CreateTicketCommand` unusable regardless of its transaction marker.
+- `EventsService.GetEventByIdAsync` is a real gRPC call now, so `CreateTicketCommand` needs Events
+  reachable. It is deliberately not `ITransactionalRequest` — see the `rpc` skill.
 - `Booking` has no timestamp of any kind, so the list endpoint orders by key descending as a proxy
   for "newest first" and no response can report when a booking was made. Adding `CreatedAt` needs a
   migration.
 - The list endpoint returns a bare array, so a caller infers "there may be more" from receiving a full
   page. No total count and no cursor.
-- The gateway cannot actually populate `X-Identity-UserId` yet: its `AuthTransformProvider` appends
-  rather than replaces, `api/users/auth` does not exist in Users.Api, and every cluster address is
-  empty. Bookings reads the header correctly; nothing upstream sets it correctly. Calling Bookings
-  directly means supplying the header by hand.
+- The gateway sets `X-Identity-UserId` correctly now — the transform replaces rather than appends,
+  `api/users/auth` exists, and the cluster addresses are filled in — but nothing tests any of it.
+  Calling Bookings directly still means supplying the header by hand.
 - `UserId` is a `string` throughout Bookings while `Users.Api` keys users by `long`. Aligning them
   means a migration on `Bookings.UserId`.
 - Repositories use `AddAsync`/`AddRangeAsync` (`efcore` rule 1) and each expose their own

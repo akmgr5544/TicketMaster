@@ -288,12 +288,6 @@ green run more than it has earned, or before "fixing" one and making things wors
   test with no real defect behind it. Accepted as the cheapest way to observe a property that has no
   black-box signature.
 
-**Build noise:**
-- `BookingsFixture`'s `new PostgreSqlBuilder()` and `new RedisBuilder()` each raise a `CS0618`: both
-  parameterless constructors are obsolete in Testcontainers 4.14.0 in favour of an image-parameter
-  overload. Cosmetic — the fixture already passes the image via `.WithImage(...)` — but worth clearing
-  the next time either file is touched, since a real warning is easy to miss among two expected ones.
-
 **Latent, not observed today:**
 - Dependency injection cannot see through the `AddDbContext` options-factory lambda. If
   `DomainEventPublisherInterceptor` ever grows a dependency that itself needs `BookingDomainContext`,

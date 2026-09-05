@@ -359,20 +359,20 @@ Being explicit about what is not finished:
   The gateway requires only an *authenticated* caller for `/bookings-service/**`, so any logged-in
   user can create real, bookable seats. Enforcing it needs a role claim from Users.Api, propagation
   through `AuthTransformProvider`, and a check in `Bookings.Api`.
-- **`Events`' `NamingConventionTest` matches by suffix, not by pattern.** Reflected names carry the
-  generic arity suffix, so a generic handler reports as ``IdentifiedCommandHandler`2`` and slips the
-  check. It passes today only because Events has no generic handlers. The Bookings copy had the same
-  trap plus a rule it never called `Check(Architecture)` on; both are fixed there.
+- **The Bookings → Events gRPC seam is unexercised on the wire.** `EventsLookupService` and
+  `DomainExceptionInterceptor` have no tests, and `Tests/Events/EventsApi` covers only the HTTP
+  exception handler. Both ends compile against the same generated contract and the caller is covered
+  with a stub, but nothing has ever made the call. The exception → status → exception round trip is
+  the part written by hand on both ends, and it degrades quietly to "everything is Internal".
 
 ## 🗺️ Roadmap
 
-- A durable outbox for Events, and full inbox/outbox enrolment in Bookings, so catalogue changes
-  cannot be silently lost
+- A durable outbox for Events, so catalogue changes cannot be silently lost (Bookings' enrolment is
+  done; Events is the remaining half)
 - A payment service, plus the endpoint and outbound publish that would let a booking actually be paid
   for end to end
 - Refunds and notifications for a paid booking voided by a relocation or cancellation
 - Optimistic concurrency on the Events aggregates via `_etag`
 - Integration tests against the Cosmos emulator for Events, as Bookings now has against real Postgres and Redis
 - Saga / process-manager work for the full booking flow in Wolverine
-- Exception-to-status mapping in Users, as Events and Bookings now have
 - A working `compose.yaml` covering every service
