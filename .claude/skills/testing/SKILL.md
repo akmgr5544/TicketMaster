@@ -30,8 +30,8 @@ Tests/Bookings/
   BookingIntegration/     every handler group, on containers
     Fixtures/             the fixture, the collection, the base class, seed helpers
     Mechanics/            EF, DI and transaction behavior
-    Handlers/             one file per handler area (ReserveTicket, MakeBooking, EventSync,
-                           Payments, CustomerBookings)
+    Handlers/             one file per handler area (ReserveTicket, MakeBooking, CreateTicket,
+                           EventSync, Payments, CustomerBookings)
   BookingApi/             exception-to-status mapping
   BookingArchitecture/    ArchUnit rules
 
@@ -187,9 +187,12 @@ If you find yourself adding a fake for `ICacheService`, `IDistributedLockProvide
 the signal to use the fixture instead — hand-written fakes for these are a regression, not a
 shortcut.
 
-`IEventsService` is different — it is an outbound HTTP client to another service, and stubbing it is
-correct. It currently throws `NotImplementedException`, which is why `CreateTicketCommand` has no
-coverage.
+`IEventsService` is the exception — it is a gRPC client to another process, and stubbing it is
+correct, because running it for real would test Events rather than Bookings. `StubEventsService` in
+`Fixtures/` is that stub; the fixture registers it *after* `AddApplicationServices`, so the
+production wiring including the `AddGrpcClient` registration still runs as written and only the last
+hop is replaced. The fixture also has to supply `Services:Events:GrpcAddress`, which is never
+dialled. See the `rpc` skill.
 
 ## Unit tests
 
@@ -227,8 +230,6 @@ a paid booking refuses cancellation.
   command that is covered. Testing them would prove Wolverine works.
 - **The HTTP layer** — `BookingApi` covers exception-to-status mapping. There is no
   `WebApplicationFactory` suite and `Microsoft.AspNetCore.Mvc.Testing` is not referenced.
-- **`CreateTicketCommandHandler`** — blocked on `IEventsService.GetEventByIdAsync` throwing
-  `NotImplementedException`.
 - **`IdentifiedCommandHandler`** — inert; `IRequestManager` has no implementation.
 
 ## Known gaps
@@ -273,9 +274,14 @@ green run more than it has earned, or before "fixing" one and making things wors
   `BookingDomain.TicketTests.Availability_ends_a_while_after_the_event_starts` for the entity,
   `BookingIntegration.Handlers.MakeBookingTests.Refuses_a_ticket_whose_event_is_past_the_sale_window`
   (using `Seed.LongPast`) for the SQL mirror, verified by mutation: replacing the repository's
-  `x.EventDate > DateTime.UtcNow.AddHours(-5)` clause with `true` turns the latter red. The SQL copy
-  still hardcodes `-5` rather than deriving it from `Ticket.SaleGracePeriod`, so the two can still
-  drift apart silently if one changes and not the other — that remains a real, deferred improvement.
+  `x.EventDate > saleWindowStart` clause with `true` turns the latter red. The grace period itself is
+  no longer duplicated — the repository computes its cutoff from `Ticket.SaleWindowStart(DateTime.UtcNow)`,
+  which is verified by a second mutation: widening `Ticket.SaleGracePeriod` to 4000 days turns the SQL
+  test red, which it would not have done while the query carried its own `-5`. What is still stated
+  twice is the *shape* of the predicate — status, event id and the date comparison — so adding a
+  condition to `Ticket.IsAvailableFor` still means editing `GetTicketsForBookingAsync` by hand. A query
+  cannot call into the domain, so closing that would take an `Expression<Func<Ticket, bool>>` on the
+  entity; not judged worth it yet.
 - `Mechanics/DomainEventAtomicityTests.The_handler_saves_through_the_requests_context` asserts scope
   identity via `context.ChangeTracker.Entries<Ticket>().Count() == 1` — a white-box proxy for "this is
   the same context the handler used." Switching the repository's read to `AsNoTracking` would fail this

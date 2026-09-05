@@ -4,5 +4,6 @@ namespace Bookings.Application.Services.Interfaces;
 
 public interface IEventsService
 {
-    Task<EventDto> GetEventByIdAsync(string id, CancellationToken cancellationToken);
+    /// <summary>Null when the catalogue has no such event.</summary>
+    Task<EventDto?> GetEventByIdAsync(string id, CancellationToken cancellationToken);
 }

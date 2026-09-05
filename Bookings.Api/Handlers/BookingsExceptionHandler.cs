@@ -62,6 +62,10 @@ internal sealed class BookingsExceptionHandler : IExceptionHandler
         // Asked for something that isn't there.
         NotFoundException => (StatusCodes.Status404NotFound, "Not found"),
 
+        // A dependency could not answer. The request itself was fine, so this is retryable rather
+        // than wrong, and must not be dressed up as a conflict.
+        EventsUnavailableException => (StatusCodes.Status503ServiceUnavailable, "Service unavailable"),
+
         // The request is well formed and the model intact, but the world says no: the seat has gone,
         // the reservation lapsed, the booking is already settled.
         BookingsApplicationException => (StatusCodes.Status409Conflict, "Conflict"),

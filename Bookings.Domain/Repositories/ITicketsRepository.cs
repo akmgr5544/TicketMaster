@@ -27,6 +27,9 @@ public interface ITicketsRepository : IUnitOfWork
     ValueTask<Ticket[]> GetTicketsForReservationAsync(ImmutableArray<long> ticketIds,
         CancellationToken cancellationToken);
 
+    /// <summary>Covered means a ticket that is not cancelled, as in <c>ReconcileEventVenueCommandHandler</c>.</summary>
+    ValueTask<bool> SeatIsCoveredAsync(string eventId, string seat, CancellationToken cancellationToken);
+
     ValueTask AddTicketsAsync(Ticket[] ticket);
 
     ValueTask AddTicketAsync(Ticket ticket, CancellationToken cancellationToken);

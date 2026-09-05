@@ -35,6 +35,19 @@ public class BookingsExceptionHandlerTests
         return (handled, context.Response.StatusCode);
     }
 
+    /// <summary>
+    /// A dependency that could not answer is retryable, so it must not come back as a 409 through the
+    /// BookingsApplicationException arm it derives from.
+    /// </summary>
+    [Fact]
+    public async Task An_unreachable_dependency_becomes_503()
+    {
+        var (handled, status) = await HandleAsync(new EventsUnavailableException("Events is down."));
+
+        Assert.True(handled);
+        Assert.Equal(StatusCodes.Status503ServiceUnavailable, status);
+    }
+
     [Fact]
     public async Task Something_that_is_not_there_becomes_404()
     {

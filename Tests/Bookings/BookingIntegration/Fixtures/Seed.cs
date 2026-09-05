@@ -48,6 +48,27 @@ public sealed class Seed
         return tickets;
     }
 
+    /// <summary>Tickets that exist but are cancelled — what reconciliation treats as uncovered.</summary>
+    public async Task<Ticket[]> CancelledTicketsAsync(string eventId, params string[] seats)
+    {
+        await using var scope = _root.CreateAsyncScope();
+        var context = scope.ServiceProvider.GetRequiredService<BookingDomainContext>();
+
+        var tickets = seats
+            .Select(seat =>
+            {
+                var ticket = new Ticket(seat, $"venue-for-{eventId}", eventId, Soon);
+                ticket.Cancel(eventVersion: 1);
+                return ticket;
+            })
+            .ToArray();
+
+        context.Tickets.AddRange(tickets);
+        await context.SaveChangesAsync();
+
+        return tickets;
+    }
+
     public async Task<Booking> BookingAsync(string userId, params long[] ticketIds)
     {
         await using var scope = _root.CreateAsyncScope();

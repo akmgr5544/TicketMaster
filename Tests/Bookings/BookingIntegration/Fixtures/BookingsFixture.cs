@@ -1,4 +1,5 @@
 using Bookings.Application.Extensions;
+using Bookings.Application.Services.Interfaces;
 using Bookings.Domain.DomainEvents;
 using Bookings.Sql;
 using Bookings.Sql.Extensions;
@@ -40,7 +41,10 @@ public sealed class BookingsFixture : IAsyncLifetime
                 ["ConnectionStrings:DefaultConnection"] = _postgres.GetConnectionString(),
                 // allowAdmin is what lets ResetAsync issue FLUSHDB. Production never needs it, so it
                 // is added to the test connection string rather than to AddApplicationServices.
-                ["ConnectionStrings:Redis"] = $"{_redis.GetConnectionString()},allowAdmin=true"
+                ["ConnectionStrings:Redis"] = $"{_redis.GetConnectionString()},allowAdmin=true",
+                // Never dialled: IEventsService is stubbed below. Present because
+                // AddApplicationServices requires it, so the production wiring still runs as written.
+                ["Services:Events:GrpcAddress"] = "https://events.invalid"
             })
             .Build();
 
@@ -52,6 +56,11 @@ public sealed class BookingsFixture : IAsyncLifetime
         // is deliberately not called, which keeps Wolverine and RabbitMQ out without stubbing.
         services.AddInfrastructureServices(configuration);
         services.AddApplicationServices(configuration);
+
+        // Replaces the gRPC-backed EventsService registered by AddApplicationServices. Registered
+        // after it so this wins. See StubEventsService.
+        services.AddScoped<StubEventsService>();
+        services.AddScoped<IEventsService>(sp => sp.GetRequiredService<StubEventsService>());
 
         // Test-only observability hook: a second handler for BookingCreatedDomainEvent so mechanics
         // tests can assert on publish counts directly, without a hand-built IPublisher that would also

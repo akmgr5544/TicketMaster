@@ -64,6 +64,16 @@ public sealed class TransactionBehaviorRegistrationTests : IntegrationTest
     }
 
     /// <summary>
+    /// Creating a ticket asks Events before it writes. A transaction opened here would be held open
+    /// across that network call, so the command is deliberately not <c>ITransactionalRequest</c>.
+    /// </summary>
+    [Fact]
+    public void Leaves_the_admin_ticket_create_alone()
+    {
+        Assert.Empty(BehaviorsFor<CreateTicketCommand>());
+    }
+
+    /// <summary>
     /// Reserving only writes to Redis. Redis does not roll back with a database transaction, so
     /// wrapping it in one is misleading as well as wasteful.
     /// </summary>

@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package events.v1;
+
+option csharp_namespace = "TicketMaster.Common.Protos.Events.V1";
+
+// Synchronous reads other services cannot get from an integration event. Anything the catalogue
+// already announces belongs on the broker instead — see the `rpc` skill.
+service EventsLookup {
+  rpc GetEvent (GetEventRequest) returns (GetEventReply);
+}
+
+message GetEventRequest {
+  string event_id = 1;
+}
+
+// A missing event is a NOT_FOUND status, not an empty reply.
+message GetEventReply {
+  string id = 1;
+  Venue venue = 2;
+}
+
+message Venue {
+  string id = 1;
+  string name = 2;
+  repeated string seats = 3;
+}
