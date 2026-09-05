@@ -319,12 +319,11 @@ Being explicit about what is not finished:
   nothing publishes a payment request and no payment service consumes one, so a booking stays `Booked`
   indefinitely and its seats are never released unless the owner cancels it. Bookings has no outbound
   publishing at all today; it is purely a consumer.
-- **The gateway is unconfigured, and that is all that is left of it.** Every destination in
-  `YarpConfigurations/yarp.clusters.json` is an empty string and the `"UsersService"` client's
-  `BaseAddress` is `new Uri("")`, so nothing routes. The code around it works now: `api/users/auth`
-  exists in Users.Api, and `AuthTransformProvider` removes any client-supplied `X-Identity-*` header
-  before setting its own. Filling in four addresses is what stands between this and a system that
-  runs end to end.
+- **Nothing tests the gateway.** Its addresses are filled in and the users cluster is ungated — it
+  proxies to a service that validates its own tokens — so the system should run end to end on the
+  https launch profiles. But there is no gateway test project, so the routing, the introspection call
+  and the identity headers are all reasoned rather than observed. It is the only component in the
+  solution with no test of any kind.
 - **`Booking` has no timestamp.** The list endpoint orders by key descending as a proxy for "newest
   first" and no response can say when a booking was made. Adding `CreatedAt` needs a migration. The
   list also returns a bare array, so "is there more?" is inferred from receiving a full page.
@@ -359,8 +358,6 @@ Being explicit about what is not finished:
   The gateway requires only an *authenticated* caller for `/bookings-service/**`, so any logged-in
   user can create real, bookable seats. Enforcing it needs a role claim from Users.Api, propagation
   through `AuthTransformProvider`, and a check in `Bookings.Api`.
-- **`Bookings.Sql` still exposes `IMongoAssemblyMarker`**, a leftover name from before it was
-  Postgres. Harmless, but confusing.
 - **`Events`' `NamingConventionTest` matches by suffix, not by pattern.** Reflected names carry the
   generic arity suffix, so a generic handler reports as ``IdentifiedCommandHandler`2`` and slips the
   check. It passes today only because Events has no generic handlers. The Bookings copy had the same

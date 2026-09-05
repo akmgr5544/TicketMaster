@@ -79,7 +79,7 @@ Four .NET services plus a shared kernel, wired together at runtime by a YARP API
 - `*.Sql` / `*.Cosmos` — infrastructure: `DbContext` or `EventsCosmosContext`, entity/document mapping, repository implementations, MediatR pipeline behaviors, DI wiring (`AddInfrastructureServices`, plus `ApplyMigrationsAsync` for Bookings and `EnsureContainersAsync` for Events).
 - `*.Api` — ASP.NET Core host; `Program.cs` calls `AddInfrastructureServices` then `AddApplicationServices`.
 
-Each project has a marker interface (`IApiAssemblyMarker`, `IApplicationAssemblyMarker`, `IDomainAssemblyMarker`, and `ICosmosAssemblyMarker` in Events.Cosmos — note Bookings.Sql still uses the name `IMongoAssemblyMarker` for historical reasons, despite being Postgres). Architecture tests load assemblies via these markers.
+Each project has a marker interface (`IApiAssemblyMarker`, `IApplicationAssemblyMarker`, `IDomainAssemblyMarker`, `ISqlAssemblyMarker` in Bookings.Sql and `ICosmosAssemblyMarker` in Events.Cosmos). Architecture tests load assemblies via these markers.
 
 **Users.Api** is a single-project **vertical slice** design (feature folders under `Features/Users/{Authenticate,RefreshToken,Register}`), not the layered layout above. It is the JWT issuer for the system.
 

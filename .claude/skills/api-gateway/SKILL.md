@@ -173,7 +173,8 @@ Test projects are grouped by service under `Tests/<Service>/`, so gateway tests 
 | App fails at startup naming a route | `ClusterId` doesn't match a cluster key |
 | Unhandled error on one route, not a clean 401 | `AuthorizationPolicy` name has no matching `AddPolicy` |
 | Gateway looks fine, service returns 404 | Missing `PathPattern` transform — prefix forwarded intact |
-| 503 at request time | Cluster `Address` is empty or unreachable |
+| 503 at request time | Cluster `Address` is unreachable |
+| 401 on login or registration | The anonymous routes below were removed or lost precedence |
 | Downstream sees the wrong user | Identity header appended instead of replaced (rule 3) |
 | Client cannot log in | Public route missing or carrying an `AuthorizationPolicy` (rule 2) |
 
@@ -188,10 +189,48 @@ what exists.
   `MapReverseProxy()`. `WebApplication` auto-inserts both when the services are registered, so this
   works today, but the YARP docs specify them explicitly and relying on the implicit insertion
   makes middleware ordering invisible.
-- `AuthTransformProvider` appends identity headers instead of replacing them (violates rule 3).
-- `api/users/auth` does not exist in Users.Api, and Users.Api never maps its `IEndpointMarker`
-  endpoints at all.
-- The token is interpolated into a query string, unencoded and including the `Bearer ` prefix.
-- All three cluster `Address` values and the `UsersService` `BaseAddress` are empty.
-- No permission model yet — `GatewayAuthPolicy` is `RequireAuthenticatedUser()` only.
+- No permission model yet — `GatewayAuthPolicy` is `RequireAuthenticatedUser()` only, so any
+  authenticated caller reaches every proxied endpoint, including `POST /bookings-service/api/tickets`,
+  which is meant for admins.
+- Nothing verifies the routing. There is no gateway test project, so the anonymous-route precedence
+  below is reasoned from YARP's matching rules, not observed.
 - No caching of introspection results: every proxied request costs an extra call to Users.Api.
+
+## Who enforces authentication, per cluster
+
+One route per service, no endpoint ever named in gateway config. Which cluster carries
+`GatewayAuthPolicy` follows from whether the service behind it can defend itself.
+
+| Cluster | Gateway policy | Why |
+|---|---|---|
+| `users-cluster` | **none** | Users.Api validates JWTs itself and each endpoint declares its own requirement — only `api/users/auth` has `.RequireAuthorization()` |
+| `bookings-cluster` | `GatewayAuthPolicy` | Bookings never validates a token; it trusts `X-Identity-UserId` |
+| `events-cluster` | `GatewayAuthPolicy` | same |
+
+**Do not put `GatewayAuthPolicy` on the users route.** It would cover `api/users/login`,
+`api/users/registration` and `api/users/refreshToken` — every way of obtaining a token — so a caller
+would need a token to get one and nothing behind the gateway would ever be reachable.
+
+The fix is *not* to enumerate the public paths as their own anonymous routes. That makes gateway
+config track every endpoint the service has, and it duplicates a decision Users.Api already makes per
+endpoint. Leave the cluster ungated and let the service decide; a new protected endpoint there gets
+its protection from `.RequireAuthorization()`, where the rest of its rules already live.
+
+That reasoning does **not** transfer to Bookings or Events. Neither validates a token, so removing
+their policy would leave them open — the asymmetry is about which services can defend themselves, not
+a general preference.
+
+## Addresses
+
+Destinations point at the services' **https** ports, because all three call `UseHttpsRedirection()`
+and would answer a plain-http proxy request with a 307. Run every service on its `https` launch
+profile; Events additionally requires it, since its gRPC endpoint needs HTTP/2 over ALPN.
+
+| Cluster | Address |
+|---|---|
+| `users-cluster` | `https://localhost:7054` |
+| `bookings-cluster` | `https://localhost:7225` |
+| `events-cluster` | `https://localhost:7158` |
+
+The `UsersService` client's base address is `Services:Users:BaseAddress` in the gateway's
+`appsettings.json`, not a literal in `Program.cs`, and startup fails loudly if it is missing.

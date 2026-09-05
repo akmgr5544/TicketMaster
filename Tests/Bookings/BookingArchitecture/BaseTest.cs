@@ -14,7 +14,7 @@ public abstract class BaseTest
     protected static readonly Assembly ApiAssembly = typeof(IApiAssemblyMarker).Assembly;
     protected static readonly Assembly ApplicationAssembly = typeof(IApplicationAssemblyMarker).Assembly;
     protected static readonly Assembly DomainAssembly = typeof(IDomainAssemblyMarker).GetTypeInfo().Assembly;
-    protected static readonly Assembly SqlAssembly = typeof(IMongoAssemblyMarker).Assembly;
+    protected static readonly Assembly SqlAssembly = typeof(ISqlAssemblyMarker).Assembly;
 
     protected static readonly Architecture Architecture = new ArchLoader()
         .LoadAssemblies(ApiAssembly,

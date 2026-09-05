@@ -52,7 +52,7 @@ Read `CLAUDE.md` for build and test commands before you start.
   is not; those are load-bearing and several are the only record of a bug that was fixed.
 - **Some "unused" code is deliberately reachable from elsewhere.** Check before removing:
   marker interfaces (`IApiAssemblyMarker`, `IDomainAssemblyMarker`, `ICosmosAssemblyMarker`,
-  `IMongoAssemblyMarker`) are loaded by architecture tests via reflection; Wolverine `Consume` methods
+  `ISqlAssemblyMarker`) are loaded by architecture tests via reflection; Wolverine `Consume` methods
   are discovered by convention and have no compile-time caller; MediatR handlers are resolved from the
   container; EF entity constructors and private setters are used by the materializer; controller
   actions are reached by routing.

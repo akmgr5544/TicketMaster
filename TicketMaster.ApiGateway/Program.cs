@@ -4,9 +4,13 @@ using TicketMaster.ApiGateway.Transforms;
 
 var builder = WebApplication.CreateBuilder(args);
 
+var usersServiceAddress = builder.Configuration["Services:Users:BaseAddress"]
+                          ?? throw new InvalidOperationException(
+                              "'Services:Users:BaseAddress' is not configured.");
+
 builder.Services.AddHttpClient("UsersService", config =>
 {
-    config.BaseAddress = new Uri("");
+    config.BaseAddress = new Uri(usersServiceAddress);
 });
 
 builder.Services.AddAuthentication("UserServiceScheme")
