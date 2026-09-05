@@ -7,6 +7,13 @@
 
     <ItemGroup>
       <PackageReference Include="DistributedLock.Redis" />
+      <!-- Grpc.AspNetCore brings this on the server side; Grpc.Net.ClientFactory does not, and the
+           generated message types need it. -->
+      <PackageReference Include="Google.Protobuf" />
+      <PackageReference Include="Grpc.Net.ClientFactory" />
+      <PackageReference Include="Grpc.Tools">
+        <PrivateAssets>all</PrivateAssets>
+      </PackageReference>
       <PackageReference Include="MediatR" />
       <PackageReference Include="Microsoft.Extensions.Caching.StackExchangeRedis" />
       <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
@@ -20,6 +27,13 @@
     <ItemGroup>
       <ProjectReference Include="..\Bookings.Sql\Bookings.Sql.csproj" />
       <ProjectReference Include="..\TicketMaster.Common\TicketMaster.Common.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <!-- Client half only: Bookings calls this contract, it does not implement it. -->
+      <Protobuf Include="..\TicketMaster.Common\Protos\events.proto"
+                ProtoRoot="..\TicketMaster.Common\Protos"
+                GrpcServices="Client" />
     </ItemGroup>
 
     <ItemGroup>

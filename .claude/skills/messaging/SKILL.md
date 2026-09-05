@@ -23,6 +23,8 @@ and the Events skill), so rule 4 does not hold in practice today.
 live in their own sections, so replacing either changes those sections rather than the rules.
 
 **Load alongside:** `efcore` when the outbox shares a transaction with a `DbContext`.
+`rpc` when deciding whether a cross-service interaction should be a message at all — it holds the
+rule, and the short version is that a message is the default and an RPC is the exception.
 For broker-level concepts — exchange types, bindings, dead lettering, quorum queues, acks,
 prefetch — read `rabbitmq-reference.md` in this skill directory.
 

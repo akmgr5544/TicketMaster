@@ -30,8 +30,8 @@ Tests/Bookings/
   BookingIntegration/     every handler group, on containers
     Fixtures/             the fixture, the collection, the base class, seed helpers
     Mechanics/            EF, DI and transaction behavior
-    Handlers/             one file per handler area (ReserveTicket, MakeBooking, EventSync,
-                           Payments, CustomerBookings)
+    Handlers/             one file per handler area (ReserveTicket, MakeBooking, CreateTicket,
+                           EventSync, Payments, CustomerBookings)
   BookingApi/             exception-to-status mapping
   BookingArchitecture/    ArchUnit rules
 
@@ -187,9 +187,12 @@ If you find yourself adding a fake for `ICacheService`, `IDistributedLockProvide
 the signal to use the fixture instead — hand-written fakes for these are a regression, not a
 shortcut.
 
-`IEventsService` is different — it is an outbound HTTP client to another service, and stubbing it is
-correct. It currently throws `NotImplementedException`, which is why `CreateTicketCommand` has no
-coverage.
+`IEventsService` is the exception — it is a gRPC client to another process, and stubbing it is
+correct, because running it for real would test Events rather than Bookings. `StubEventsService` in
+`Fixtures/` is that stub; the fixture registers it *after* `AddApplicationServices`, so the
+production wiring including the `AddGrpcClient` registration still runs as written and only the last
+hop is replaced. The fixture also has to supply `Services:Events:GrpcAddress`, which is never
+dialled. See the `rpc` skill.
 
 ## Unit tests
 
@@ -227,8 +230,6 @@ a paid booking refuses cancellation.
   command that is covered. Testing them would prove Wolverine works.
 - **The HTTP layer** — `BookingApi` covers exception-to-status mapping. There is no
   `WebApplicationFactory` suite and `Microsoft.AspNetCore.Mvc.Testing` is not referenced.
-- **`CreateTicketCommandHandler`** — blocked on `IEventsService.GetEventByIdAsync` throwing
-  `NotImplementedException`.
 - **`IdentifiedCommandHandler`** — inert; `IRequestManager` has no implementation.
 
 ## Known gaps

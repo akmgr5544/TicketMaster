@@ -58,6 +58,17 @@ internal class TicketsRepository : ITicketsRepository
             .ToArrayAsync(cancellationToken);
     }
 
+    public async ValueTask<bool> SeatIsCoveredAsync(string eventId,
+        string seat,
+        CancellationToken cancellationToken)
+    {
+        return await _context.Tickets
+            .AnyAsync(x => x.EventId == eventId
+                           && x.Seat == seat
+                           && x.Status != TicketStatus.Cancelled,
+                cancellationToken);
+    }
+
     public async ValueTask AddTicketAsync(Ticket ticket, CancellationToken cancellationToken)
     {
         await _context.Tickets.AddAsync(ticket, cancellationToken);

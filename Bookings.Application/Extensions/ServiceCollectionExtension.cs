@@ -6,6 +6,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using StackExchange.Redis;
+using TicketMaster.Common.Protos.Events.V1;
 using Wolverine;
 using Wolverine.EntityFrameworkCore;
 using Wolverine.Postgresql;
@@ -37,9 +38,13 @@ public static class ServiceCollectionExtension
 
         services.AddScoped<ICacheService, CacheService>();
 
-        // CreateTicketCommandHandler depends on this; without the registration the container fails
-        // validation at startup. The implementation is still a stub that throws when called.
+        var eventsAddress = configuration["Services:Events:GrpcAddress"]
+                            ?? throw new InvalidOperationException(
+                                "'Services:Events:GrpcAddress' is not configured.");
+
+        services.AddGrpcClient<EventsLookup.EventsLookupClient>(o => o.Address = new Uri(eventsAddress));
         services.AddScoped<IEventsService, EventsService>();
+
         services.AddMediatR(cf =>
             cf.RegisterServicesFromAssembly(typeof(ServiceCollectionExtension).Assembly));
         return services;

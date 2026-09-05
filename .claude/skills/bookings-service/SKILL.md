@@ -239,10 +239,23 @@ there, not here.
     override is a deadlock waiting for the right synchronization context. Bookings dispatches on
     async saves only, and the sync override throws rather than silently dropping the event.
 
+## Known gap: the admin create endpoint is not restricted
+
+`POST /api/tickets` is meant for admins repairing inventory, and nothing enforces that.
+`TicketsController.CreateTicketAsync` has no `[Authorize]`, no role and no policy, and unlike
+`ReserveTicketAsync` it does not read the identity header at all. There is no role or policy usage
+anywhere in `Bookings.Api`. The gateway's `GatewayAuthPolicy` requires only an *authenticated* user
+for `/bookings-service/**`, so any logged-in caller can create tickets — real seats, which then
+become bookable inventory.
+
+Closing it is not a one-project change: the gateway propagates only `X-Identity-UserId` and
+`X-Identity-UserName`, so no role reaches Bookings. It needs a role claim issued by Users.Api,
+propagated by `AuthTransformProvider`, and enforced here. Deferred deliberately, not overlooked.
+
 ## The HTTP surface
 
 ```
-POST   /api/tickets                     create a ticket (needs IEventsService, still a stub)
+POST   /api/tickets                     admin repair: create one seat, validated against Events
 POST   /api/tickets/reserve             hold seats, 5 minute TTL
 
 POST   /api/bookings                    201 + { id }

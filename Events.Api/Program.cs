@@ -1,4 +1,5 @@
 using Events.Api.Handlers;
+using Events.Api.Rpc;
 using Events.Application.Extensions;
 using Events.Cosmos.Extensions;
 
@@ -17,6 +18,10 @@ builder.Services.AddApplicationServices();
 
 builder.Services.AddControllers();
 
+// Needs an HTTP/2 endpoint. Run the https profile, where ALPN lets these calls share a port with the
+// controllers. The plain http profile is HTTP/1.1 only and cannot serve them.
+builder.Services.AddGrpc(options => options.Interceptors.Add<DomainExceptionInterceptor>());
+
 builder.Host.ConfigureRabbitMq();
 
 var app = builder.Build();
@@ -34,5 +39,6 @@ await app.EnsureContainersAsync();
 app.UseHttpsRedirection();
 
 app.MapControllers();
+app.MapGrpcService<EventsLookupService>();
 
 await app.RunAsync();

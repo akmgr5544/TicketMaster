@@ -125,7 +125,7 @@ Each project has a marker interface (`IApiAssemblyMarker`, `IApplicationAssembly
   `Events.Application.csproj`).
 - Test-only package versions live in `Tests/Directory.Packages.props` (xUnit, Microsoft.NET.Test.Sdk, ArchUnitNET, coverlet, Testcontainers.PostgreSql, Testcontainers.Redis, Respawn). It imports the root `Directory.Packages.props` first, so all versions stay centrally managed.
 - **Bookings' handler tests all run against real Postgres and Redis now.** `BookingIntegration` covers
-  the Postgres/EF mechanics and every handler group — ReserveTicket, MakeBooking, EventSync, Payments
+  the Postgres/EF mechanics and every handler group — ReserveTicket, MakeBooking, CreateTicket, EventSync, Payments
   and CustomerBookings. The old fake-based `BookingApplication` project and its `Fakes/` folder are
   gone; there is no hand-written fake for a Bookings handler dependency anywhere in the solution. See
   the `testing` skill's "Known gaps" section for what remains open in the current suite.
