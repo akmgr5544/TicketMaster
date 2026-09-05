@@ -27,6 +27,13 @@ public interface ITicketsRepository : IUnitOfWork
     ValueTask<Ticket[]> GetTicketsForReservationAsync(ImmutableArray<long> ticketIds,
         CancellationToken cancellationToken);
 
+    /// <summary>
+    /// How far this event's tickets have been brought in line with the catalogue, or 0 when there are
+    /// none. A new ticket has to start here, not at 0: one sitting below its siblings would accept a
+    /// stale change they reject, and the event would end up half-applied.
+    /// </summary>
+    ValueTask<long> GetAppliedVersionForEventAsync(string eventId, CancellationToken cancellationToken);
+
     /// <summary>Covered means a ticket that is not cancelled, as in <c>ReconcileEventVenueCommandHandler</c>.</summary>
     ValueTask<bool> SeatIsCoveredAsync(string eventId, string seat, CancellationToken cancellationToken);
 

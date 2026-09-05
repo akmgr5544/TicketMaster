@@ -17,6 +17,7 @@ listed honestly under [Known gaps](#-known-gaps) rather than left for you to dis
 | Relational store | PostgreSQL via EF Core (Bookings, Users) |
 | Document store | Azure Cosmos DB, NoSQL API (Events) |
 | Caching / locking | Redis via StackExchange.Redis + Medallion.Threading.Redis |
+| Service-to-service | gRPC over HTTP/2 with Protobuf (Bookings → Events), alongside RabbitMQ |
 | Edge | YARP reverse proxy with a custom authentication scheme |
 | Testing | xUnit + ArchUnitNET, plus Testcontainers (Postgres + Redis) for the Bookings integration suite |
 
@@ -82,7 +83,7 @@ POST   /api/events/{id}/cancel        # idempotent; no DELETE exists
 Bookings exposes the checkout, with every action scoped to the caller the gateway resolved:
 
 ```
-POST   /api/tickets                     # create a ticket — unusable, see Known gaps
+POST   /api/tickets                     # admin repair: one seat, validated against Events over gRPC
 POST   /api/tickets/reserve             # hold seats for 5 minutes
 POST   /api/bookings                    # 201 + { id }
 GET    /api/bookings/{id}               # the caller's own; somebody else's is a 404
@@ -317,10 +318,12 @@ Being explicit about what is not finished:
   nothing publishes a payment request and no payment service consumes one, so a booking stays `Booked`
   indefinitely and its seats are never released unless the owner cancels it. Bookings has no outbound
   publishing at all today; it is purely a consumer.
-- **The gateway cannot populate `X-Identity-UserId` yet.** Bookings reads it and refuses without it,
-  but `AuthTransformProvider` appends rather than replaces, `api/users/auth` does not exist in
-  Users.Api, and every cluster address is empty. Calling Bookings directly means setting the header by
-  hand.
+- **The gateway is unconfigured, and that is all that is left of it.** Every destination in
+  `YarpConfigurations/yarp.clusters.json` is an empty string and the `"UsersService"` client's
+  `BaseAddress` is `new Uri("")`, so nothing routes. The code around it works now: `api/users/auth`
+  exists in Users.Api, and `AuthTransformProvider` removes any client-supplied `X-Identity-*` header
+  before setting its own. Filling in four addresses is what stands between this and a system that
+  runs end to end.
 - **`Booking` has no timestamp.** The list endpoint orders by key descending as a proxy for "newest
   first" and no response can say when a booking was made. Adding `CreatedAt` needs a migration. The
   list also returns a bare array, so "is there more?" is inferred from receiving a full page.
@@ -340,21 +343,21 @@ Being explicit about what is not finished:
   repositories are verified by the compiler and by unit-tested serialization, not by execution. The
   cross-partition queries added for the delete guards — an `EXISTS` subquery over `c.performers` and a
   count over `c.venue.id` — have had their shape reviewed and nothing more.
-- **Gateway destination addresses are empty strings** in `YarpConfigurations/yarp.clusters.json`,
-  and the `"UsersService"` client's `BaseAddress` is unset. Fill both in before running the gateway.
 - **`compose.yaml` is stale** — service paths such as `BookingApi/Dockerfile` no longer match the
   project layout. Only the `cosmos` service is currently usable.
 - **Users still surfaces unhandled failures as bare 500s.** Events and Bookings both map exceptions
   to status codes at the edge; Users, which uses `Result<T>` rather than exceptions, has no equivalent
   translation for what escapes it.
-- **The sale-window rule lives in two places.** `Ticket.IsAvailableFor` expresses it in the domain
-  and `TicketsRepository.GetTicketsForBookingAsync` mirrors it in SQL, because a query cannot call into
-  the domain. The SQL copy hardcodes `AddHours(-5)` rather than deriving from `Ticket.SaleGracePeriod`,
-  so changing the constant silently changes only half the rule. Both halves are now covered by tests,
-  which makes deriving the cutoff a safe change — it just has not been made.
-- **`POST /api/tickets` cannot succeed.** `CreateTicketCommandHandler` depends on
-  `IEventsService.GetEventByIdAsync`, which throws `NotImplementedException`, so the endpoint answers
-  500. Tickets reach Bookings through `EventCreated` instead; this endpoint predates that path.
+- **The sale-window rule is still written twice**, because a query cannot call into the domain:
+  `Ticket.IsAvailableFor` in the entity and a mirror in `TicketsRepository.GetTicketsForBookingAsync`.
+  The grace period itself is no longer duplicated — the query derives its cutoff from
+  `Ticket.SaleWindowStart` — but the *shape* of the predicate is, so adding a condition means editing
+  both. Closing that would take an `Expression<Func<Ticket, bool>>` on the entity.
+- **`POST /api/tickets` is not restricted to admins.** It is the admin repair path, and nothing
+  enforces that: no `[Authorize]`, no role, no policy, and it does not read the identity header.
+  The gateway requires only an *authenticated* caller for `/bookings-service/**`, so any logged-in
+  user can create real, bookable seats. Enforcing it needs a role claim from Users.Api, propagation
+  through `AuthTransformProvider`, and a check in `Bookings.Api`.
 - **`Bookings.Sql` still exposes `IMongoAssemblyMarker`**, a leftover name from before it was
   Postgres. Harmless, but confusing.
 - **`Events`' `NamingConventionTest` matches by suffix, not by pattern.** Reflected names carry the

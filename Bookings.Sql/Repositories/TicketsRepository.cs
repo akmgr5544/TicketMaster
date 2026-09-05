@@ -58,6 +58,18 @@ internal class TicketsRepository : ITicketsRepository
             .ToArrayAsync(cancellationToken);
     }
 
+    public async ValueTask<long> GetAppliedVersionForEventAsync(string eventId,
+        CancellationToken cancellationToken)
+    {
+        // Nullable so an event with no tickets comes back as SQL NULL rather than throwing on an
+        // empty MAX.
+        var applied = await _context.Tickets
+            .Where(x => x.EventId == eventId)
+            .MaxAsync(x => (long?)x.EventVersion, cancellationToken);
+
+        return applied ?? 0;
+    }
+
     public async ValueTask<bool> SeatIsCoveredAsync(string eventId,
         string seat,
         CancellationToken cancellationToken)

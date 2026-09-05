@@ -21,7 +21,11 @@ internal class CreateTicketsBulkCommandHandler : IRequestHandler<CreateTicketsBu
         
         foreach (var seat in request.Seats)
         {
-            var ticket = new Ticket(seat, request.VenueId, request.EventId, request.EventDate);
+            var ticket = new Ticket(seat,
+                request.VenueId,
+                request.EventId,
+                request.EventDate,
+                request.Version);
             tickets.Add(ticket);
         }
         

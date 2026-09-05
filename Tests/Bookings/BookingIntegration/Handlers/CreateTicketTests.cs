@@ -58,6 +58,24 @@ public sealed class CreateTicketTests : IntegrationTest
         Assert.Equal(Venue, stored.VenueId);
     }
 
+    /// <summary>
+    /// Starting at 0 beside siblings at 5 would make the repaired seat the only one a redelivered
+    /// older change can still touch.
+    /// </summary>
+    [Fact]
+    public async Task Repairs_a_seat_at_the_version_its_siblings_are_at()
+    {
+        Catalogue.Knows(EventId, Venue, "A1", "A2");
+        await Seed.TicketsAsync(EventId, Seed.Soon, eventVersion: 5, "A1");
+
+        await Sender.Send(new CreateTicketCommand(EventId, Venue, "A2", Seed.Soon));
+
+        var stored = await ReadAsync(context => context.Tickets
+            .SingleAsync(t => t.EventId == EventId && t.Seat == "A2"));
+
+        Assert.Equal(5, stored.EventVersion);
+    }
+
     [Fact]
     public async Task Refuses_an_event_the_catalogue_does_not_have()
     {

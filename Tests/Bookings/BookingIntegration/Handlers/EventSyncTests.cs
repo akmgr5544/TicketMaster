@@ -1,4 +1,5 @@
 using Bookings.Application.Commands;
+using Bookings.Application.Commands.Tickets;
 using Bookings.Domain.Enums;
 using Bookings.Sql;
 using BookingIntegration.Fixtures;
@@ -219,6 +220,38 @@ public sealed class EventSyncTests : IntegrationTest
             .ToArrayAsync());
         Assert.Equal(2, stored.Length);
         Assert.All(stored, ticket => Assert.Equal(NewVenue, ticket.VenueId));
+    }
+
+    // --- Creation from the catalogue ---
+
+    [Fact]
+    public async Task Tickets_created_from_the_catalogue_carry_its_version()
+    {
+        await Sender.Send(new CreateTicketsBulkCommand(EventId, NewVenue, Seed.Soon, ["A1", "A2"], Version: 5));
+
+        var stored = await ReadAsync(context => context.Tickets
+            .Where(t => t.EventId == EventId)
+            .ToArrayAsync());
+
+        Assert.All(stored, ticket => Assert.Equal(5, ticket.EventVersion));
+    }
+
+    /// <summary>
+    /// Cancel and reschedule have no message-level guard, so a ticket created below the version its
+    /// event is actually at would accept a redelivered older change that every other ticket rejects,
+    /// leaving one event half-applied.
+    /// </summary>
+    [Fact]
+    public async Task A_stale_change_cannot_touch_tickets_just_created_from_the_catalogue()
+    {
+        var eventDate = Seed.Soon;
+        await Sender.Send(new CreateTicketsBulkCommand(EventId, NewVenue, eventDate, ["A1"], Version: 5));
+
+        await Sender.Send(new RescheduleEventTicketsCommand(EventId, 3, eventDate.AddDays(30)));
+
+        var stored = await ReadAsync(context => context.Tickets.SingleAsync(t => t.EventId == EventId));
+        Assert.Equal(eventDate, stored.EventDate);
+        Assert.Equal(5, stored.EventVersion);
     }
 
     private Task Reconcile(DateTime eventDate, long version, string[] seats) =>

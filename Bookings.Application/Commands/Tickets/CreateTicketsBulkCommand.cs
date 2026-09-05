@@ -7,4 +7,5 @@ public record CreateTicketsBulkCommand(
     string EventId,
     string VenueId,
     DateTime EventDate,
-    string[] Seats):IRequest, ITransactionalRequest;
+    string[] Seats,
+    long Version):IRequest, ITransactionalRequest;
