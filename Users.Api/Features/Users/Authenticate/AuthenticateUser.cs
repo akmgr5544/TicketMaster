@@ -35,12 +35,12 @@ public static class AuthenticateUser
             var user = await _dbContext.Users.FirstOrDefaultAsync(x => x.UserName == request.UserName,
                 cancellationToken);
             if (user == null)
-                return Result<Response>.Failure(new Error("User not found", ErrorType.BadRequest, ""));
+                return Result<Response>.Failure(new Error("Invalid credentials", ErrorType.Unauthorized, ""));
 
             if (_passwordHasher.VerifyHashedPassword(user, user.PasswordHash, request.Password) ==
                 PasswordVerificationResult.Failed)
             {
-                return Result<Response>.Failure(new Error("Wrong password", ErrorType.BadRequest, ""));
+                return Result<Response>.Failure(new Error("Invalid credentials", ErrorType.Unauthorized, ""));
             }
 
             var token = TokenService.CreateToken(user, _authOptions);
@@ -65,7 +65,7 @@ public sealed class LoginEndpoint : IEndpointMarker
         {
             var result = await sender.Send(request);
             if (!result.IsSuccess)
-                return Results.BadRequest(result.Error);
+                return result.Error!.ToProblem();
 
             return Results.Ok(result.Value);
         });

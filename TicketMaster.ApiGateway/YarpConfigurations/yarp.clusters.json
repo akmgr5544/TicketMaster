@@ -4,21 +4,21 @@
       "users-cluster": {
         "Destinations": {
           "destination1": {
-            "Address": ""
+            "Address": "https://localhost:7054"
           }
         }
       },
       "bookings-cluster": {
         "Destinations": {
           "destination1": {
-            "Address": ""
+            "Address": "https://localhost:7225"
           }
         }
       },
       "events-cluster": {
         "Destinations": {
           "destination1": {
-            "Address": ""
+            "Address": "https://localhost:7158"
           }
         }
       }

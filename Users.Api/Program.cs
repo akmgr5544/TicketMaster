@@ -12,6 +12,11 @@ var builder = WebApplication.CreateBuilder(args);
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
 
+// Without these an unhandled exception is a bare 500 with no body. Users throws nothing of its own —
+// it signals failure with Result<T> — so there is no domain mapping to add, only a floor under what
+// escapes.
+builder.Services.AddProblemDetails();
+
 var configuration = builder.Configuration;
 builder.Services.AddDbContext<UsersDomainContext>(options =>
 {
@@ -43,6 +48,8 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 builder.Services.AddAuthorization();
 
 var app = builder.Build();
+
+app.UseExceptionHandler();
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())

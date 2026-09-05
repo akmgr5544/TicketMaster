@@ -16,7 +16,11 @@ public class EventCreatedIntegrationEventHandler
 
     public async Task Consume(EventCreatedIntegrationEvent request, CancellationToken cancellationToken)
     {
-        var command = new CreateTicketsBulkCommand(request.EventId, request.VenueId, request.EventDate, request.Seats);
+        var command = new CreateTicketsBulkCommand(request.EventId,
+            request.VenueId,
+            request.EventDate,
+            request.Seats,
+            request.Version);
         await _mediator.Send(command, cancellationToken);
     }
 }

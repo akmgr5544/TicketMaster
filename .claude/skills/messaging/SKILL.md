@@ -16,7 +16,8 @@ Cross-cutting — every TicketMaster service that publishes or consumes across a
 Events publishes four contracts — `EventCreated`, `EventRescheduled`, `EventRelocated`,
 `EventCancelled` — all through `Events.Application/IntegrationEvents/IIntegrationEventPublisher`.
 Bookings consumes all four in `Bookings.Application/IntegrationEventHandlers`, translating each to a
-command in the `EventSync` slice. **Neither side has a working outbox** (see the Durability section
+command in the `EventSync` slice. **Events still has no outbox at all, and Bookings' is enrolled but
+unproven** (see the Durability section
 and the Events skill), so rule 4 does not hold in practice today.
 
 **The rules below are written for the pattern, not the library.** Wolverine and RabbitMQ specifics
@@ -97,6 +98,8 @@ hostBuilder.UseWolverine(options =>
     options.UseEntityFrameworkCoreTransactions();
 
     options.Policies.UseDurableLocalQueues();
+    options.Policies.UseDurableInboxOnAllListeners();
+    options.Policies.UseDurableOutboxOnAllSendingEndpoints();
 });
 ```
 
@@ -116,9 +119,14 @@ makes Wolverine look up a connection string named after the whole AMQP URI.
 | `.UseDurableInbox()` / `.UseDurableOutbox()` | One endpoint |
 
 The conventional-routing docs state that listener endpoints are created "without durable outbox
-enrollment." So `UseDurableLocalQueues()` alone leaves all RabbitMQ traffic non-durable — the
-guarantee in rule 4 does not hold until the inbox/outbox policies are applied to the broker
-endpoints.
+enrollment." `UseDurableLocalQueues()` alone therefore leaves all RabbitMQ traffic non-durable, which
+is what Bookings ran with until the inbox and outbox policies were added alongside it. All three are
+applied now, so rule 4 holds on the Bookings side.
+
+**Enrolment is compile-verified only.** The fixture in `BookingIntegration` deliberately never calls
+`ConfigureRabbitMq`, so no test starts a broker and observes an endpoint's durability. Proving it
+would take a second fixture with a RabbitMQ container that boots the real host and asserts the
+listeners came up in durable mode — worth doing, not done.
 
 ### Conventional routing
 

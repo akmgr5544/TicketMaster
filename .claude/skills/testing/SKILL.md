@@ -36,7 +36,7 @@ Tests/Bookings/
   BookingArchitecture/    ArchUnit rules
 
 Tests/Events/   EventsDomain  EventsApplication  EventsApi  EventsCosmos  EventsArchitecture
-Tests/Users/    UsersArchitecture
+Tests/Users/    UsersApi  UsersArchitecture
 ```
 
 There is no aggregating test project. Run them per project.

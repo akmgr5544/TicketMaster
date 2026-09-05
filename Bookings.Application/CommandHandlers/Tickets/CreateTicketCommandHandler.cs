@@ -43,7 +43,8 @@ internal class CreateTicketCommandHandler : IRequestHandler<CreateTicketCommand>
         var ticket = new Ticket(request.Seat,
             request.VenueId,
             request.EventId,
-            request.EventDate);
+            request.EventDate,
+            await _ticketsRepository.GetAppliedVersionForEventAsync(request.EventId, cancellationToken));
 
         await _ticketsRepository.AddTicketAsync(ticket, cancellationToken);
         await _ticketsRepository.SaveChangesAsync(cancellationToken);

@@ -74,9 +74,11 @@ Code shared by several features in one area sits one level up, at `Features/<Are
 4. **`Error` fields carry what their names say** — `Code` is a stable machine-readable identifier,
    `Message` is the human-readable text. Do not put the sentence in `Code` and leave `Message`
    empty.
-5. **`ErrorType` determines the status code.** `NotFound` → 404, `BadRequest` → 400,
-   `Unauthorized` → 401, `Forbidden` → 403. An endpoint that returns `BadRequest` for every failure
-   makes the enum decorative.
+5. **`ErrorType` determines the status code**, and `ErrorResults.ToProblem` in `Shared/` is the one
+   place that reads it: `NotFound` → 404, `BadRequest` → 400, `Unauthorized` → 401, `Forbidden` →
+   403, each as a `ProblemDetails` carrying the `Code` as a `code` extension. Endpoints call
+   `result.Error!.ToProblem()`; one returning `Results.BadRequest` directly makes the enum
+   decorative again. Covered by `Tests/Users/UsersApi`, verified by mutation.
 6. **Users.Api is the only JWT issuer.** No other service creates or signs tokens; no other service
    stores password hashes. Signing keys come from `AuthOptions` via configuration, never a literal.
 7. **A refresh token must outlive the access token it renews.** Equal lifetimes make refresh
@@ -117,13 +119,13 @@ Current code does not yet match the rules above.
   `value too long for type character varying(60)`.
 - `Program.cs` calls `AddDbContext` inline while `ServiceCollectionExtension.AddDatabase` sits
   unused and the call to it is commented out. Two sources of truth, one dead.
-- `Program.cs` calls `UseAuthentication()` but never `UseAuthorization()`.
 - Access token and refresh token both expire in 1 day (rule 7).
 - Refresh tokens are stored in plaintext (rule 8).
 - `UserRefreshToken.Command` takes `UserId` from the request body (rule 9).
 - `AuthenticateUser` ignores `SuccessRehashNeeded` (rule 10).
-- Every failure returns `BadRequest` regardless of `ErrorType` (rule 5), and `Error` is constructed
-  with the sentence in `Code` and `""` in `Message` (rule 4).
+- `Error` is still constructed with the sentence in `Code` and `""` in `Message` (rule 4).
+  `ErrorResults.ToProblem` compensates by falling back to `Code` for the problem detail, which keeps
+  responses readable but does not make rule 4 hold.
 - `Result` and `Result<T>` expose public setters, so a caller can flip `IsSuccess` after the fact.
 - `TokenService.CreateRefreshToken` accepts `User` and `AuthOptions` and uses neither.
 - `UsersDomainContext` takes the non-generic `DbContextOptions` (see `efcore` rule 14).
@@ -137,7 +139,7 @@ Current code does not yet match the rules above.
 |---|---|
 | Endpoint returns 404 though the feature exists | `MapEndpoint` never called — nothing maps discovered endpoints |
 | Registration fails on insert | `PasswordHash` column shorter than the 84-char hash |
-| Every error surfaces as 400 | `ErrorType` not mapped to status codes (rule 5) |
+| Every error surfaces as 400 | An endpoint returning `Results.BadRequest` instead of `ToProblem()` (rule 5) |
 | Client can't refresh after the access token dies | Refresh token has the same lifetime (rule 7) |
 | Gateway returns 401 for valid credentials | `api/users/auth` missing or its response shape changed |
 | Two features drift apart doing the same thing | Shared logic never promoted to the area or `Shared/` (rule 1) |

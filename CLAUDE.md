@@ -27,6 +27,7 @@ dotnet test Tests/Events/EventsDomain/EventsDomain.csproj            # Events do
 dotnet test Tests/Events/EventsApplication/EventsApplication.csproj  # handlers, with fake repositories
 dotnet test Tests/Events/EventsApi/EventsApi.csproj                  # exception-to-status mapping
 dotnet test Tests/Events/EventsCosmos/EventsCosmos.csproj            # Cosmos document serialization
+dotnet test Tests/Users/UsersApi/UsersApi.csproj                 # Error-to-status mapping
 dotnet test Tests/Users/UsersArchitecture/UsersArchitecture.csproj
 
 # Single test
@@ -79,7 +80,7 @@ Four .NET services plus a shared kernel, wired together at runtime by a YARP API
 - `*.Sql` / `*.Cosmos` — infrastructure: `DbContext` or `EventsCosmosContext`, entity/document mapping, repository implementations, MediatR pipeline behaviors, DI wiring (`AddInfrastructureServices`, plus `ApplyMigrationsAsync` for Bookings and `EnsureContainersAsync` for Events).
 - `*.Api` — ASP.NET Core host; `Program.cs` calls `AddInfrastructureServices` then `AddApplicationServices`.
 
-Each project has a marker interface (`IApiAssemblyMarker`, `IApplicationAssemblyMarker`, `IDomainAssemblyMarker`, and `ICosmosAssemblyMarker` in Events.Cosmos — note Bookings.Sql still uses the name `IMongoAssemblyMarker` for historical reasons, despite being Postgres). Architecture tests load assemblies via these markers.
+Each project has a marker interface (`IApiAssemblyMarker`, `IApplicationAssemblyMarker`, `IDomainAssemblyMarker`, `ISqlAssemblyMarker` in Bookings.Sql and `ICosmosAssemblyMarker` in Events.Cosmos). Architecture tests load assemblies via these markers.
 
 **Users.Api** is a single-project **vertical slice** design (feature folders under `Features/Users/{Authenticate,RefreshToken,Register}`), not the layered layout above. It is the JWT issuer for the system.
 
@@ -88,7 +89,7 @@ Each project has a marker interface (`IApiAssemblyMarker`, `IApplicationAssembly
 - **CQRS via MediatR**: commands live in `*.Application/Commands`, handlers in `CommandHandlers`.
 - **Transactional pipeline**: `Bookings.Sql/Pipelines/TransactionBehavior.cs` is registered as an open-generic `IPipelineBehavior<,>` so every MediatR request runs inside a DB transaction (commit on success, rollback + rethrow on exception).
 - **Domain event dispatch**: `Bookings.Sql/Interceptors/DomainEventPublisherInterceptor` is a `SaveChangesInterceptor` — domain events are published when the DbContext saves. Wired via `options.AddInterceptors(...)` in `AddInfrastructureServices`.
-- **Outbox / messaging**: `Bookings.Application.Extensions.ConfigureRabbitMq` sets up **WolverineFx** with RabbitMQ transport, Postgres-backed outbox (`PersistMessagesWithPostgresql`), EF Core transactions, and `UseDurableLocalQueues`. Uses conventional routing and auto-provisioning.
+- **Outbox / messaging**: `Bookings.Application.Extensions.ConfigureRabbitMq` sets up **WolverineFx** with RabbitMQ transport, Postgres-backed outbox (`PersistMessagesWithPostgresql`), EF Core transactions, and all three durability policies — `UseDurableLocalQueues`, `UseDurableInboxOnAllListeners` and `UseDurableOutboxOnAllSendingEndpoints`. Uses conventional routing and auto-provisioning.
 - **Caching / distributed locks**: Redis via `StackExchange.Redis` + `Medallion.Threading.Redis`. `ICacheService` (`Bookings.Application.Services`) is the abstraction; `IDistributedLockProvider` is registered for cross-instance coordination.
 - **Shared integration contracts**: `TicketMaster.Common/IntegrationEvents` — any message crossing service boundaries lives here so producers and consumers share the type.
 
