@@ -38,7 +38,7 @@ public static class UserRefreshToken
 
             if (user.RefreshToken != request.RefreshToken || user.RefreshTokenExpires <= DateTime.UtcNow)
             {
-                var error = new Error("Invalid refresh token", ErrorType.BadRequest, "");
+                var error = new Error("Invalid refresh token", ErrorType.Unauthorized, "");
                 return Result<Response>.Failure(error);
             }
 
@@ -63,7 +63,7 @@ public sealed class RefreshTokenEndpoints : IEndpointMarker
         {
             var result = await sender.Send(request);
             if (!result.IsSuccess)
-                return Results.BadRequest(result.Error);
+                return result.Error!.ToProblem();
 
             return Results.Ok(result.Value);
         });

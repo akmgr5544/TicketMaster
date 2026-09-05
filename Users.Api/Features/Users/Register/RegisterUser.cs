@@ -87,7 +87,7 @@ public sealed class RegistrationEndpoints : IEndpointMarker
         {
             var result = await sender.Send(request);
             if (!result.IsSuccess)
-                return Results.BadRequest(result.Error);
+                return result.Error!.ToProblem();
 
             return Results.Ok(result.Value);
         });

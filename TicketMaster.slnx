@@ -32,6 +32,7 @@
     <Project Path="Tests/Events/EventsDomain/EventsDomain.csproj" />
   </Folder>
   <Folder Name="/Tests/Users/">
+    <Project Path="Tests/Users/UsersApi/UsersApi.csproj" />
     <Project Path="Tests/Users/UsersArchitecture/UsersArchitecture.csproj" />
   </Folder>
   <Folder Name="/Tests/Test Items/">

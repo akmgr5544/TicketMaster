@@ -27,6 +27,7 @@ dotnet test Tests/Events/EventsDomain/EventsDomain.csproj            # Events do
 dotnet test Tests/Events/EventsApplication/EventsApplication.csproj  # handlers, with fake repositories
 dotnet test Tests/Events/EventsApi/EventsApi.csproj                  # exception-to-status mapping
 dotnet test Tests/Events/EventsCosmos/EventsCosmos.csproj            # Cosmos document serialization
+dotnet test Tests/Users/UsersApi/UsersApi.csproj                 # Error-to-status mapping
 dotnet test Tests/Users/UsersArchitecture/UsersArchitecture.csproj
 
 # Single test

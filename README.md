@@ -345,9 +345,10 @@ Being explicit about what is not finished:
   count over `c.venue.id` — have had their shape reviewed and nothing more.
 - **`compose.yaml` is stale** — service paths such as `BookingApi/Dockerfile` no longer match the
   project layout. Only the `cosmos` service is currently usable.
-- **Users still surfaces unhandled failures as bare 500s.** Events and Bookings both map exceptions
-  to status codes at the edge; Users, which uses `Result<T>` rather than exceptions, has no equivalent
-  translation for what escapes it.
+- **Users' authentication failures changed status code.** `ErrorType` now drives the response —
+  previously every failure was a 400 whatever it said — so a bad login or an invalid refresh token
+  answers 401 rather than 400. Login no longer distinguishes "no such user" from "wrong password",
+  which closes a user-enumeration hole but is a visible contract change for any existing client.
 - **The sale-window rule is still written twice**, because a query cannot call into the domain:
   `Ticket.IsAvailableFor` in the entity and a mirror in `TicketsRepository.GetTicketsForBookingAsync`.
   The grace period itself is no longer duplicated — the query derives its cutoff from
