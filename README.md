@@ -292,7 +292,13 @@ Central package management is enabled: add package versions to `Directory.Packag
 
 ## 🗺️ Known gaps
 
-Being explicit about what is not finished:
+Being explicit about what is not finished. Split three ways on purpose: fixing something usually
+moves it from the first list to the second rather than deleting it, and a flat list makes that look
+like no progress at all.
+
+### Not built
+
+Work that should happen.
 
 - **Events has no outbox.** Everything publishes inline after the Cosmos write, so a crash in between
   loses the message. This matters more now that four contracts flow: a lost `EventCancelled` or
@@ -301,29 +307,13 @@ Being explicit about what is not finished:
   are a hand-rolled outbox document with a publisher loop, or a Postgres purely for messaging. Every
   publish funnels through `IIntegrationEventPublisher`, so it is a change in one place.
   Highest-value fix.
-- **Bookings' inbox/outbox enrolment is unverified.** All three durability policies are applied now,
-  so RabbitMQ listeners are durable rather than just the in-process queues — but nothing tests it.
-  The `BookingIntegration` fixture deliberately never calls `ConfigureRabbitMq`, so proving it needs a
-  second fixture with a RabbitMQ container that boots the real host and asserts the listeners came up
-  in durable mode. The outbox half is inert either way until something in Bookings publishes.
-- **`Events.Application.Pipelines.TransactionBehavior` is a no-op**, and documented as one. Under
-  Cosmos there is no honest implementation available: atomicity is confined to a single logical
-  partition, and with `/id` partition keys no two documents ever share one.
 - **No optimistic concurrency in Events.** `_etag` is neither read nor enforced, so concurrent updates
   are last-write-wins. `Event.Version` is not a substitute — it orders messages for consumers, it does
   not guard the write.
-- **The venue and performer delete guards are best-effort.** Each counts upcoming events before
-  deleting, but an event can be created in that window and no transaction can span two logical
-  partitions. Events are cancelled rather than deleted, so they have no equivalent guard.
 - **Nothing pays for a booking.** The endpoints exist and a booking can be made and cancelled, but
   nothing publishes a payment request and no payment service consumes one, so a booking stays `Booked`
   indefinitely and its seats are never released unless the owner cancels it. Bookings has no outbound
   publishing at all today; it is purely a consumer.
-- **Nothing tests the gateway.** Its addresses are filled in and the users cluster is ungated — it
-  proxies to a service that validates its own tokens — so the system should run end to end on the
-  https launch profiles. But there is no gateway test project, so the routing, the introspection call
-  and the identity headers are all reasoned rather than observed. It is the only component in the
-  solution with no test of any kind.
 - **`Booking` has no timestamp.** The list endpoint orders by key descending as a proxy for "newest
   first" and no response can say when a booking was made. Adding `CreatedAt` needs a migration. The
   list also returns a bare array, so "is there more?" is inferred from receiving a full page.
@@ -332,23 +322,8 @@ Being explicit about what is not finished:
   includes already-booked ones, leaving the parent `Booking` pointing at cancelled tickets. Unpaid
   bookings can now be cancelled and their seats released, but `Booking.Cancel()` deliberately refuses a
   paid one — undoing that is a refund, and refunds and notifications are not built.
-- **Reservation correctness rests on the distributed locks.** The check and the write both happen with
-  every seat's lock held, but the write is not conditional, so a lock lost mid-operation is a real
-  double-reservation window rather than a wasted attempt. A deliberate choice, recorded so nobody
-  "simplifies" the locking without knowing what it carries.
-- **A command that queues after-commit work cannot be sent from a message handler.** The behavior does
-  not own that transaction, so it logs the work as dropped instead of running it. Only booking queues
-  any, and only over HTTP, so nothing hits this today.
-- **The Events Cosmos layer has not been run against a live instance.** Provisioning and the
-  repositories are verified by the compiler and by unit-tested serialization, not by execution. The
-  cross-partition queries added for the delete guards — an `EXISTS` subquery over `c.performers` and a
-  count over `c.venue.id` — have had their shape reviewed and nothing more.
 - **`compose.yaml` is stale** — service paths such as `BookingApi/Dockerfile` no longer match the
   project layout. Only the `cosmos` service is currently usable.
-- **Users' authentication failures changed status code.** `ErrorType` now drives the response —
-  previously every failure was a 400 whatever it said — so a bad login or an invalid refresh token
-  answers 401 rather than 400. Login no longer distinguishes "no such user" from "wrong password",
-  which closes a user-enumeration hole but is a visible contract change for any existing client.
 - **The sale-window rule is still written twice**, because a query cannot call into the domain:
   `Ticket.IsAvailableFor` in the entity and a mirror in `TicketsRepository.GetTicketsForBookingAsync`.
   The grace period itself is no longer duplicated — the query derives its cutoff from
@@ -359,11 +334,49 @@ Being explicit about what is not finished:
   The gateway requires only an *authenticated* caller for `/bookings-service/**`, so any logged-in
   user can create real, bookable seats. Enforcing it needs a role claim from Users.Api, propagation
   through `AuthTransformProvider`, and a check in `Bookings.Api`.
+
+### Built but unverified
+
+The code exists and is believed correct. Nothing proves it.
+
+- **Bookings' inbox/outbox enrolment is unverified.** All three durability policies are applied now,
+  so RabbitMQ listeners are durable rather than just the in-process queues — but nothing tests it.
+  The `BookingIntegration` fixture deliberately never calls `ConfigureRabbitMq`, so proving it needs a
+  second fixture with a RabbitMQ container that boots the real host and asserts the listeners came up
+  in durable mode. The outbox half is inert either way until something in Bookings publishes.
+- **Nothing tests the gateway.** Its addresses are filled in and the users cluster is ungated — it
+  proxies to a service that validates its own tokens — so the system should run end to end on the
+  https launch profiles. But there is no gateway test project, so the routing, the introspection call
+  and the identity headers are all reasoned rather than observed. It is the only component in the
+  solution with no test of any kind.
+- **The Events Cosmos layer has not been run against a live instance.** Provisioning and the
+  repositories are verified by the compiler and by unit-tested serialization, not by execution. The
+  cross-partition queries added for the delete guards — an `EXISTS` subquery over `c.performers` and a
+  count over `c.venue.id` — have had their shape reviewed and nothing more.
 - **The Bookings → Events gRPC seam is unexercised on the wire.** `EventsLookupService` and
   `DomainExceptionInterceptor` have no tests, and `Tests/Events/EventsApi` covers only the HTTP
   exception handler. Both ends compile against the same generated contract and the caller is covered
   with a stub, but nothing has ever made the call. The exception → status → exception round trip is
   the part written by hand on both ends, and it degrades quietly to "everything is Internal".
+
+### Accepted limitations
+
+Known, deliberate, and unlikely to change — recorded so nobody "fixes" one without knowing what it
+carries.
+
+- **`Events.Application.Pipelines.TransactionBehavior` is a no-op**, and documented as one. Under
+  Cosmos there is no honest implementation available: atomicity is confined to a single logical
+  partition, and with `/id` partition keys no two documents ever share one.
+- **The venue and performer delete guards are best-effort.** Each counts upcoming events before
+  deleting, but an event can be created in that window and no transaction can span two logical
+  partitions. Events are cancelled rather than deleted, so they have no equivalent guard.
+- **Reservation correctness rests on the distributed locks.** The check and the write both happen with
+  every seat's lock held, but the write is not conditional, so a lock lost mid-operation is a real
+  double-reservation window rather than a wasted attempt. A deliberate choice, recorded so nobody
+  "simplifies" the locking without knowing what it carries.
+- **A command that queues after-commit work cannot be sent from a message handler.** The behavior does
+  not own that transaction, so it logs the work as dropped instead of running it. Only booking queues
+  any, and only over HTTP, so nothing hits this today.
 
 ## 🗺️ Roadmap
 
