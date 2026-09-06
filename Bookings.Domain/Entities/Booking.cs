@@ -9,6 +9,7 @@ public sealed class Booking : Entity, IAggregateRoot
 {
     public long Id { get; init; }
     public string UserId { get; init; } = null!;
+    public DateTime CreatedAt { get; init; }
     public BookingStatus Status { get; private set; }
     public List<BookingHistory> BookingHistories { get; init; }
     public List<BookedTicket> BookedTickets { get; init; }
@@ -25,6 +26,9 @@ public sealed class Booking : Entity, IAggregateRoot
     {
         UserId = userId;
         Status = status;
+        // Not in the parameterless constructor: that one is EF's materialisation path, where the
+        // stored value has to win. Utc because Npgsql refuses any other Kind on a timestamptz.
+        CreatedAt = DateTime.UtcNow;
     }
 
     /// <summary>

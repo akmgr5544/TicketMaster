@@ -33,6 +33,7 @@ internal sealed class GetBookingQueryHandler : IRequestHandler<GetBookingQuery, 
     internal static BookingDto ToDto(Booking booking) =>
         new(booking.Id,
             booking.Status.ToString(),
+            booking.CreatedAt,
             booking.BookedTickets.Select(bookedTicket => bookedTicket.TicketId).ToArray(),
             booking.BookingHistories
                 .Select(history => new BookingHistoryDto(history.BookingStatus.ToString(), history.TicketsCount))

@@ -19,7 +19,7 @@ listed honestly under [Known gaps](#-known-gaps) rather than left for you to dis
 | Caching / locking | Redis via StackExchange.Redis + Medallion.Threading.Redis |
 | Service-to-service | gRPC over HTTP/2 with Protobuf (Bookings → Events), alongside RabbitMQ |
 | Edge | YARP reverse proxy with a custom authentication scheme |
-| Testing | xUnit + ArchUnitNET, plus Testcontainers (Postgres + Redis) for the Bookings integration suite |
+| Testing | xUnit + ArchUnitNET, plus Testcontainers (Postgres, Redis, RabbitMQ) for the Bookings integration suite |
 
 ## 🏗️ Architecture
 
@@ -87,6 +87,7 @@ POST   /api/tickets                     # admin repair: one seat, validated agai
 POST   /api/tickets/reserve             # hold seats for 5 minutes
 POST   /api/bookings                    # 201 + { id }
 GET    /api/bookings/{id}               # the caller's own; somebody else's is a 404
+                                        # responses carry createdAt
 GET    /api/bookings?page=&pageSize=    # the caller's own, newest first
 POST   /api/bookings/{id}/cancel        # 204; a paid booking is refused with 400
 ```
@@ -207,7 +208,7 @@ independently deployable microservice:
 Tests/
 ├── Bookings/   BookingArchitecture, BookingDomain, BookingIntegration, BookingApi
 ├── Events/     EventsArchitecture, EventsDomain, EventsApplication, EventsCosmos, EventsApi
-└── Users/      UsersArchitecture
+└── Users/      UsersArchitecture, UsersApi
 ```
 
 **Architecture tests** (ArchUnitNET) assert layer dependencies, naming, visibility and layout.
@@ -233,6 +234,17 @@ depends on rather than restating a unit test:
   the request does not satisfy, rather than failing to build it
 - after-commit work runs only once the transaction has gone, and not at all when it rolls back
 
+A second fixture in the same project boots the **real host** — `Program.cs` unmodified, Wolverine and
+RabbitMQ included — through `WebApplicationFactory<Program>` against its own Postgres, Redis and
+RabbitMQ containers. It exists because a whole class of failure here is invisible to everything else:
+a durability policy that was never applied, a handler dependency Wolverine cannot resolve, a
+code-generation mode with no compiler behind it. All of them compile, and all of them leave every
+other suite green. It is what proves the broker endpoints are actually enrolled in the durable inbox,
+and it is where a Wolverine 6 upgrade currently fails.
+
+The two fixtures own separate containers and run in parallel; the fast one never starts a broker,
+which is what keeps the other 116 tests at about a second.
+
 **Needs a running Docker daemon** — every test starts containers; with the daemon down the whole
 project fails at fixture initialisation. `Bookings.Sql` and `Bookings.Application` carry
 `InternalsVisibleTo("BookingIntegration")` so the tests can construct the internal context,
@@ -252,6 +264,7 @@ dotnet test Tests/Bookings/BookingIntegration/BookingIntegration.csproj
 dotnet test Tests/Bookings/BookingApi/BookingApi.csproj
 dotnet test Tests/Bookings/BookingArchitecture/BookingArchitecture.csproj
 dotnet test Tests/Users/UsersArchitecture/UsersArchitecture.csproj
+dotnet test Tests/Users/UsersApi/UsersApi.csproj
 ```
 
 **Not covered, deliberately:** Wolverine `Consume` handlers need a broker and each is a two-line
@@ -314,9 +327,10 @@ Work that should happen.
   nothing publishes a payment request and no payment service consumes one, so a booking stays `Booked`
   indefinitely and its seats are never released unless the owner cancels it. Bookings has no outbound
   publishing at all today; it is purely a consumer.
-- **`Booking` has no timestamp.** The list endpoint orders by key descending as a proxy for "newest
-  first" and no response can say when a booking was made. Adding `CreatedAt` needs a migration. The
-  list also returns a bare array, so "is there more?" is inferred from receiving a full page.
+- **The bookings list has no cursor or total count.** It returns a bare array, so a caller infers
+  "there may be more" from receiving a full page. It pages on the key, which is a sequence allocated
+  at insert and therefore already orders by creation — a cursor should page on that too, not on
+  `CreatedAt`, which can tie.
 - **`UserId` is a `string` in Bookings and a `long` in Users.** Aligning them means a migration.
 - **A relocation can still strand a paid booking.** Cancelling tickets for seats the new venue lacks
   includes already-booked ones, leaving the parent `Booking` pointing at cancelled tickets. Unpaid
@@ -337,13 +351,9 @@ Work that should happen.
 
 ### Built but unverified
 
-The code exists and is believed correct. Nothing proves it.
+The code exists and is believed correct. Nothing proves it. Bookings' Wolverine startup used to be
+here; `BookingIntegration`'s host fixture boots the real host against containers and moved it off.
 
-- **Bookings' inbox/outbox enrolment is unverified.** All three durability policies are applied now,
-  so RabbitMQ listeners are durable rather than just the in-process queues — but nothing tests it.
-  The `BookingIntegration` fixture deliberately never calls `ConfigureRabbitMq`, so proving it needs a
-  second fixture with a RabbitMQ container that boots the real host and asserts the listeners came up
-  in durable mode. The outbox half is inert either way until something in Bookings publishes.
 - **Nothing tests the gateway.** Its addresses are filled in and the users cluster is ungated — it
   proxies to a service that validates its own tokens — so the system should run end to end on the
   https launch profiles. But there is no gateway test project, so the routing, the introspection call

@@ -28,6 +28,21 @@ public sealed class CustomerBookingTests : IntegrationTest
     {
     }
 
+    // --- When it was made ---
+
+    [Fact]
+    public async Task A_booking_records_when_it_was_made()
+    {
+        var before = DateTime.UtcNow;
+        var tickets = await Seed.TicketsAsync("evt-1", "A1");
+        var booking = await Seed.BookingAsync(Owner, tickets[0].Id);
+
+        var dto = await Sender.Send(new GetBookingQuery(booking.Id, Owner));
+
+        Assert.InRange(dto.CreatedAt, before, DateTime.UtcNow);
+        Assert.Equal(DateTimeKind.Utc, dto.CreatedAt.Kind);
+    }
+
     // --- Reading one ---
 
     [Fact]

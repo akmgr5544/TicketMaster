@@ -358,9 +358,12 @@ known list rather than the complete one.
   idempotency mechanism is inert.
 - `EventsService.GetEventByIdAsync` is a real gRPC call now, so `CreateTicketCommand` needs Events
   reachable. It is deliberately not `ITransactionalRequest` — see the `rpc` skill.
-- `Booking` has no timestamp of any kind, so the list endpoint orders by key descending as a proxy
-  for "newest first" and no response can report when a booking was made. Adding `CreatedAt` needs a
-  migration.
+- `Booking.CreatedAt` is stamped in the constructor `Create` uses, never in the parameterless one —
+  that is EF's materialisation path, where the stored value has to win. It exists to be **reported**,
+  not to order by: `ListForUserAsync` still pages on the key, which is a sequence allocated at insert
+  and so already in creation order, and which walks the primary key index backwards instead of
+  sorting an unindexed column. Ordering by `CreatedAt` would need an index on
+  `(UserId, CreatedAt DESC)` to break even, and would buy nothing the key does not already give.
 - The list endpoint returns a bare array, so a caller infers "there may be more" from receiving a full
   page. No total count and no cursor.
 - The gateway sets `X-Identity-UserId` correctly now — the transform replaces rather than appends,

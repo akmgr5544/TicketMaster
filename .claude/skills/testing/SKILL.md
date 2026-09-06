@@ -29,7 +29,7 @@ Tests/Bookings/
   BookingDomain/          unit — Booking, Ticket, Entity. No infrastructure.
   BookingIntegration/     every handler group, on containers
     Fixtures/             the fixture, the collection, the base class, seed helpers
-    Mechanics/            EF, DI and transaction behavior
+    Mechanics/            EF, DI, transaction behavior, and host startup
     Handlers/             one file per handler area (ReserveTicket, MakeBooking, CreateTicket,
                            EventSync, Payments, CustomerBookings)
   BookingApi/             exception-to-status mapping
@@ -57,6 +57,38 @@ dotnet test Tests/Bookings/BookingIntegration/BookingIntegration.csproj \
 The first run pulls the Postgres and Redis images. Once the images are cached, the whole project —
 containers included — runs in well under a minute; measured around ten seconds. It is serial by
 design (see below).
+
+## Two fixtures, one project
+
+`BookingsFixture` composes a plain `ServiceProvider` and never calls `ConfigureRabbitMq`. That is what
+keeps 113 tests running in about a second, and it should stay that way.
+
+`BookingsHostFixture` is the only place a Wolverine host actually starts. It boots `Program.cs`
+unmodified through `WebApplicationFactory<Program>` against its own Postgres, Redis and RabbitMQ
+containers, and `Mechanics/HostStartupTests` asserts the host starts and that every application
+broker endpoint is `EndpointMode.Durable`.
+
+It exists because a whole class of failure here is invisible to everything else: a durability policy
+that was never applied, a handler dependency Wolverine cannot resolve, a code-generation mode with no
+compiler behind it. All of them compile, and all of them leave the other suites green. Upgrading
+Wolverine to 6.33.0 fails here at startup with *"TypeLoadMode.Dynamic ... no IAssemblyGenerator
+(Roslyn) is registered"*, and nowhere else.
+
+Three details carry it:
+
+- **Separate containers, not shared with `BookingsFixture`.** Respawn truncates one database between
+  tests; a host pointed at the same one would have its state pulled out from under it.
+- **Configuration arrives as environment variables**, not through `WebApplicationFactory`'s hooks.
+  `Program.cs` reads every connection string while composing the builder, which is before those hooks
+  run; environment variables are already in the default configuration sources by then.
+- **`Bookings.Api/Program.cs` ends with `public partial class Program;`** — top-level statements
+  generate an internal entry point, and `WebApplicationFactory<T>` needs a public one.
+
+**The two collections run in parallel, and should.** Measured: 7.4s in parallel against 10.6s with
+parallelisation disabled, all 116 passing either way — the fixtures own separate containers, so there
+is nothing to collide. The one coupling is that the host fixture sets process-global environment
+variables; that is safe only because `BookingsFixture` builds its configuration from an explicit
+in-memory collection and never reads the environment.
 
 ## The fixture
 
