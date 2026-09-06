@@ -95,9 +95,9 @@ Each project has a marker interface (`IApiAssemblyMarker`, `IApplicationAssembly
 
 ### API Gateway (`TicketMaster.ApiGateway`)
 
-- YARP with config split across two JSON files loaded at startup: `YarpConfigurations/yarp.clusters.json` (destinations) and `yarp.routes.json` (routing + auth policy). **Destination addresses are currently empty strings** — fill them in for local runs.
-- All three service routes require the `GatewayAuthPolicy` (authenticated user).
-- Custom auth scheme `UserServiceScheme` (`Handlers/UsersServiceAuthHandler`): the gateway extracts the `Authorization` header from the incoming request, calls `Users.Api` at `api/users/auth?token=...`, and materializes claims (`UserId`, `Email`, `FirstName`, `LastName`, `UserName`) from the response. The `HttpClient` is the named `"UsersService"` client — set its `BaseAddress` before running (currently `""` in `Program.cs`).
+- YARP with config split across two JSON files loaded at startup: `YarpConfigurations/yarp.clusters.json` (destinations) and `yarp.routes.json` (routing + auth policy). Destination addresses point at the services' https launch profiles (`7054` users, `7225` bookings, `7158` events).
+- The bookings and events routes require `GatewayAuthPolicy` (authenticated user). **The users route is deliberately ungated** — it fronts login, registration and token refresh, and Users.Api validates its own tokens. Do not add the policy to it.
+- Custom auth scheme `UserServiceScheme` (`Handlers/UsersServiceAuthHandler`): the gateway extracts the `Authorization` header from the incoming request, calls `Users.Api` at `api/users/auth?token=...`, and materializes claims (`UserId`, `Email`, `FirstName`, `LastName`, `UserName`) from the response. The `HttpClient` is the named `"UsersService"` client; its base address comes from `Services:Users:BaseAddress` in `appsettings.json`, and `Program.cs` throws at startup if that key is missing.
 - `AuthTransformProvider` runs per-request on any route with an `AuthorizationPolicy` and copies `UserId` / `UserName` claims into `X-Identity-UserId` / `X-Identity-UserName` headers on the proxied request. Downstream services should read identity from those headers, not re-validate the token.
 
 ### Tests

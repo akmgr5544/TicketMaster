@@ -16,19 +16,6 @@ internal class TicketsRepository : ITicketsRepository
         _context = context;
     }
 
-    public async ValueTask<Ticket[]> GetTicketsForBookingAsync(ImmutableArray<long> ticketIds,
-        string eventId,
-        CancellationToken cancellationToken)
-    { 
-        var saleWindowStart = Ticket.SaleWindowStart(DateTime.UtcNow);
-
-        var tickets = _context.Tickets.Where(x => ticketIds.Contains(x.Id) &&
-                                                  x.EventId == eventId &&
-                                                  x.EventDate > saleWindowStart &&
-                                                  x.Status == TicketStatus.None);
-        return await tickets.ToArrayAsync(cancellationToken);
-    }
-
     public async ValueTask<Ticket[]> GetTicketsByIdAsync(ImmutableArray<long> ticketIds,
         CancellationToken cancellationToken)
     {

@@ -12,6 +12,7 @@ public class BookingConfiguration : IEntityTypeConfiguration<Booking>
         builder.HasKey(b => b.Id);
         builder.Property(b => b.Id).ValueGeneratedOnAdd();
         builder.Property(b => b.UserId).IsRequired();
+        builder.Property(b => b.CreatedAt).IsRequired();
 
         builder.OwnsMany(b => b.BookedTickets,
             bt =>

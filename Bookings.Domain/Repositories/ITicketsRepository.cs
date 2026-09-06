@@ -6,35 +6,15 @@ namespace Bookings.Domain.Repositories;
 
 public interface ITicketsRepository : IUnitOfWork
 {
-    ValueTask<Ticket[]> GetTicketsForBookingAsync(ImmutableArray<long> ticketIds,
-        string eventId,
-        CancellationToken cancellationToken);
     ValueTask<Ticket[]> GetTicketsByIdAsync(ImmutableArray<long> ticketIds,
         CancellationToken cancellationToken);
-
-    /// <summary>
-    /// Every ticket for one catalogue event, tracked, because callers are reconciling them against a
-    /// change from the Events service. Bounded by the seats at a venue rather than by time, so this
-    /// is deliberately unpaginated.
-    /// </summary>
     ValueTask<Ticket[]> GetTicketsByEventAsync(string eventId, CancellationToken cancellationToken);
 
-    /// <summary>
-    /// The tickets with these ids, untracked, for deciding whether they can be reserved. By id alone
-    /// rather than filtered by availability, so the caller can tell a ticket that does not exist from
-    /// one that exists but is not for sale — and say which.
-    /// </summary>
     ValueTask<Ticket[]> GetTicketsForReservationAsync(ImmutableArray<long> ticketIds,
         CancellationToken cancellationToken);
 
-    /// <summary>
-    /// How far this event's tickets have been brought in line with the catalogue, or 0 when there are
-    /// none. A new ticket has to start here, not at 0: one sitting below its siblings would accept a
-    /// stale change they reject, and the event would end up half-applied.
-    /// </summary>
     ValueTask<long> GetAppliedVersionForEventAsync(string eventId, CancellationToken cancellationToken);
 
-    /// <summary>Covered means a ticket that is not cancelled, as in <c>ReconcileEventVenueCommandHandler</c>.</summary>
     ValueTask<bool> SeatIsCoveredAsync(string eventId, string seat, CancellationToken cancellationToken);
 
     ValueTask AddTicketsAsync(Ticket[] ticket);

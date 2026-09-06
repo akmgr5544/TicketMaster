@@ -123,10 +123,12 @@ enrollment." `UseDurableLocalQueues()` alone therefore leaves all RabbitMQ traff
 is what Bookings ran with until the inbox and outbox policies were added alongside it. All three are
 applied now, so rule 4 holds on the Bookings side.
 
-**Enrolment is compile-verified only.** The fixture in `BookingIntegration` deliberately never calls
-`ConfigureRabbitMq`, so no test starts a broker and observes an endpoint's durability. Proving it
-would take a second fixture with a RabbitMQ container that boots the real host and asserts the
-listeners came up in durable mode — worth doing, not done.
+**Enrolment is observed, not assumed.** `BookingIntegration`'s `BookingsHostFixture` boots the real host —
+`Program.cs` unmodified, `ConfigureRabbitMq` included — against Postgres, Redis and RabbitMQ
+containers, and asserts every application RabbitMQ endpoint came up in `EndpointMode.Durable`.
+Verified by mutation: removing `UseDurableInboxOnAllListeners()` turns
+`Every_broker_listener_is_durable` red. The project's other fixture still never calls
+`ConfigureRabbitMq`, and should not — that is what keeps the other 113 tests fast.
 
 ### Conventional routing
 

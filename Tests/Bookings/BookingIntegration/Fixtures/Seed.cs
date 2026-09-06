@@ -8,10 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace BookingIntegration.Fixtures;
 
-/// <summary>
-/// Arranges state directly, never through a handler. Arranging by calling the code under test — or
-/// another handler — couples the test to behavior it is not trying to prove.
-/// </summary>
+
 public sealed class Seed
 {
     private readonly IServiceProvider _root;

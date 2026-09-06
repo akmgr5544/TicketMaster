@@ -183,8 +183,9 @@ Test projects are grouped by service under `Tests/<Service>/`, so gateway tests 
 Current code does not yet match this target. Do not read the rules above as descriptions of
 what exists.
 
-- No public/anonymous route exists — all three routes require `GatewayAuthPolicy`, so login is
-  unreachable through the gateway. Deferred deliberately; more public endpoints are coming.
+- No permission model on the gated routes — see below. The users route carries no
+  `AuthorizationPolicy`, so login, registration and refresh are reachable through the gateway; that is
+  deliberate and the table further down explains why.
 - `Program.cs` never calls `app.UseAuthentication()` / `app.UseAuthorization()` before
   `MapReverseProxy()`. `WebApplication` auto-inserts both when the services are registered, so this
   works today, but the YARP docs specify them explicitly and relying on the implicit insertion

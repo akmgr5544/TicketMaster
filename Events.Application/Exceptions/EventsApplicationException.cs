@@ -9,4 +9,5 @@ namespace Events.Application.Exceptions;
 /// world, so this maps to 409 Conflict.
 /// </para>
 /// </summary>
-public class EventsApplicationException(string message) : Exception(message);
+public class EventsApplicationException(string message, Exception? innerException = null)
+    : Exception(message, innerException);

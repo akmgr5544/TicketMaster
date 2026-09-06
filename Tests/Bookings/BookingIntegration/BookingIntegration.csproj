@@ -9,11 +9,13 @@
 
     <ItemGroup>
         <PackageReference Include="coverlet.collector"/>
+        <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing"/>
         <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions"/>
         <PackageReference Include="Microsoft.NET.Test.Sdk"/>
         <PackageReference Include="xunit"/>
         <PackageReference Include="xunit.runner.visualstudio"/>
         <PackageReference Include="Testcontainers.PostgreSql"/>
+        <PackageReference Include="Testcontainers.RabbitMq"/>
         <PackageReference Include="Testcontainers.Redis"/>
         <PackageReference Include="Respawn"/>
     </ItemGroup>
@@ -23,6 +25,8 @@
     </ItemGroup>
 
     <ItemGroup>
+      <!-- The host fixture boots the real Program.cs, which lives here. -->
+      <ProjectReference Include="..\..\..\Bookings.Api\Bookings.Api.csproj" />
       <ProjectReference Include="..\..\..\Bookings.Application\Bookings.Application.csproj" />
       <ProjectReference Include="..\..\..\Bookings.Sql\Bookings.Sql.csproj" />
     </ItemGroup>

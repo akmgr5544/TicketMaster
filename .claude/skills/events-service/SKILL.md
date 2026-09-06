@@ -180,12 +180,12 @@ the domain.
 
 | Need | Use | Cost |
 |---|---|---|
-| One item by id | `container.PointReadAsync<T>(id, ct)` | ~1 RU, the cheapest read available |
+| One item by id | `container.PointReadWithETagAsync<T>(id, ct)` → `(Item, ETag)` | ~1 RU, the cheapest read available |
 | Many items by id | `ReadManyItemsAsync<T>` | point-read cost per item, no fan-out |
 | Anything else | SQL query | fans out across partitions |
 
 A query that merely filters on `id` is **not** a point read and does not get point-read pricing.
-`PointReadAsync` turns the SDK's NotFound exception back into `null`; that exception must never
+`PointReadWithETagAsync` turns the SDK's NotFound exception back into `null`; that exception must never
 escape the persistence layer.
 
 **Paging is cursor-based.** `ListVenuesAsync` returns `Page<T>(Items, ContinuationToken)`; the
@@ -197,8 +197,11 @@ it skips, so deep pages get progressively more expensive.
 Events breaks the flow by **throwing**, not by returning a result type. The `Result`/`Error`
 pattern belongs to Users.Api and must not be introduced here — see `cqrs` rule 4.
 
-**There are exactly three exception types in the whole service.** Do not add a fourth without a
-good reason — a class per failure case multiplies with every entity.
+**There are exactly three *public* exception types in the whole service.** Do not add a fourth without
+a good reason — a class per failure case multiplies with every entity. `ConcurrencyConflictException`
+in `Events.Domain/Exceptions` is the one exception to the count and is deliberately not in the table
+below: it exists because `Events.Cosmos` references only `Events.Domain` and so cannot throw an
+Application type, and `ConcurrencyRetryBehavior` consumes and converts it, so it never reaches the API.
 
 | Type | Where | Thrown when | Status |
 |---|---|---|---|
@@ -247,9 +250,14 @@ message that says what happened.
   different downstream consequence and a combined PUT would have to infer which happened by diffing.
 - Events are cancelled, never deleted. There is no `DELETE /api/events/{id}` on purpose: tickets
   exist downstream, so removal is a state transition, not a removal.
-- No optimistic concurrency — `_etag` is not read or enforced, so concurrent venue, performer or
-  event updates last-write-wins. `Event.Version` is **not** a substitute: it orders messages for
-  consumers, it does not guard the write.
+- Optimistic concurrency is enforced. Reads record the document ETag in a per-request side-channel
+  (`ETagCache`, one per **scoped** repository — a singleton repository would turn it into a
+  cross-request cache and be worse than no guard); updates and deletes send it as `IfMatchEtag`; a 412
+  becomes `ConcurrencyConflictException` and `ConcurrencyRetryBehavior` retries the whole
+  read-modify-write three times, then reports 409. This is why a handler must keep the shape
+  load → mutate → write → publish: a retry re-runs it from the top, so the conflicting write has to be
+  its first irreversible side effect. `Event.Version` is unchanged and still only orders messages for
+  consumers. The 412 path itself has no automated test — see the README's "Built but unverified".
 - `CreateEventCommandHandler` still throws `EventsDomainException` (→ 400) for a missing venue or
   performer, where the newer handlers throw `NotFoundException` (→ 404). The newer behaviour is the
   correct one; create was left alone rather than silently changing an existing endpoint's status
