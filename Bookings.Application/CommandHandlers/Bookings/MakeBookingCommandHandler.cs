@@ -1,4 +1,3 @@
-using Bookings.Application.Commands;
 using Bookings.Application.Dtos;
 using Bookings.Application.Exceptions;
 using Bookings.Application.Extensions;
@@ -77,12 +76,13 @@ internal class MakeBookingCommandHandler : IRequestHandler<MakeBookingCommand, l
         if (reservedTickets.Any(x => x.UserId != userId))
             throw new BookingsApplicationException("Those tickets are reserved by somebody else");
 
-        var tickets = await _ticketsRepository.GetTicketsForBookingAsync([..ticketIds],
-            eventId,
-            cancellationToken);
-
-        if (tickets.Length != ticketIds.Length)
+        var tickets = await _ticketsRepository.GetTicketsByIdAsync([..ticketIds], cancellationToken);
+        
+        if (tickets.Length != ticketIds.Length
+            || tickets.Any(ticket => !ticket.IsAvailableFor(eventId, DateTime.UtcNow)))
+        {
             throw new BookingsApplicationException("Some of the tickets are no longer available");
+        }
 
         return tickets.Select(ticket => ticket.Id).ToArray();
     }

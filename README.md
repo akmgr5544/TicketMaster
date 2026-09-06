@@ -305,88 +305,79 @@ Central package management is enabled: add package versions to `Directory.Packag
 
 ## 🗺️ Known gaps
 
-Being explicit about what is not finished. Split three ways on purpose: fixing something usually
-moves it from the first list to the second rather than deleting it, and a flat list makes that look
-like no progress at all.
+Split three ways: not built, built but unproven, and deliberate. Every entry names what the code does
+today rather than what it should do — the fix is a decision, not a gap.
 
 ### Not built
 
-Work that should happen.
+- **Events has no outbox.** Every handler publishes through `IIntegrationEventPublisher` inline after
+  the Cosmos write, so a crash between the two loses the message. Four contracts cross this way
+  (`EventCreated`, `EventRescheduled`, `EventRelocated`, `EventCancelled`), and a lost one leaves
+  Bookings' tickets permanently disagreeing with the catalogue rather than merely behind. Wolverine has
+  no Cosmos message store (Postgres/SqlServer/Marten only), so closing it means a hand-rolled outbox
+  document with a publisher loop, or a Postgres purely for messaging. Highest-value fix, and every
+  publish funnels through one interface, so it is a change in one place.
+- **Nothing pays for a booking.** `BookingPaidIntegrationEvent` and `BookingPaymentFailedIntegrationEvent`
+  are defined and consumed, but nothing publishes them — Bookings has no outbound publishing at all. A
+  booking therefore stays `Booked` indefinitely and its seats come back only if the owner cancels it.
+- **The bookings list is a bare array.** `GET /api/bookings?page=&pageSize=` returns neither a total nor
+  a continuation, so a caller infers "there may be more" from receiving a full page. It orders by the
+  key, which is a sequence allocated at insert and so already in creation order.
+- **`UserId` is a `string` in Bookings and a `long` in `Users.Api`.** Aligning them means a migration.
+- **A relocation can strand a paid booking.** `ReconcileEventVenueCommandHandler` calls
+  `ticket.Cancel(...)` for every seat the new venue lacks without asking whether that seat is booked,
+  and `Booking.Cancel()` refuses anything that is not `Booked`. The parent booking is left pointing at
+  cancelled tickets. Undoing that is a refund, and refunds and notifications are not built.
+- **`POST /api/tickets` is not restricted to admins.** It is the admin repair path and nothing enforces
+  that: no `[Authorize]`, no role, no policy, and it never reads the identity header. The gateway
+  requires only an *authenticated* caller for `/bookings-service/**`, so any logged-in user can create
+  real, bookable seats. Closing it needs a role claim issued by Users.Api, propagated by
+  `AuthTransformProvider`, and checked in `Bookings.Api`.
+- **`compose.yaml` cannot build the solution.** Three of its five build contexts name directories that
+  do not exist — `TicketMaster/`, `BookingApi/` and `Booking.Slq/` (sic) — and there is no service for
+  Bookings.Api or the gateway at all, though both have working Dockerfiles. The `Events.Api`, `Users.Api`
+  and `cosmos` services are the parts still correct.
 
-- **Events has no outbox.** Everything publishes inline after the Cosmos write, so a crash in between
-  loses the message. This matters more now that four contracts flow: a lost `EventCancelled` or
-  `EventRelocated` leaves Bookings' tickets permanently disagreeing with the catalogue, not merely
-  missing. Wolverine has **no Cosmos message store** (Postgres/SqlServer/Marten only), so the options
-  are a hand-rolled outbox document with a publisher loop, or a Postgres purely for messaging. Every
-  publish funnels through `IIntegrationEventPublisher`, so it is a change in one place.
-  Highest-value fix.
-- **No optimistic concurrency in Events.** `_etag` is neither read nor enforced, so concurrent updates
-  are last-write-wins. `Event.Version` is not a substitute — it orders messages for consumers, it does
-  not guard the write.
-- **Nothing pays for a booking.** The endpoints exist and a booking can be made and cancelled, but
-  nothing publishes a payment request and no payment service consumes one, so a booking stays `Booked`
-  indefinitely and its seats are never released unless the owner cancels it. Bookings has no outbound
-  publishing at all today; it is purely a consumer.
-- **The bookings list has no cursor or total count.** It returns a bare array, so a caller infers
-  "there may be more" from receiving a full page. It pages on the key, which is a sequence allocated
-  at insert and therefore already orders by creation — a cursor should page on that too, not on
-  `CreatedAt`, which can tie.
-- **`UserId` is a `string` in Bookings and a `long` in Users.** Aligning them means a migration.
-- **A relocation can still strand a paid booking.** Cancelling tickets for seats the new venue lacks
-  includes already-booked ones, leaving the parent `Booking` pointing at cancelled tickets. Unpaid
-  bookings can now be cancelled and their seats released, but `Booking.Cancel()` deliberately refuses a
-  paid one — undoing that is a refund, and refunds and notifications are not built.
-- **`compose.yaml` is stale** — service paths such as `BookingApi/Dockerfile` no longer match the
-  project layout. Only the `cosmos` service is currently usable.
-- **The sale-window rule is still written twice**, because a query cannot call into the domain:
-  `Ticket.IsAvailableFor` in the entity and a mirror in `TicketsRepository.GetTicketsForBookingAsync`.
-  The grace period itself is no longer duplicated — the query derives its cutoff from
-  `Ticket.SaleWindowStart` — but the *shape* of the predicate is, so adding a condition means editing
-  both. Closing that would take an `Expression<Func<Ticket, bool>>` on the entity.
-- **`POST /api/tickets` is not restricted to admins.** It is the admin repair path, and nothing
-  enforces that: no `[Authorize]`, no role, no policy, and it does not read the identity header.
-  The gateway requires only an *authenticated* caller for `/bookings-service/**`, so any logged-in
-  user can create real, bookable seats. Enforcing it needs a role claim from Users.Api, propagation
-  through `AuthTransformProvider`, and a check in `Bookings.Api`.
+### Built but unproven
 
-### Built but unverified
+The code exists and is believed correct; these are the parts nothing exercises.
 
-The code exists and is believed correct. Nothing proves it. Bookings' Wolverine startup used to be
-here; `BookingIntegration`'s host fixture boots the real host against containers and moved it off.
-
-- **Nothing tests the gateway.** Its addresses are filled in and the users cluster is ungated — it
-  proxies to a service that validates its own tokens — so the system should run end to end on the
-  https launch profiles. But there is no gateway test project, so the routing, the introspection call
-  and the identity headers are all reasoned rather than observed. It is the only component in the
-  solution with no test of any kind.
-- **The Events Cosmos layer has not been run against a live instance.** Provisioning and the
-  repositories are verified by the compiler and by unit-tested serialization, not by execution. The
-  cross-partition queries added for the delete guards — an `EXISTS` subquery over `c.performers` and a
-  count over `c.venue.id` — have had their shape reviewed and nothing more.
-- **The Bookings → Events gRPC seam is unexercised on the wire.** `EventsLookupService` and
-  `DomainExceptionInterceptor` have no tests, and `Tests/Events/EventsApi` covers only the HTTP
-  exception handler. Both ends compile against the same generated contract and the caller is covered
-  with a stub, but nothing has ever made the call. The exception → status → exception round trip is
-  the part written by hand on both ends, and it degrades quietly to "everything is Internal".
+- **Nothing tests the gateway.** Cluster addresses are filled in and the users route is deliberately
+  ungated — it proxies to the service that validates its own tokens — so the system should run end to
+  end on the https launch profiles. But routing, the introspection call and the identity headers are all
+  reasoned rather than observed. It is the only service with no test of any kind.
+- **The Events 412 path has no automated test.** Reads record the document ETag and updates and deletes
+  send it back as `IfMatchEtag`; a rejected write becomes `ConcurrencyConflictException`, which
+  `ConcurrencyRetryBehavior` retries three times before reporting 409. The retry seam is covered by six
+  tests in `EventsApplication`. The conditional write itself is not — no Events test project talks to
+  Cosmos, so it was confirmed by hand once and nothing re-checks it.
+- **No Events code runs against a live Cosmos instance in the suite.** Provisioning and the repositories
+  are verified by the compiler and by unit-tested serialization, not by execution. The cross-partition
+  delete guards — an `EXISTS` subquery over `c.performers` and a count over `c.venue.id` — have had
+  their shape reviewed and nothing more. The emulator image `compose.yaml` pins has no arm64 build;
+  `azure-cosmos-emulator:vnext-preview` does, but rejects the SDK's default Direct connection mode.
+- **The Bookings → Events gRPC seam has never made a call.** Nothing under `Tests/` references
+  `EventsLookupService` or `DomainExceptionInterceptor`. Both ends compile against the same generated
+  contract and the caller is covered with a stub, but the exception → status → exception round trip is
+  hand-written on both ends and degrades quietly to "everything is Internal".
 
 ### Accepted limitations
 
-Known, deliberate, and unlikely to change — recorded so nobody "fixes" one without knowing what it
-carries.
+Deliberate, and recorded so nobody "fixes" one without knowing what it carries.
 
-- **`Events.Application.Pipelines.TransactionBehavior` is a no-op**, and documented as one. Under
-  Cosmos there is no honest implementation available: atomicity is confined to a single logical
-  partition, and with `/id` partition keys no two documents ever share one.
-- **The venue and performer delete guards are best-effort.** Each counts upcoming events before
-  deleting, but an event can be created in that window and no transaction can span two logical
-  partitions. Events are cancelled rather than deleted, so they have no equivalent guard.
-- **Reservation correctness rests on the distributed locks.** The check and the write both happen with
-  every seat's lock held, but the write is not conditional, so a lock lost mid-operation is a real
-  double-reservation window rather than a wasted attempt. A deliberate choice, recorded so nobody
-  "simplifies" the locking without knowing what it carries.
-- **A command that queues after-commit work cannot be sent from a message handler.** The behavior does
-  not own that transaction, so it logs the work as dropped instead of running it. Only booking queues
-  any, and only over HTTP, so nothing hits this today.
+- **`Events.Application.Pipelines.TransactionBehavior` is a no-op** — its body is `return next(...)`.
+  Under Cosmos there is no honest implementation: atomicity is confined to a single logical partition,
+  and with `/id` partition keys no two documents ever share one.
+- **The venue and performer delete guards are best-effort.** Each counts upcoming events and refuses the
+  delete, but an event can be created in that window and no transaction spans two logical partitions.
+  Events are cancelled rather than deleted, so they need no equivalent guard.
+- **Reservation correctness rests entirely on the distributed locks.** The check and the write both
+  happen with every seat's lock held, but the write is not conditional, so a lock lost mid-operation is
+  a real double-reservation window rather than a wasted attempt.
+- **After-commit work is dropped when a command is sent from a message handler.** `TransactionBehavior`
+  does not own that transaction, so it logs a warning rather than running the queued work — the same way
+  a failure on the owned path is treated. Only `MakeBookingCommand` queues any, and only over HTTP, so
+  nothing hits this today.
 
 ## 🗺️ Roadmap
 
@@ -395,7 +386,7 @@ carries.
 - A payment service, plus the endpoint and outbound publish that would let a booking actually be paid
   for end to end
 - Refunds and notifications for a paid booking voided by a relocation or cancellation
-- Optimistic concurrency on the Events aggregates via `_etag`
-- Integration tests against the Cosmos emulator for Events, as Bookings now has against real Postgres and Redis
+- Integration tests against the Cosmos emulator for Events, as Bookings now has against real Postgres
+  and Redis — which would also put the `_etag` 412 path under test instead of under a manual check
 - Saga / process-manager work for the full booking flow in Wolverine
 - A working `compose.yaml` covering every service

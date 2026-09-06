@@ -188,9 +188,14 @@ there, not here.
     it, so a seat that does not exist, belongs to another event, is sold, has been paid for, or was
     cancelled with the event is refused at the reservation step. Without that, any of those reserved
     happily and failed at booking instead, having held a Redis key for the whole TTL first.
-    The predicate inside `GetTicketsForBookingAsync` is the database-side mirror of the same rule; a
-    query cannot call into the domain, so **if the rule changes, both change together**. Booking still
-    re-checks — that is the backstop for a reservation whose TTL lapsed while its holder was buying.
+    Booking re-checks by asking the same method — that is the backstop for a reservation whose TTL
+    lapsed while its holder was buying. It reads the tickets by id and applies `IsAvailableFor` in
+    memory rather than filtering in SQL, so **the rule has one statement and one evaluator**; there is
+    no database-side copy to keep in step. That works because both handlers are capped at
+    `TicketCountConfig` ids looked up by primary key. A query that ever needs this rule over an
+    *unbounded* set — a seat map, an admin availability listing — cannot fetch-then-filter, and would
+    reintroduce the duplication; write it as a specification rather than a second hand-written
+    predicate.
 14. **The check and the write both happen with every lock held.** `ReserveTicketCommandHandler` reads
     the reservation keys and writes them inside the locks it took. Reading outside them and writing
     inside is the same race with extra steps. Correctness here rests on the locks, so **anything that
@@ -352,7 +357,8 @@ known list rather than the complete one.
 - Nothing publishes the payment contracts. Until a payment service does, a booking stays `Booked`
   forever and its seats are never released (see **Settling a booking**).
 - A command that queues after-commit work cannot be sent from a Wolverine message handler: the
-  behavior does not own that transaction, so it throws rather than dropping the work. Only
+  behavior does not own that transaction, so it logs a warning and drops the work — it does **not**
+  throw (`TransactionBehavior.DeferToTheOwnerAsync`), which is what rule 17 above says. Only
   `MakeBookingCommand` queues any, and only over HTTP, so nothing hits this today.
 - `IRequestManager` has no implementation, so `IdentifiedCommandHandler` fails on first use — the
   idempotency mechanism is inert.

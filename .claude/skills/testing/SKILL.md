@@ -300,20 +300,15 @@ green run more than it has earned, or before "fixing" one and making things wors
 - `Handlers/ReserveTicketTests.Releases_the_locks_it_took_before_hitting_one_it_could_not_have` proves
   the lock is free *afterwards*, not that the handler ever held it and gave it back. The name reads as
   a stronger claim than the assertion makes.
-- The sale-window rule lives in two places, because a query cannot call into the domain:
-  `Ticket.IsAvailableFor` on the entity, and its database-side mirror in
-  `TicketsRepository.GetTicketsForBookingAsync`. Both are now covered —
-  `BookingDomain.TicketTests.Availability_ends_a_while_after_the_event_starts` for the entity,
+- The sale-window rule now has one statement and one evaluator: `Ticket.IsAvailableFor`. Both handlers
+  read their tickets by id and apply it in memory, so there is no database-side predicate left to drift
+  — `GetTicketsForBookingAsync` is gone and `MakeBookingCommandHandler` calls `GetTicketsByIdAsync`.
+  Covered at both levels: `BookingDomain.TicketTests.Availability_ends_a_while_after_the_event_starts`
+  for the rule itself, and
   `BookingIntegration.Handlers.MakeBookingTests.Refuses_a_ticket_whose_event_is_past_the_sale_window`
-  (using `Seed.LongPast`) for the SQL mirror, verified by mutation: replacing the repository's
-  `x.EventDate > saleWindowStart` clause with `true` turns the latter red. The grace period itself is
-  no longer duplicated — the repository computes its cutoff from `Ticket.SaleWindowStart(DateTime.UtcNow)`,
-  which is verified by a second mutation: widening `Ticket.SaleGracePeriod` to 4000 days turns the SQL
-  test red, which it would not have done while the query carried its own `-5`. What is still stated
-  twice is the *shape* of the predicate — status, event id and the date comparison — so adding a
-  condition to `Ticket.IsAvailableFor` still means editing `GetTicketsForBookingAsync` by hand. A query
-  cannot call into the domain, so closing that would take an `Expression<Func<Ticket, bool>>` on the
-  entity; not judged worth it yet.
+  (using `Seed.LongPast`) for the booking path, verified by mutation: dropping the
+  `!ticket.IsAvailableFor(...)` clause from the handler's guard turns the latter red while the other
+  thirteen `MakeBooking` tests stay green.
 - `Mechanics/DomainEventAtomicityTests.The_handler_saves_through_the_requests_context` asserts scope
   identity via `context.ChangeTracker.Entries<Ticket>().Count() == 1` — a white-box proxy for "this is
   the same context the handler used." Switching the repository's read to `AsNoTracking` would fail this
