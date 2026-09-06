@@ -8,21 +8,23 @@ internal class PerformerRepository : IPerformerRepository
 {
     private readonly EventsCosmosContext _context;
 
+    // Scoped alongside this repository: see ETagCache for why that lifetime is load-bearing.
+    private readonly ETagCache _etags = new();
+
     public PerformerRepository(EventsCosmosContext context)
     {
         _context = context;
     }
 
-    public Task<Performer?> GetPerformerByIdAsync(string id, CancellationToken cancellationToken)
+    public async Task<Performer?> GetPerformerByIdAsync(string id, CancellationToken cancellationToken)
     {
-        return _context.Performers.PointReadAsync<Performer>(id, cancellationToken);
+        var (performer, etag) = await _context.Performers.PointReadWithETagAsync<Performer>(id, cancellationToken);
+
+        _etags.Record(id, etag);
+
+        return performer;
     }
 
-    /// <summary>
-    /// Reads many independent items by id. With <c>/id</c> as the partition key each performer sits
-    /// in its own logical partition, so an IN query would fan out across all of them; ReadMany is
-    /// built for exactly this and stays at point-read cost per item.
-    /// </summary>
     public async Task<IReadOnlyList<Performer>> GetPerformersByIdsAsync(IEnumerable<string> ids,
         CancellationToken cancellationToken)
     {
@@ -69,23 +71,32 @@ internal class PerformerRepository : IPerformerRepository
 
     public async Task AddPerformerAsync(Performer performer, CancellationToken cancellationToken)
     {
-        await _context.Performers.CreateItemAsync(performer,
-            new PartitionKey(performer.Id),
-            cancellationToken: cancellationToken);
+        var etag = await _context.Performers.CreateAsync(performer, performer.Id, cancellationToken);
+
+        _etags.Record(performer.Id, etag);
     }
 
+    /// <summary>
+    /// Conditional on the performer not having changed since this scope read it, so two concurrent
+    /// updates cannot both write — one is refused with
+    /// <see cref="Events.Domain.Exceptions.ConcurrencyConflictException"/> and retried a layer up.
+    /// </summary>
     public async Task UpdatePerformerAsync(Performer performer, CancellationToken cancellationToken)
     {
-        await _context.Performers.ReplaceItemAsync(performer,
+        var etag = await _context.Performers.ReplaceWithETagAsync(performer,
             performer.Id,
-            new PartitionKey(performer.Id),
-            cancellationToken: cancellationToken);
+            _etags.For(performer.Id),
+            cancellationToken);
+
+        _etags.Record(performer.Id, etag);
     }
 
+    /// <summary>
+    /// Also conditional: the caller decides whether a performer may be deleted from what it read, so
+    /// a performer that changed in between must not be deleted on the strength of the old copy.
+    /// </summary>
     public async Task DeletePerformerAsync(string id, CancellationToken cancellationToken)
     {
-        await _context.Performers.DeleteItemAsync<Performer>(id,
-            new PartitionKey(id),
-            cancellationToken: cancellationToken);
+        await _context.Performers.DeleteWithETagAsync<Performer>(id, _etags.For(id), cancellationToken);
     }
 }

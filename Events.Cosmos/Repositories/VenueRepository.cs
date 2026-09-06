@@ -8,25 +8,22 @@ internal class VenueRepository : IVenueRepository
 {
     private readonly EventsCosmosContext _context;
 
+    private readonly ETagCache _etags = new();
+
     public VenueRepository(EventsCosmosContext context)
     {
         _context = context;
     }
 
-    public Task<Venue?> GetVenueByIdAsync(string id, CancellationToken cancellationToken)
+    public async Task<Venue?> GetVenueByIdAsync(string id, CancellationToken cancellationToken)
     {
-        return _context.Venues.PointReadAsync<Venue>(id, cancellationToken);
+        var (venue, etag) = await _context.Venues.PointReadWithETagAsync<Venue>(id, cancellationToken);
+
+        _etags.Record(id, etag);
+
+        return venue;
     }
 
-    /// <summary>
-    /// A cross-partition query — with <c>/id</c> partition keys every venue lives in its own
-    /// logical partition, so listing necessarily fans out. Affordable at catalogue size.
-    /// <para>
-    /// Only the first page is read per call. The SDK's continuation token is handed back to the
-    /// caller and passed in again next time, which is why paging costs the same whether the caller
-    /// asks for page 2 or page 200 — unlike OFFSET, which is charged for the rows it skips.
-    /// </para>
-    /// </summary>
     public async Task<Page<Venue>> ListVenuesAsync(int pageSize,
         string? continuationToken,
         CancellationToken cancellationToken)
@@ -48,23 +45,23 @@ internal class VenueRepository : IVenueRepository
 
     public async Task AddVenueAsync(Venue venue, CancellationToken cancellationToken)
     {
-        await _context.Venues.CreateItemAsync(venue,
-            new PartitionKey(venue.Id),
-            cancellationToken: cancellationToken);
+        var etag = await _context.Venues.CreateAsync(venue, venue.Id, cancellationToken);
+
+        _etags.Record(venue.Id, etag);
     }
 
     public async Task UpdateVenueAsync(Venue venue, CancellationToken cancellationToken)
     {
-        await _context.Venues.ReplaceItemAsync(venue,
+        var etag = await _context.Venues.ReplaceWithETagAsync(venue,
             venue.Id,
-            new PartitionKey(venue.Id),
-            cancellationToken: cancellationToken);
+            _etags.For(venue.Id),
+            cancellationToken);
+
+        _etags.Record(venue.Id, etag);
     }
 
     public async Task DeleteVenueAsync(string id, CancellationToken cancellationToken)
     {
-        await _context.Venues.DeleteItemAsync<Venue>(id,
-            new PartitionKey(id),
-            cancellationToken: cancellationToken);
+        await _context.Venues.DeleteWithETagAsync<Venue>(id, _etags.For(id), cancellationToken);
     }
 }

@@ -8,21 +8,23 @@ internal class EventRepository : IEventRepository
 {
     private readonly EventsCosmosContext _context;
 
+    // Scoped alongside this repository: see ETagCache for why that lifetime is load-bearing.
+    private readonly ETagCache _etags = new();
+
     public EventRepository(EventsCosmosContext context)
     {
         _context = context;
     }
 
-    public Task<Event?> GetEventByIdAsync(string id, CancellationToken cancellationToken)
+    public async Task<Event?> GetEventByIdAsync(string id, CancellationToken cancellationToken)
     {
-        return _context.Events.PointReadAsync<Event>(id, cancellationToken);
+        var (@event, etag) = await _context.Events.PointReadWithETagAsync<Event>(id, cancellationToken);
+
+        _etags.Record(id, etag);
+
+        return @event;
     }
 
-    /// <summary>
-    /// A cross-partition query — with <c>/id</c> partition keys every event lives in its own logical
-    /// partition, so listing necessarily fans out. Cursor paging, because Cosmos charges for the
-    /// rows an OFFSET skips.
-    /// </summary>
     public async Task<Page<Event>> ListEventsAsync(int pageSize,
         string? continuationToken,
         CancellationToken cancellationToken)
@@ -44,27 +46,23 @@ internal class EventRepository : IEventRepository
 
     public async Task AddEventAsync(Event @event, CancellationToken cancellationToken)
     {
-        await _context.Events.CreateItemAsync(@event,
-            new PartitionKey(@event.Id),
-            cancellationToken: cancellationToken);
+        var etag = await _context.Events.CreateAsync(@event, @event.Id, cancellationToken);
+
+        _etags.Record(@event.Id, etag);
     }
 
     public async Task UpdateEventAsync(Event @event, CancellationToken cancellationToken)
     {
-        await _context.Events.ReplaceItemAsync(@event,
+        var etag = await _context.Events.ReplaceWithETagAsync(@event,
             @event.Id,
-            new PartitionKey(@event.Id),
-            cancellationToken: cancellationToken);
+            _etags.For(@event.Id),
+            cancellationToken);
+
+        // The stored version has moved on; a second write of the same aggregate in this scope must
+        // compare against the new ETag, not the one the original read saw.
+        _etags.Record(@event.Id, etag);
     }
 
-    /// <summary>
-    /// Filters on the *embedded* venue snapshot (<c>c.venue.id</c>) because that is what an event
-    /// document actually carries — there is no join to the venues container.
-    /// <para>
-    /// Cross-partition and cross-container, so this is the most expensive read in the service. It
-    /// exists only to guard venue deletion, which is rare.
-    /// </para>
-    /// </summary>
     public Task<int> CountUpcomingEventsAtVenueAsync(string venueId,
         DateTime asOf,
         CancellationToken cancellationToken)
@@ -79,16 +77,6 @@ internal class EventRepository : IEventRepository
         return CountAsync(query, cancellationToken);
     }
 
-    /// <summary>
-    /// Filters on the *embedded* performer snapshots because that is what an event document
-    /// actually carries — there is no join to the performers container.
-    /// <para>
-    /// A correlated EXISTS subquery rather than <c>ARRAY_CONTAINS</c>: matching an array of objects
-    /// with ARRAY_CONTAINS needs an object literal, which cannot carry a query parameter, and
-    /// interpolating the id into the text instead would be string-built SQL.
-    /// </para>
-    /// <para>Cross-partition, and it exists only to guard performer deletion, which is rare.</para>
-    /// </summary>
     public Task<int> CountUpcomingEventsWithPerformerAsync(string performerId,
         DateTime asOf,
         CancellationToken cancellationToken)

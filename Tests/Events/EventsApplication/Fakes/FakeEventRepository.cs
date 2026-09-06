@@ -1,4 +1,5 @@
 using Events.Domain.Entities;
+using Events.Domain.Exceptions;
 using Events.Domain.Repositories;
 
 namespace EventsApplication.Fakes;
@@ -10,6 +11,14 @@ internal sealed class FakeEventRepository : IEventRepository
     public int UpcomingEventCount { get; set; }
     public int UpcomingPerformerEventCount { get; set; }
 
+    /// <summary>
+    /// How many times the next writes should lose the race before one is allowed through — what a
+    /// Cosmos ETag mismatch does, without a Cosmos.
+    /// </summary>
+    public int ConflictsBeforeSuccess { get; set; }
+
+    public int GetCalls { get; private set; }
+
     public string? LastContinuationTokenRequested { get; private set; }
     public string? NextContinuationToken { get; set; }
 
@@ -17,8 +26,12 @@ internal sealed class FakeEventRepository : IEventRepository
 
     public void Seed(params Event[] events) => _events.AddRange(events);
 
-    public Task<Event?> GetEventByIdAsync(string id, CancellationToken cancellationToken) =>
-        Task.FromResult(_events.FirstOrDefault(e => e.Id == id));
+    public Task<Event?> GetEventByIdAsync(string id, CancellationToken cancellationToken)
+    {
+        GetCalls++;
+
+        return Task.FromResult(_events.FirstOrDefault(e => e.Id == id));
+    }
 
     public Task<Page<Event>> ListEventsAsync(int pageSize,
         string? continuationToken,
@@ -42,6 +55,15 @@ internal sealed class FakeEventRepository : IEventRepository
     /// </summary>
     public Task UpdateEventAsync(Event @event, CancellationToken cancellationToken)
     {
+        if (ConflictsBeforeSuccess > 0)
+        {
+            ConflictsBeforeSuccess--;
+
+            // Nothing is recorded in Updated: a refused write stored nothing, which is what makes
+            // re-running the whole handler safe.
+            throw new ConcurrencyConflictException(nameof(Event), @event.Id);
+        }
+
         Updated.Add(@event);
         return Task.CompletedTask;
     }
