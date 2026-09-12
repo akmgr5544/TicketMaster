@@ -9,6 +9,9 @@
       <PackageReference Include="MediatR"/>
       <PackageReference Include="WolverineFx" />
       <PackageReference Include="WolverineFx.RabbitMQ" />
+      <!-- UseCosmosDbPersistence lives here (Wolverine.CosmosDb); the durable outbox is configured in
+           ConfigureRabbitMq. The enrol-and-flush against the container lives in Events.Cosmos. -->
+      <PackageReference Include="WolverineFx.CosmosDb" />
     </ItemGroup>
 
     <ItemGroup>

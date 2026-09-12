@@ -22,7 +22,7 @@ builder.Services.AddControllers();
 // controllers. The plain http profile is HTTP/1.1 only and cannot serve them.
 builder.Services.AddGrpc(options => options.Interceptors.Add<DomainExceptionInterceptor>());
 
-builder.Host.ConfigureRabbitMq();
+builder.Host.ConfigureRabbitMq(builder.Configuration);
 
 var app = builder.Build();
 

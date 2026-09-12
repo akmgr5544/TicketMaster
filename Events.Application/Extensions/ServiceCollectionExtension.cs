@@ -1,9 +1,11 @@
 using Events.Application.IntegrationEvents;
 using Events.Application.Pipelines;
 using MediatR;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Wolverine;
+using Wolverine.CosmosDb;
 using Wolverine.RabbitMQ;
 
 namespace Events.Application.Extensions;
@@ -15,29 +17,34 @@ public static class ServiceCollectionExtension
 
         services.AddMediatR(cf =>
             cf.RegisterServicesFromAssembly(typeof(ServiceCollectionExtension).Assembly));
-        // Registration order is pipeline order, outermost first. The retry has to be outside
-        // everything else: it re-runs the whole request, so any behavior it wrapped inside would
-        // only see one attempt, and a behavior registered outside it would see the retries as
-        // separate requests.
+
         services.AddTransient(typeof(IPipelineBehavior<,>), typeof(ConcurrencyRetryBehavior<,>));
         services.AddTransient(typeof(IPipelineBehavior<,>), typeof(TransactionBehavior<,>));
 
-        // The one route to the broker. Scoped, because IMessageBus is.
-        services.AddScoped<IIntegrationEventPublisher, WolverineIntegrationEventPublisher>();
+        services.AddScoped<IIntegrationEventPublisher, OutboxIntegrationEventPublisher>();
 
         return services;
     }
-    
-    public static void ConfigureRabbitMq(this IHostBuilder hostBuilder)
+
+    public static void ConfigureRabbitMq(this IHostBuilder hostBuilder, IConfiguration configuration)
     {
+        var databaseName = configuration["CosmosConfigs:Database"]
+            ?? throw new InvalidOperationException("CosmosConfigs:Database is not configured.");
+
         hostBuilder.UseWolverine(options =>
         {
             // Takes the connection string *name*; Wolverine resolves it from IConfiguration itself.
             options.UseRabbitMqUsingNamedConnection("RabbitMQ")
                 .AutoProvision()
                 .UseConventionalRouting();
-            
+
             options.Policies.DisableConventionalLocalRouting();
+
+            // Durable Cosmos outbox: envelopes persist and are relayed after a crash. Not atomic with
+            // the aggregate write (a separate container, per-item upsert) — an accepted small window.
+            options.UseCosmosDbPersistence(databaseName);
+            options.Policies.AutoApplyTransactions();
+            options.Policies.UseDurableOutboxOnAllSendingEndpoints();
         });
     }
 }

@@ -8,10 +8,12 @@
       <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" />
       <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
       <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
+      <PackageReference Include="WolverineFx.CosmosDb" />
     </ItemGroup>
 
     <ItemGroup>
       <ProjectReference Include="..\Events.Domain\Events.Domain.csproj" />
+      <ProjectReference Include="..\Events.Application\Events.Application.csproj" />
     </ItemGroup>
 
 </Project>
