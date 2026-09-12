@@ -224,3 +224,6 @@ AppPackages/
 #####
 # End of core ignore list, below put you custom 'per project' settings (patterns or path)
 #####
+
+# Local secrets for docker compose (never commit real values); see .env.example
+.env

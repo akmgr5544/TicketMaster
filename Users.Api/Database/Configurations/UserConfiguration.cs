@@ -24,5 +24,9 @@ internal class UserConfiguration : IEntityTypeConfiguration<User>
         builder.Property(user => user.LastName).HasMaxLength(120).IsRequired();
         builder.Property(user => user.PhoneNumber).HasMaxLength(120);
         builder.Property(user => user.RefreshToken).HasMaxLength(120);
+
+        // Stored as the enum name rather than an int, so the column is readable and a reordering of the
+        // enum cannot silently repoint existing rows.
+        builder.Property(user => user.Role).HasConversion<string>().HasMaxLength(20).IsRequired();
     }
 }

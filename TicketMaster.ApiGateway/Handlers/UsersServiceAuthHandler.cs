@@ -59,7 +59,8 @@ internal sealed class UsersServiceAuthHandler : AuthenticationHandler<Authentica
             new("Email", userInfo.Email),
             new("FirstName", userInfo.FirstName),
             new("LastName", userInfo.LastName),
-            new("UserName", userInfo.UserName)
+            new("UserName", userInfo.UserName),
+            new("Role", userInfo.Role)
         ];
 
         var identity = new ClaimsIdentity(claims);

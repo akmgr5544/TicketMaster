@@ -12,6 +12,7 @@ internal class AuthTransformProvider : ITransformProvider
 {
     private const string UserIdHeader = "X-Identity-UserId";
     private const string UserNameHeader = "X-Identity-UserName";
+    private const string RoleHeader = "X-Identity-Role";
 
     public void ValidateRoute(TransformRouteValidationContext context)
     {
@@ -32,6 +33,7 @@ internal class AuthTransformProvider : ITransformProvider
             // client-supplied value would survive and be read ahead of the trusted one.
             transformContext.ProxyRequest.Headers.Remove(UserIdHeader);
             transformContext.ProxyRequest.Headers.Remove(UserNameHeader);
+            transformContext.ProxyRequest.Headers.Remove(RoleHeader);
 
             var user = transformContext.HttpContext.User;
             if (user.Identity?.IsAuthenticated != true)
@@ -41,6 +43,7 @@ internal class AuthTransformProvider : ITransformProvider
 
             SetIdentityHeader(transformContext, UserIdHeader, user.FindFirstValue("UserId"));
             SetIdentityHeader(transformContext, UserNameHeader, user.FindFirstValue("UserName"));
+            SetIdentityHeader(transformContext, RoleHeader, user.FindFirstValue("Role"));
 
             return ValueTask.CompletedTask;
         });

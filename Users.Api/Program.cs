@@ -23,6 +23,12 @@ var section = configuration.GetSection("AuthConfigs");
 builder.Services.Configure<AuthOptions>(section);
 var authOptions = section.Get<AuthOptions>()!;
 
+// The signing key is a secret and is intentionally not committed: supply it via user-secrets locally
+// or AuthConfigs__Token in the environment. Fail fast rather than boot with an unusable empty key.
+if (string.IsNullOrWhiteSpace(authOptions.Token))
+    throw new InvalidOperationException(
+        "'AuthConfigs:Token' is not configured. Set it via user-secrets or the AuthConfigs__Token environment variable.");
+
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
@@ -38,7 +44,8 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         };
     });
 
-builder.Services.AddAuthorization();
+builder.Services.AddAuthorization(options =>
+    options.AddPolicy("AdminOnly", policy => policy.RequireRole(nameof(Users.Api.Entities.UserRole.Admin))));
 
 var app = builder.Build();
 

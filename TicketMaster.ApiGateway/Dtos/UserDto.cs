@@ -6,4 +6,5 @@ public record UserDto(
     string FirstName,
     string LastName,
     string UserName,
+    string Role,
     IReadOnlyCollection<string> Permissions);

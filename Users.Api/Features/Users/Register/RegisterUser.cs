@@ -61,11 +61,18 @@ public static class RegisterUser
             if (dbUser != null)
                 return Result<Response>.Failure(InUseError());
 
+            // Bootstrap: the first account ever registered is the admin; everyone after is a customer.
+            // Admins grant the role to others via the admin-only set-role endpoint.
+            var isFirstUser = !await _dbContext.Users.AnyAsync(cancellationToken);
+
             var user = new User(request.UserName,
                 request.Email,
                 request.FirstName,
                 request.LastName,
-                request.PhoneNumber);
+                request.PhoneNumber)
+            {
+                Role = isFirstUser ? UserRole.Admin : UserRole.Customer
+            };
 
             var hashedPass = _passwordHasher.HashPassword(user, request.Password);
             user.PasswordHash = hashedPass;

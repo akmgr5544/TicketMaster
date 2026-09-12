@@ -17,9 +17,14 @@ public class TicketsController : BaseController
         _sender = sender;
     }
 
+    // Admin-only repair path: it mints real, bookable seats, so it must not be reachable by an ordinary
+    // authenticated caller. The gateway requires only authentication for /bookings-service/**; the
+    // admin check lives here, on the trusted X-Identity-Role header.
     [HttpPost]
+    [AdminOnly]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult> CreateTicketAsync([FromBody] CreateTicketCommand command,
         CancellationToken token = default)

@@ -20,6 +20,7 @@ public static class IntrospectUser
         string FirstName,
         string LastName,
         string UserName,
+        string Role,
         IReadOnlyCollection<string> Permissions);
 
     internal sealed class Handler : IRequestHandler<Query, Result<Response>>
@@ -41,7 +42,8 @@ public static class IntrospectUser
                     x.Email,
                     x.FirstName,
                     x.LastName,
-                    x.UserName
+                    x.UserName,
+                    x.Role
                 })
                 .FirstOrDefaultAsync(cancellationToken);
 
@@ -60,6 +62,7 @@ public static class IntrospectUser
                 user.FirstName,
                 user.LastName,
                 user.UserName,
+                user.Role.ToString(),
                 []);
 
             return Result<Response>.Success(result);

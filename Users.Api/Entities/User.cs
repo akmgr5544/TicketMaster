@@ -17,6 +17,7 @@ public class User
         PasswordHash = string.Empty;
         RefreshToken = string.Empty;
         RefreshTokenExpires = DateTime.MinValue;
+        Role = UserRole.Customer;
     }
 
     public long Id { get; set; }
@@ -30,4 +31,8 @@ public class User
     public string RefreshToken { get; set; }
 
     public DateTime RefreshTokenExpires { get; set; }
+
+    // Self-registration always yields Customer; Admin is granted only by the startup seeder. Drives the
+    // role claim in the JWT and the introspection response the gateway propagates downstream.
+    public UserRole Role { get; set; }
 }

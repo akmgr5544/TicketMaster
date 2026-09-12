@@ -1,5 +1,8 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
+using Users.Api.Entities;
 using Users.Api.Features.Users;
 using Users.Api.Options;
 
@@ -58,5 +61,21 @@ public class TokenServiceTests
         var result = TokenService.CreateRefreshToken(Options(7));
 
         Assert.True(result.Expires > DateTime.UtcNow.AddDays(1));
+    }
+
+    [Theory]
+    [InlineData(UserRole.Admin, "Admin")]
+    [InlineData(UserRole.Customer, "Customer")]
+    public void CreateToken_carries_the_user_role_as_a_claim(UserRole role, string expected)
+    {
+        var user = new User("name", "user@example.com", "First", "Last", "") { Role = role };
+
+        var token = new JwtSecurityTokenHandler().ReadJwtToken(TokenService.CreateToken(user, Options()));
+
+        // Serialized under either the short "role" name or the full ClaimTypes.Role URI depending on the
+        // handler's outbound map; the value is what carries the role. (The gateway actually reads the
+        // role from DB introspection, not the token — this just proves the token is self-describing.)
+        Assert.Contains(token.Claims,
+            claim => claim.Value == expected && (claim.Type == "role" || claim.Type == ClaimTypes.Role));
     }
 }
