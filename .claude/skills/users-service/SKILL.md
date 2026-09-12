@@ -62,10 +62,12 @@ Code shared by several features in one area sits one level up, at `Features/<Are
 | `Extensions/ServiceCollectionExtension.cs` | DI registration and the migration helper |
 | `Program.cs` | Composition and pipeline |
 
-The live feature slices under `Features/Users/` are `Authenticate`, `Register`, `RefreshToken` and
-`Introspect`. `Introspect` (`Introspect/IntrospectUser.cs`) is the gateway-facing contract: it maps
-`GET api/users/auth` with `.RequireAuthorization()` and returns
-`{ id, email, firstName, lastName, userName, permissions }` — see rule 11 and the `api-gateway` skill.
+The live feature slices under `Features/Users/` are `Authenticate`, `Register`, `RefreshToken`,
+`Introspect` and `SetRole`. `Introspect` (`Introspect/IntrospectUser.cs`) is the gateway-facing
+contract: it maps `GET api/users/auth` with `.RequireAuthorization()` and returns
+`{ id, email, firstName, lastName, userName, role, permissions }` — see rule 11 and the `api-gateway`
+skill. `SetRole` (`SetRole/SetUserRole.cs`) maps `PUT api/users/{id}/role` behind the `AdminOnly`
+policy for promoting/demoting users.
 
 ## Rules
 
@@ -113,7 +115,7 @@ The live feature slices under `Features/Users/` are `Authenticate`, `Register`, 
 
 ## Auth-security posture
 
-The intended design, being implemented now:
+Implemented:
 
 - **Refresh tokens are stored hashed** (SHA-256), never in plaintext — a leaked table is not a leaked
   set of live sessions (rule 8).
@@ -125,21 +127,33 @@ The intended design, being implemented now:
 - **Register handles the unique-constraint race** by catching `DbUpdateException` from the insert and
   returning 400, rather than letting the loser of two concurrent registrations surface as a 500
   (`efcore` rule 4).
+- **The signing key is not committed.** `AuthConfigs:Token` is empty in `appsettings.json`; supply it
+  via user-secrets locally or the `AuthConfigs__Token` environment variable. `Program.cs` throws at
+  startup if it is missing, so the service never boots with an unusable empty key.
+
+## Roles
+
+`User.Role` is a `UserRole` enum (`Customer` / `Admin`), stored as its name via `HasConversion<string>()`.
+
+- **Bootstrap: the first account ever registered becomes `Admin`**; everyone after is `Customer`. The
+  Register handler decides this by checking whether the `Users` table is empty — there is no seeder and
+  no admin credential in config. (A one-time race: two simultaneous first registrations could both win
+  admin. Acceptable for bootstrap.)
+- **`PUT api/users/{id}/role`** (the `SetRole` slice) promotes or demotes, behind the `AdminOnly`
+  policy (`RequireRole("Admin")`). Because Users.Api validates its own JWT — which carries the role
+  claim `TokenService` issues — this is a real token check, not a trusted header.
+- The role rides into the access token as a claim and is echoed by `Introspect`, which is how the
+  gateway learns it and propagates `X-Identity-Role` for Bookings' admin-gated ticket endpoint.
 
 ## Known gaps
 
-Current code does not yet match the rules above.
-
-- `AuthenticateUser` ignores `SuccessRehashNeeded` (rule 10).
-- `Error` is still constructed with the sentence in `Code` and `""` in `Message` (rule 4).
-  `ErrorResults.ToProblem` compensates by falling back to `Code` for the problem detail, which keeps
-  responses readable but does not make rule 4 hold.
-- `Result` and `Result<T>` expose public setters, so a caller can flip `IsSuccess` after the fact.
-- `TokenService.CreateRefreshToken` accepts `User` and `AuthOptions` and uses neither.
-- `UsersDomainContext` takes the non-generic `DbContextOptions` (see `efcore` rule 14).
 - `JwtSecurityTokenHandler` is the legacy handler; `JsonWebTokenHandler` from
   `Microsoft.IdentityModel.JsonWebTokens` is the current one and does not rewrite claim types into
-  long URIs.
+  long URIs. Migrating means rebuilding token creation around `SecurityTokenDescriptor`, so it is
+  deferred rather than done as a drop-in.
+- The role-touching paths (first-user-is-admin in Register, the `SetRole` endpoint) have no automated
+  test — Users has no DB test harness, and this repo avoids in-memory EF providers. A Users
+  integration project is the right home for them.
 
 ## Common mistakes
 

@@ -245,23 +245,21 @@ there, not here.
     override is a deadlock waiting for the right synchronization context. Bookings dispatches on
     async saves only, and the sync override throws rather than silently dropping the event.
 
-## Known gap: the admin create endpoint is not restricted
+## The admin create endpoint is restricted
 
-`POST /api/tickets` is meant for admins repairing inventory, and nothing enforces that.
-`TicketsController.CreateTicketAsync` has no `[Authorize]`, no role and no policy, and unlike
-`ReserveTicketAsync` it does not read the identity header at all. There is no role or policy usage
-anywhere in `Bookings.Api`. The gateway's `GatewayAuthPolicy` requires only an *authenticated* user
-for `/bookings-service/**`, so any logged-in caller can create tickets — real seats, which then
-become bookable inventory.
+`POST /api/tickets` mints real, bookable seats, so it is admin-only. `TicketsController.CreateTicketAsync`
+carries `[AdminOnly]` (`Abstractions/AdminOnlyAttribute.cs`), an action filter that reads the trusted
+`X-Identity-Role` header the gateway sets and returns **403** unless it says `Admin`. It fails closed —
+a missing or blank role is refused too, so hitting the service directly, without the gateway, is denied.
 
-Closing it is not a one-project change: the gateway propagates only `X-Identity-UserId` and
-`X-Identity-UserName`, so no role reaches Bookings. It needs a role claim issued by Users.Api,
-propagated by `AuthTransformProvider`, and enforced here. Deferred deliberately, not overlooked.
+Bookings never sees the token, so it cannot use `[Authorize(Roles=...)]`; the role reaches it only
+because Users.Api issues a role claim, `Introspect` echoes it, and the gateway propagates
+`X-Identity-Role`. The role model itself (first-user-is-admin, promotion) lives in the `users-service`.
 
 ## The HTTP surface
 
 ```
-POST   /api/tickets                     admin repair: create one seat, validated against Events
+POST   /api/tickets                     admin only (403 otherwise): create one seat, validated against Events
 POST   /api/tickets/reserve             hold seats, 5 minute TTL
 
 POST   /api/bookings                    201 + { id }

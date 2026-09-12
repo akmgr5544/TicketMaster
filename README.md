@@ -49,8 +49,9 @@ listed honestly under [Known gaps](#-known-gaps) rather than left for you to dis
 ```
 
 The gateway authenticates every request by calling Users.Api, then forwards the resolved identity
-downstream as `X-Identity-UserId` / `X-Identity-UserName` headers — services read identity from
-those rather than re-validating the token.
+downstream as `X-Identity-UserId` / `X-Identity-UserName` / `X-Identity-Role` headers — services read
+identity from those rather than re-validating the token. `POST /api/tickets` is the one admin-gated
+action: Bookings refuses it (403) unless that role header says `Admin`.
 
 Events owns the catalogue and never learns about bookings; Bookings reacts to the catalogue and never
 writes to it. Every ticket that exists does so because Events said an event exists, and every ticket
@@ -83,7 +84,7 @@ POST   /api/events/{id}/cancel        # idempotent; no DELETE exists
 Bookings exposes the checkout, with every action scoped to the caller the gateway resolved:
 
 ```
-POST   /api/tickets                     # admin repair: one seat, validated against Events over gRPC
+POST   /api/tickets                     # admin only (403 otherwise); one seat, validated against Events over gRPC
 POST   /api/tickets/reserve             # hold seats for 5 minutes
 POST   /api/bookings                    # 201 + { id }
 GET    /api/bookings/{id}               # the caller's own; somebody else's is a 404
@@ -283,6 +284,18 @@ among the command handlers.
 
 ## ▶️ Running locally
 
+The whole system, in containers — the gateway is the only published port (`http://localhost:8080`):
+
+```bash
+cp .env.example .env      # then set USERS_AUTH_TOKEN, e.g. openssl rand -hex 64
+docker compose up --build
+```
+
+The first account you register becomes the admin; everyone after is a customer. On Apple Silicon the
+Cosmos emulator has no arm64 image, so Events' store will not start — see [Known gaps](#-known-gaps).
+
+Or run the services directly:
+
 ```bash
 dotnet restore TicketMaster.slnx
 dotnet build TicketMaster.slnx
@@ -294,12 +307,16 @@ dotnet run --project TicketMaster.ApiGateway/TicketMaster.ApiGateway.csproj
 ```
 
 Bookings and Users apply EF Core migrations at startup; Events creates its Cosmos database and
-containers at startup. Events expects the Cosmos emulator on `https://localhost:8081` — the
-emulator's well-known account key is already in `appsettings.Development.json` and is not a secret.
+containers at startup. The JWT signing key is **not** committed, so Users.Api fails fast until it is
+set once via user-secrets (or the `AuthConfigs__Token` env var):
 
 ```bash
-docker compose up cosmos
+dotnet user-secrets set "AuthConfigs:Token" "$(openssl rand -hex 64)" --project Users.Api
 ```
+
+Events expects the Cosmos emulator on `https://localhost:8081` — the emulator's well-known account key
+is already in `appsettings.Development.json` and is not a secret. Bring up just the backing stores with
+`docker compose up postgres redis rabbitmq cosmos`.
 
 Central package management is enabled: add package versions to `Directory.Packages.props`, never
 `Version="…"` on an individual `<PackageReference>`.
@@ -321,24 +338,11 @@ today rather than what it should do — the fix is a decision, not a gap.
 - **Nothing pays for a booking.** `BookingPaidIntegrationEvent` and `BookingPaymentFailedIntegrationEvent`
   are defined and consumed, but nothing publishes them — Bookings has no outbound publishing at all. A
   booking therefore stays `Booked` indefinitely and its seats come back only if the owner cancels it.
-- **The bookings list is a bare array.** `GET /api/bookings?page=&pageSize=` returns neither a total nor
-  a continuation, so a caller infers "there may be more" from receiving a full page. It orders by the
-  key, which is a sequence allocated at insert and so already in creation order.
 - **`UserId` is a `string` in Bookings and a `long` in `Users.Api`.** Aligning them means a migration.
 - **A relocation can strand a paid booking.** `ReconcileEventVenueCommandHandler` calls
   `ticket.Cancel(...)` for every seat the new venue lacks without asking whether that seat is booked,
   and `Booking.Cancel()` refuses anything that is not `Booked`. The parent booking is left pointing at
   cancelled tickets. Undoing that is a refund, and refunds and notifications are not built.
-- **`POST /api/tickets` is not restricted to admins.** It is the admin repair path and nothing enforces
-  that: no `[Authorize]`, no role, no policy, and it never reads the identity header. The gateway
-  requires only an *authenticated* caller for `/bookings-service/**`, so any logged-in user can create
-  real, bookable seats. Closing it needs a role claim issued by Users.Api, propagated by
-  `AuthTransformProvider`, and checked in `Bookings.Api`.
-- **`compose.yaml` cannot build the solution.** Three of its five build contexts name directories that
-  do not exist — `TicketMaster/`, `BookingApi/` and `Booking.Slq/` (sic) — and there is no service for
-  Bookings.Api or the gateway at all, though both have working Dockerfiles. The `Events.Api`, `Users.Api`
-  and `cosmos` services are the parts still correct.
-
 ### Built but unproven
 
 The code exists and is believed correct; these are the parts nothing exercises.
@@ -390,4 +394,3 @@ Deliberate, and recorded so nobody "fixes" one without knowing what it carries.
 - Integration tests against the Cosmos emulator for Events, as Bookings now has against real Postgres
   and Redis — which would also put the `_etag` 412 path under test instead of under a manual check
 - Saga / process-manager work for the full booking flow in Wolverine
-- A working `compose.yaml` covering every service

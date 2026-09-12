@@ -89,14 +89,16 @@ Response `200`:
   "firstName": "...",
   "lastName": "...",
   "userName": "...",
+  "role": "Admin",
   "permissions": ["bookings.write", "events.read"]
 }
 ```
 
 Any non-2xx means unauthenticated — return `AuthenticateResult.Fail`, never a partial principal.
 
-Claims built from the response: `UserId`, `Email`, `FirstName`, `LastName`, `UserName`, and one
-`Permission` claim per entry in `permissions`.
+Claims built from the response: `UserId`, `Email`, `FirstName`, `LastName`, `UserName`, `Role`, and
+(target) one `Permission` claim per entry in `permissions`. `AuthTransformProvider` propagates the
+role downstream as `X-Identity-Role`, which is how Bookings gates its admin-only ticket endpoint.
 
 Policies in `Program.cs`:
 - `GatewayAuthPolicy` — `RequireAuthenticatedUser()`, the default for protected routes.
@@ -190,9 +192,10 @@ what exists.
   `MapReverseProxy()`. `WebApplication` auto-inserts both when the services are registered, so this
   works today, but the YARP docs specify them explicitly and relying on the implicit insertion
   makes middleware ordering invisible.
-- No permission model yet — `GatewayAuthPolicy` is `RequireAuthenticatedUser()` only, so any
-  authenticated caller reaches every proxied endpoint, including `POST /bookings-service/api/tickets`,
-  which is meant for admins.
+- No fine-grained permission model yet — `GatewayAuthPolicy` is `RequireAuthenticatedUser()` only, so
+  authorization beyond "is authenticated" happens downstream. The one role check that exists is
+  `POST /bookings-service/api/tickets`: the gateway propagates `X-Identity-Role` and Bookings enforces
+  `Admin` there. Coarser gateway-side permission policies are still absent.
 - Nothing verifies the routing. There is no gateway test project, so the anonymous-route precedence
   below is reasoned from YARP's matching rules, not observed.
 - No caching of introspection results: every proxied request costs an extra call to Users.Api.
