@@ -192,6 +192,10 @@ escape the persistence layer.
 caller sends the token back to continue. Do not add `OFFSET`/`LIMIT` — Cosmos charges for the rows
 it skips, so deep pages get progressively more expensive.
 
+Two paging types exist and are not the same: `Page<T>` (`Events.Domain/Repositories`) is the
+domain/repository type the repository returns; `PagedResult<T>` (`Events.Application/Dtos`) is the
+Application/HTTP DTO the query handlers map it into for the response.
+
 ## Failures and status codes
 
 Events breaks the flow by **throwing**, not by returning a result type. The `Result`/`Error`
@@ -250,18 +254,21 @@ message that says what happened.
   different downstream consequence and a combined PUT would have to infer which happened by diffing.
 - Events are cancelled, never deleted. There is no `DELETE /api/events/{id}` on purpose: tickets
   exist downstream, so removal is a state transition, not a removal.
-- Optimistic concurrency is enforced. Reads record the document ETag in a per-request side-channel
-  (`ETagCache`, one per **scoped** repository — a singleton repository would turn it into a
-  cross-request cache and be worse than no guard); updates and deletes send it as `IfMatchEtag`; a 412
+- Optimistic concurrency is enforced. Reads **and creates** record the document ETag in a per-request
+  side-channel (`ETagCache`, one per **scoped** repository — a singleton repository would turn it into
+  a cross-request cache and be worse than no guard), so a create-then-update in the same scope is
+  ETag-guarded without a re-read; updates and deletes send it as `IfMatchEtag`; a 412
   becomes `ConcurrencyConflictException` and `ConcurrencyRetryBehavior` retries the whole
   read-modify-write three times, then reports 409. This is why a handler must keep the shape
   load → mutate → write → publish: a retry re-runs it from the top, so the conflicting write has to be
   its first irreversible side effect. `Event.Version` is unchanged and still only orders messages for
   consumers. The 412 path itself has no automated test — see the README's "Built but unverified".
-- `CreateEventCommandHandler` still throws `EventsDomainException` (→ 400) for a missing venue or
-  performer, where the newer handlers throw `NotFoundException` (→ 404). The newer behaviour is the
-  correct one; create was left alone rather than silently changing an existing endpoint's status
-  code.
+- `CreateEventCommandHandler` now throws `NotFoundException` (→ 404) if **any** requested performer id
+  matches nothing, mirroring `ChangeEventLineupCommandHandler` — otherwise the event would be created
+  with a subset of the requested lineup and `EventCreated` would announce the wrong one. A **missing
+  venue** and an **empty performer list** still throw `EventsDomainException` (→ 400), a deliberate
+  legacy choice: those paths were left as they were rather than silently changing an existing
+  endpoint's status code.
 - The delete guards on venues and performers are **best-effort**.
   `CountUpcomingEventsAtVenueAsync` / `CountUpcomingEventsWithPerformerAsync` run before the delete,
   and an event can be created in between; with `/id` partition keys no transaction can close that

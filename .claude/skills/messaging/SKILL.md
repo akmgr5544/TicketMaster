@@ -13,12 +13,24 @@ only safe if the consumer can process it twice.
 
 Cross-cutting — every TicketMaster service that publishes or consumes across a service boundary.
 
-Events publishes four contracts — `EventCreated`, `EventRescheduled`, `EventRelocated`,
-`EventCancelled` — all through `Events.Application/IntegrationEvents/IIntegrationEventPublisher`.
-Bookings consumes all four in `Bookings.Application/IntegrationEventHandlers`, translating each to a
-command in the `EventSync` slice. **Events still has no outbox at all, and Bookings' is enrolled but
-unproven** (see the Durability section
-and the Events skill), so rule 4 does not hold in practice today.
+Events publishes four contracts — `EventCreatedIntegrationEvent`, `EventRescheduledIntegrationEvent`,
+`EventRelocatedIntegrationEvent`, `EventCancelledIntegrationEvent` (shortened to `EventCreated` etc.
+below) — all through `Events.Application/IntegrationEvents/IIntegrationEventPublisher`.
+
+Bookings consumes **six** contracts in `Bookings.Application/IntegrationEventHandlers`, each a thin
+`Consume` handler translating to a command:
+
+| Consumed contract | Slice |
+|---|---|
+| the four `Event*` contracts above | `EventSync` |
+| `BookingPaidIntegrationEvent` | `Payments/Confirm` |
+| `BookingPaymentFailedIntegrationEvent` | `Payments/ReleaseUnpaid` |
+
+The two payment contracts are **consumed but not produced anywhere** — no payment service exists yet.
+That is an intentional pending seam, kept in place deliberately (see the `bookings-service` skill).
+
+**Events still has no outbox at all** (see the Events subsection below), so rule 4 does not hold on
+the Events side. **Bookings' outbox is enrolled and proven** — see the Durability section.
 
 **The rules below are written for the pattern, not the library.** Wolverine and RabbitMQ specifics
 live in their own sections, so replacing either changes those sections rather than the rules.
@@ -210,6 +222,19 @@ The docs recommend registering `DbContextOptions` with `optionsLifetime: Service
 **Do not run a second transaction manager over the top.** A MediatR pipeline behavior that opens
 its own `BeginTransactionAsync` around the same `DbContext` competes with Wolverine's middleware
 for transaction ownership. Pick one.
+
+### Events also hosts Wolverine
+
+Events.Application hosts its own Wolverine + RabbitMQ (its own `ConfigureRabbitMq`) and publishes
+integration events through `WolverineIntegrationEventPublisher` (behind `IIntegrationEventPublisher`)
+using conventional routing. It calls `Policies.DisableConventionalLocalRouting()` — it only sends,
+never listens in-process.
+
+Crucially, Events has **no** `PersistMessagesWithPostgresql` and **no** durability policies — so it
+has **no outbox**. Publishing happens inline, after the Cosmos write, which leaves a known
+lost-message window: a crash between the write and the publish loses the message, and Bookings never
+learns of the change. This is deliberate for now (Cosmos has no Wolverine message store) — see the
+`events-service` skill's Known gaps.
 
 ## When Wolverine is replaced
 

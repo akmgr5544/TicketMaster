@@ -10,8 +10,9 @@ change tracker doing something different from what the code appears to say.
 
 ## Scope
 
-Cross-cutting — every TicketMaster service that persists to Postgres. Events.Api uses MongoDB and
-is out of scope. Each service's skill owns where its `DbContext` and configurations live.
+Cross-cutting — every TicketMaster service that persists to Postgres. Events.Api uses Azure Cosmos DB
+and is out of scope — see the `document-db` skill for it. Each service's skill owns where its
+`DbContext` and configurations live.
 
 ## Writes
 
@@ -103,9 +104,10 @@ is out of scope. Each service's skill owns where its `DbContext` and configurati
     form compiles but breaks as soon as a second `DbContext` is registered in the same container,
     because both resolve the same options object.
 
-15. **One `IEntityTypeConfiguration<T>` per entity**, applied in `OnModelCreating`. Prefer
+15. **One `IEntityTypeConfiguration<T>` per entity**, applied in `OnModelCreating`. In general prefer
     `ApplyConfigurationsFromAssembly` over hand-listing each configuration — a hand-written list
-    silently omits any configuration someone forgets to add.
+    silently omits any configuration someone forgets to add. Note that both DbContexts in this repo
+    deliberately hand-list their entity configurations rather than scanning the assembly.
 
 16. **Beware side-effecting property setters.** By default *"the backing field, if one is found by
     convention or has been specified, is used when new objects are constructed, typically when

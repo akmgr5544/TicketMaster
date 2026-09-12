@@ -147,7 +147,7 @@ own; then, once the booking exists, by the ticket's own status in Postgres.
 
 ```
 POST reserve                    MakeBookingCommand              payment service
-  │                               (no endpoint yet)                 │
+  │                               POST /api/bookings                │
   ▼                               │                                 ▼
 ReserveTicketCommand              ▼                          BookingPaid / BookingPaymentFailed
   │ reject empty/over-limit/dupe  read reservations               │
@@ -173,7 +173,8 @@ there, not here.
 10. **Lock the narrowest thing that needs locking.** A lock key must identify the contended
     resource — never a constant. One shared key serializes every reservation in the system into a
     single-file queue, however many different events they cover. Reservation locks one key per
-    ticket, `bookings:reserve:ticket:{id}` (`Locking/ReservationKeys`).
+    ticket, `bookings:reserve:ticket:{id}` (`Extensions/TicketLockExtensions`, where `ReservationKeys`
+    lives).
 11. **Multiple locks are acquired in ascending ticket id order, never the caller's order.** That
     ordering is the only thing preventing two overlapping reservations from deadlocking: both take
     seat 7 before seat 9, so neither ends up holding what the other waits for. It lives in
@@ -324,16 +325,16 @@ them.
 
 Current code does not match the rules above.
 
-**Stops the service from running at all:**
-- `Policies.UseDurableLocalQueues()` leaves RabbitMQ endpoints non-durable (see `messaging`).
-
-Startup was never verified against live Postgres, Redis and RabbitMQ, so treat the above as the
-known list rather than the complete one.
+**RESOLVED — durability:** `Policies.UseDurableLocalQueues()` alone once left the RabbitMQ endpoints
+non-durable. Fixed: `ServiceCollectionExtension` now calls all three —
+`UseDurableLocalQueues`, `UseDurableInboxOnAllListeners`, `UseDurableOutboxOnAllSendingEndpoints`
+(see `messaging`). Startup is exercised against live Postgres, Redis and RabbitMQ by
+`BookingsHostFixture`.
 
 **Wrong behavior:**
 - Nothing currently known. The three that were here — the constant lock key, the unpersisted booked
   status, and `TransactionBehavior` wrapping every request including Redis-only ones — are fixed and
-  covered by tests (`ReserveTicketCommandHandlerTests`, `DomainEventDispatchTests`,
+  covered by tests (`ReserveTicketTests`, `DomainEventDispatchTests`,
   `TransactionBehaviorTests`, `TransactionBehaviorRegistrationTests`).
 - Watch rule 14 rather than treating it as settled: reservation correctness rests entirely on the
   distributed locks, so a lock lost mid-operation double-reserves a seat. This is a deliberate choice,

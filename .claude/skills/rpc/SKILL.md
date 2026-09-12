@@ -43,10 +43,10 @@ does not. Spend that only where the list above says it is unavoidable.
 
 ### The call sites
 
-1. **Gateway → Users, token introspection.** `UsersServiceAuthHandler` calls
-   `api/users/auth?token=...` on every request that reaches the gateway. Nothing announces "this
-   token is valid"; it is a live decision, so it is RPC by the rule above, and it is the hottest
-   service-to-service call in the system.
+1. **Gateway → Users, token introspection.** `UsersServiceAuthHandler` calls `api/users/auth` (passing
+   the token in the `Authorization` header, not a query parameter) on every request that reaches the
+   gateway. Nothing announces "this token is valid"; it is a live decision, so it is RPC by the rule
+   above, and it is the hottest service-to-service call in the system.
 
    Worth knowing before optimising it: validating the JWT signature at the gateway would remove the
    hop entirely rather than make it cheaper. That is a larger change and has not been decided.
@@ -112,10 +112,13 @@ does not. Spend that only where the list above says it is unavoidable.
    it in `Implementations/`, which is how `ICacheService` is arranged. A handler that catches a
    transport exception type has leaked.
 
-7. **Translate transport failures into the caller's own exceptions at that boundary.** A missing
-   event is `NotFoundException`, the same as it would be from a local lookup. The `Bookings.Api`
-   exception-to-status mapping then works unchanged, and handlers keep catching what they already
-   catch.
+7. **Translate transport failures into the caller's own exceptions at that boundary.** A missing event
+   is *not* turned into an exception at the boundary: `EventsService` returns `null` on
+   `StatusCode.NotFound` (documented on `IEventsService`), and `CreateTicketCommandHandler` — one layer
+   up — is what throws `NotFoundException` when the lookup comes back null, the same as it would for a
+   local lookup. Only genuine transport failures (callee down, deadline exceeded) become
+   `EventsUnavailableException` at the boundary, mapped to 503. Either way the `Bookings.Api`
+   exception-to-status mapping works unchanged, and handlers keep catching what they already catch.
 
 8. **Contracts are public and evolve additively** — same rule as integration events, same reasoning:
    producer and consumer deploy separately, so both versions run at once. Add optional fields; never

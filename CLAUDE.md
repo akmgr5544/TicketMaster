@@ -97,7 +97,7 @@ Each project has a marker interface (`IApiAssemblyMarker`, `IApplicationAssembly
 
 - YARP with config split across two JSON files loaded at startup: `YarpConfigurations/yarp.clusters.json` (destinations) and `yarp.routes.json` (routing + auth policy). Destination addresses point at the services' https launch profiles (`7054` users, `7225` bookings, `7158` events).
 - The bookings and events routes require `GatewayAuthPolicy` (authenticated user). **The users route is deliberately ungated** — it fronts login, registration and token refresh, and Users.Api validates its own tokens. Do not add the policy to it.
-- Custom auth scheme `UserServiceScheme` (`Handlers/UsersServiceAuthHandler`): the gateway extracts the `Authorization` header from the incoming request, calls `Users.Api` at `api/users/auth?token=...`, and materializes claims (`UserId`, `Email`, `FirstName`, `LastName`, `UserName`) from the response. The `HttpClient` is the named `"UsersService"` client; its base address comes from `Services:Users:BaseAddress` in `appsettings.json`, and `Program.cs` throws at startup if that key is missing.
+- Custom auth scheme `UserServiceScheme` (`Handlers/UsersServiceAuthHandler`): the gateway extracts the `Authorization` header from the incoming request, calls `Users.Api` at `api/users/auth` (forwarding the token in the `Authorization` header, not a query parameter), and materializes claims (`UserId`, `Email`, `FirstName`, `LastName`, `UserName`) from the response. The `HttpClient` is the named `"UsersService"` client; its base address comes from `Services:Users:BaseAddress` in `appsettings.json`, and `Program.cs` throws at startup if that key is missing.
 - `AuthTransformProvider` runs per-request on any route with an `AuthorizationPolicy` and copies `UserId` / `UserName` claims into `X-Identity-UserId` / `X-Identity-UserName` headers on the proxied request. Downstream services should read identity from those headers, not re-validate the token.
 
 ### Tests
@@ -149,4 +149,4 @@ prefer one line at the point of confusion over a paragraph above the type.
 - **A namespace mirrors its folder.** Rider's *namespace does not correspond to file location*
   inspection enforces this and silently restores it, so don't hand-maintain a namespace that differs
   from its path — it will be reverted under you.
-- The `Users.Api.csproj` exposes `InternalsVisibleTo("ArchitectureTests")` — internal types are intentionally visible to arch tests.
+- The `Users.Api.csproj` exposes `InternalsVisibleTo("UsersArchitecture")` — internal types are intentionally visible to arch tests.

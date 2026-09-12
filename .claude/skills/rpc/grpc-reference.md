@@ -43,13 +43,14 @@ builder.Services.AddGrpc(options =>
     options.Interceptors.Add<DomainExceptionInterceptor>();
 });
 
-app.MapGrpcService<EventsGrpcService>();
+app.MapGrpcService<EventsLookupService>();
 ```
 
-The service class inherits the generated base and overrides its methods:
+The service class inherits the generated base and overrides its methods (in this repo,
+`EventsLookupService : EventsLookup.EventsLookupBase`):
 
 ```csharp
-public override async Task<EventReply> GetEvent(EventRequest request, ServerCallContext context)
+public override async Task<GetEventReply> GetEvent(GetEventRequest request, ServerCallContext context)
 {
     // context.CancellationToken is raised when the caller's deadline is exceeded — pass it on,
     // or the call keeps running server-side after the caller has already given up.
@@ -65,14 +66,18 @@ enable in production), `MaxReceiveMessageSize` / `MaxSendMessageSize`, `IgnoreUn
 
 ```csharp
 builder.Services
-    .AddGrpcClient<Events.EventsClient>(o => o.Address = new Uri(configuredAddress))
-    .AddInterceptor<TransportFaultInterceptor>();
+    .AddGrpcClient<EventsLookup.EventsLookupClient>(o => o.Address = new Uri(configuredAddress));
 ```
 
 `AddGrpcClient` is a typed `HttpClient` registration underneath, so the `HttpMessageHandler`
 pipeline, DI and configuration all behave as they do for any typed client. It registers the
 *generated* client; per rule 6 of the skill, wrap it behind the service's own interface rather than
 injecting it into a handler.
+
+The client end does **not** use an interceptor. `EventsService` (the implementation of
+`IEventsService`) wraps the generated client and maps faults inline with `try`/`catch` —
+`StatusCode.NotFound` becomes a `null` return, other transport faults become
+`EventsUnavailableException`.
 
 ## Deadlines and cancellation
 
@@ -127,7 +132,8 @@ Built-in errors carry a status code and a string only. Structured error detail r
 handling (`Google.Rpc.Status`), which is extra machinery — take it only when a string is genuinely
 not enough.
 
-Suggested mapping for this system, applied by interceptors on both ends per rule 7 of the skill:
+Suggested mapping for this system, applied by an interceptor on the server (`DomainExceptionInterceptor`)
+and a `try`/`catch` wrapper on the client (`EventsService`) per rule 7 of the skill:
 
 | Domain | Status |
 |---|---|
