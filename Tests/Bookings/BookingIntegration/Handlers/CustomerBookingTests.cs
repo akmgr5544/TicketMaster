@@ -102,8 +102,8 @@ public sealed class CustomerBookingTests : IntegrationTest
 
         var page = await Sender.Send(new ListBookingsQuery(Owner, Page: 1, PageSize: 25));
 
-        Assert.Equal(2, page.Length);
-        Assert.All(page, dto => Assert.NotEqual(strangerBooking.Id, dto.Id));
+        Assert.Equal(2, page.Items.Count);
+        Assert.All(page.Items, dto => Assert.NotEqual(strangerBooking.Id, dto.Id));
     }
 
     /// <summary>
@@ -118,7 +118,7 @@ public sealed class CustomerBookingTests : IntegrationTest
 
         var page = await Sender.Send(new ListBookingsQuery(Owner, Page: 1, PageSize: 25));
 
-        Assert.Equal([second.Id, first.Id], page.Select(dto => dto.Id));
+        Assert.Equal([second.Id, first.Id], page.Items.Select(dto => dto.Id));
     }
 
     /// <summary>
@@ -142,12 +142,18 @@ public sealed class CustomerBookingTests : IntegrationTest
         var second = await Sender.Send(new ListBookingsQuery(Owner, Page: 2, PageSize: 2));
         var third = await Sender.Send(new ListBookingsQuery(Owner, Page: 3, PageSize: 2));
 
-        Assert.Equal(2, first.Length);
-        Assert.Equal(2, second.Length);
-        Assert.Single(third);
+        Assert.Equal(2, first.Items.Count);
+        Assert.Equal(2, second.Items.Count);
+        Assert.Single(third.Items);
+
+        // Every page reports the same full total, and only the last says nothing more remains.
+        Assert.Equal(5, first.Total);
+        Assert.True(first.HasMore);
+        Assert.True(second.HasMore);
+        Assert.False(third.HasMore);
 
         // Newest first, and no row appears on two pages.
-        var returned = first.Concat(second).Concat(third).Select(b => b.Id).ToArray();
+        var returned = first.Items.Concat(second.Items).Concat(third.Items).Select(b => b.Id).ToArray();
         Assert.Equal(made.AsEnumerable().Reverse(), returned);
     }
 
@@ -159,7 +165,9 @@ public sealed class CustomerBookingTests : IntegrationTest
 
         var page = await Sender.Send(new ListBookingsQuery(Owner, Page: 1, PageSize: 25));
 
-        Assert.Empty(page);
+        Assert.Empty(page.Items);
+        Assert.Equal(0, page.Total);
+        Assert.False(page.HasMore);
     }
 
     // --- Cancelling ---

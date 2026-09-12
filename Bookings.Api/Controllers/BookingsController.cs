@@ -9,10 +9,6 @@ using Bookings.Application.Commands.Bookings;
 
 namespace Bookings.Api.Controllers;
 
-/// <summary>
-/// Everything a customer does with their own bookings. Every action is scoped to the caller the
-/// gateway resolved, so none of them takes a user id from the request.
-/// </summary>
 [Route("api/[controller]")]
 public class BookingsController : BaseController
 {
@@ -26,10 +22,6 @@ public class BookingsController : BaseController
         _sender = sender;
     }
 
-    /// <summary>
-    /// Turns tickets the caller has already reserved into a booking. The reservation must still be
-    /// held — this is the step that converts a Redis hold into a durable one.
-    /// </summary>
     [HttpPost]
     [ProducesResponseType(StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -60,15 +52,8 @@ public class BookingsController : BaseController
         return Ok(booking);
     }
 
-    /// <summary>
-    /// The caller's own bookings, newest first. A full page may mean there are more. Ordering stays
-    /// on the key deliberately: it is a sequence allocated at insert, so it is already in creation
-    /// order and walks the primary key index backwards. <c>Booking.CreatedAt</c> exists for
-    /// reporting, not ordering — sorting by it would need an index on (UserId, CreatedAt DESC) just
-    /// to match what the key already gives for free.
-    /// </summary>
     [HttpGet]
-    [ProducesResponseType<BookingDto[]>(StatusCodes.Status200OK)]
+    [ProducesResponseType<PagedResult<BookingDto>>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> ListBookingsAsync(
         [FromQuery] int page = 1,
@@ -85,10 +70,6 @@ public class BookingsController : BaseController
         return Ok(bookings);
     }
 
-    /// <summary>
-    /// Cancels a booking the caller has not paid for, putting its seats back on sale. A paid booking
-    /// is refused with 400 — undoing that is a refund, which this service does not do.
-    /// </summary>
     [HttpPost("{id:long}/cancel")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]

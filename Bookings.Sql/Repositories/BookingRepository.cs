@@ -49,6 +49,13 @@ internal class BookingRepository : IBookingRepository
             .ToArrayAsync(cancellationToken);
     }
 
+    public async ValueTask<int> CountForUserAsync(string userId, CancellationToken cancellationToken)
+    {
+        return await _context.Bookings
+            .AsNoTracking()
+            .CountAsync(booking => booking.UserId == userId, cancellationToken);
+    }
+
 
     public async ValueTask<Booking?> GetByIdAsync(long bookingId, CancellationToken cancellationToken)
     {

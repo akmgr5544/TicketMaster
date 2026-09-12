@@ -6,6 +6,6 @@ namespace Bookings.Application.Queries;
 
 public record GetBookingQuery(long BookingId, string UserId) : IRequest<BookingDto>;
 
-public record ListBookingsQuery(string UserId, int Page, int PageSize) : IRequest<BookingDto[]>;
+public record ListBookingsQuery(string UserId, int Page, int PageSize) : IRequest<PagedResult<BookingDto>>;
 
 public record CancelBookingCommand(long BookingId, string UserId) : IRequest, ITransactionalRequest;
