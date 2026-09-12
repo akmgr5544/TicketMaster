@@ -1,4 +1,3 @@
-using System.Diagnostics.CodeAnalysis;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Bookings.Api.Abstractions;
@@ -13,15 +12,15 @@ public class BaseController : ControllerBase
     private const string IdentityHeader = "X-Identity-UserId";
 
     /// <summary>
-    /// False when the header is absent, which callers turn into a 401. Deliberately not defaulted to
-    /// anything: a booking attributed to an empty or guessed user is worse than a refused request, and
-    /// the request body must never be able to supply this.
+    /// The id travels as a string on the wire (JWT subject → gateway header); Bookings parses it into a
+    /// <see cref="Guid"/> here so it never leaks past the edge. False — which callers turn into a 401 —
+    /// when the header is absent, blank, or not a Guid: a booking attributed to a guessed or malformed
+    /// user is worse than a refused request, and the request body must never be able to supply this.
     /// </summary>
-    protected bool TryGetUserId([NotNullWhen(true)] out string? userId)
+    protected bool TryGetUserId(out Guid userId)
     {
         var value = Request.Headers[IdentityHeader].FirstOrDefault();
 
-        userId = string.IsNullOrWhiteSpace(value) ? null : value;
-        return userId is not null;
+        return Guid.TryParse(value, out userId);
     }
 }

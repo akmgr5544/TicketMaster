@@ -26,7 +26,7 @@ internal class BookingRepository : IBookingRepository
     }
     
     public async ValueTask<Booking?> FindForUserAsync(long bookingId,
-        string userId,
+        Guid userId,
         CancellationToken cancellationToken)
     {
         return await _context.Bookings
@@ -35,7 +35,7 @@ internal class BookingRepository : IBookingRepository
                 cancellationToken);
     }
 
-    public async ValueTask<Booking[]> ListForUserAsync(string userId,
+    public async ValueTask<Booking[]> ListForUserAsync(Guid userId,
         int skip,
         int take,
         CancellationToken cancellationToken)
@@ -49,7 +49,7 @@ internal class BookingRepository : IBookingRepository
             .ToArrayAsync(cancellationToken);
     }
 
-    public async ValueTask<int> CountForUserAsync(string userId, CancellationToken cancellationToken)
+    public async ValueTask<int> CountForUserAsync(Guid userId, CancellationToken cancellationToken)
     {
         return await _context.Bookings
             .AsNoTracking()

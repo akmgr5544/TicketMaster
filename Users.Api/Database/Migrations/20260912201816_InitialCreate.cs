@@ -1,13 +1,12 @@
 ﻿using System;
 using Microsoft.EntityFrameworkCore.Migrations;
-using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
 #nullable disable
 
 namespace Users.Api.Database.Migrations
 {
     /// <inheritdoc />
-    public partial class Initial : Migration
+    public partial class InitialCreate : Migration
     {
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
@@ -16,16 +15,16 @@ namespace Users.Api.Database.Migrations
                 name: "Users",
                 columns: table => new
                 {
-                    Id = table.Column<long>(type: "bigint", nullable: false)
-                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
+                    Id = table.Column<Guid>(type: "uuid", nullable: false),
                     UserName = table.Column<string>(type: "character varying(120)", maxLength: 120, nullable: false),
                     Email = table.Column<string>(type: "character varying(60)", maxLength: 60, nullable: false),
-                    PasswordHash = table.Column<string>(type: "character varying(60)", maxLength: 60, nullable: false),
+                    PasswordHash = table.Column<string>(type: "character varying(84)", maxLength: 84, nullable: false),
                     FirstName = table.Column<string>(type: "character varying(120)", maxLength: 120, nullable: false),
                     LastName = table.Column<string>(type: "character varying(120)", maxLength: 120, nullable: false),
                     PhoneNumber = table.Column<string>(type: "character varying(120)", maxLength: 120, nullable: false),
                     RefreshToken = table.Column<string>(type: "character varying(120)", maxLength: 120, nullable: false),
-                    RefreshTokenExpires = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
+                    RefreshTokenExpires = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    Role = table.Column<string>(type: "character varying(20)", maxLength: 20, nullable: false)
                 },
                 constraints: table =>
                 {

@@ -10,7 +10,7 @@ internal class UserConfiguration : IEntityTypeConfiguration<User>
     {
         builder.ToTable("Users");
         builder.HasKey(user => user.Id);
-        builder.Property(user => user.Id).ValueGeneratedOnAdd();
+        builder.Property(user => user.Id).ValueGeneratedNever();
         
         builder.Property(user => user.Email).HasMaxLength(60).IsRequired();
         builder.HasIndex(user => user.Email).IsUnique();

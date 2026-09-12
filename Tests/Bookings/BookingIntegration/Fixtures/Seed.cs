@@ -66,7 +66,7 @@ public sealed class Seed
         return tickets;
     }
 
-    public async Task<Booking> BookingAsync(string userId, params long[] ticketIds)
+    public async Task<Booking> BookingAsync(Guid userId, params long[] ticketIds)
     {
         await using var scope = _root.CreateAsyncScope();
         var context = scope.ServiceProvider.GetRequiredService<BookingDomainContext>();
@@ -84,7 +84,7 @@ public sealed class Seed
         return booking;
     }
 
-    public async Task ReservationAsync(string userId, string eventId, params long[] ticketIds)
+    public async Task ReservationAsync(Guid userId, string eventId, params long[] ticketIds)
     {
         await using var scope = _root.CreateAsyncScope();
         var cache = scope.ServiceProvider.GetRequiredService<ICacheService>();

@@ -24,7 +24,7 @@ public sealed class BookingKeyTests : IntegrationTest
     {
         var tickets = await Seed.TicketsAsync("event-1", "A1");
         var context = Act.GetRequiredService<BookingDomainContext>();
-        var booking = Booking.Create("user-1", BookingStatus.Booked, tickets.Select(t => t.Id).ToArray());
+        var booking = Booking.Create(TestUsers.Owner, BookingStatus.Booked, tickets.Select(t => t.Id).ToArray());
         Assert.Equal(0, booking.Id);
 
         context.Bookings.Add(booking);
@@ -41,7 +41,7 @@ public sealed class BookingKeyTests : IntegrationTest
     {
         var tickets = await Seed.TicketsAsync("event-1", "A1");
         var context = Act.GetRequiredService<BookingDomainContext>();
-        var booking = Booking.Create("user-1", BookingStatus.Booked, tickets.Select(t => t.Id).ToArray());
+        var booking = Booking.Create(TestUsers.Owner, BookingStatus.Booked, tickets.Select(t => t.Id).ToArray());
         context.Bookings.Add(booking);
         await context.SaveChangesAsync();
 
@@ -49,6 +49,6 @@ public sealed class BookingKeyTests : IntegrationTest
             .FirstOrDefaultAsync(b => b.Id == booking.Id));
 
         Assert.NotNull(stored);
-        Assert.Equal("user-1", stored.UserId);
+        Assert.Equal(TestUsers.Owner, stored.UserId);
     }
 }

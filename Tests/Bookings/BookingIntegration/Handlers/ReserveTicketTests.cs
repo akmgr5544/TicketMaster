@@ -32,7 +32,7 @@ public sealed class ReserveTicketTests : IntegrationTest
         var tickets = await Seed.TicketsAsync("evt-1", "A1", "A2");
         var ids = tickets.Select(t => t.Id).ToArray();
 
-        await Sender.Send(new ReserveTicketCommand("user-1", "evt-1", ids));
+        await Sender.Send(new ReserveTicketCommand(TestUsers.Owner, "evt-1", ids));
 
         var held = await Cache.GetByKeysAsync<ReserveTicketDto>(
             ids.Select(ReservationKeys.Reservation).ToArray());
@@ -45,11 +45,11 @@ public sealed class ReserveTicketTests : IntegrationTest
     {
         var tickets = await Seed.TicketsAsync("evt-1", "A1");
 
-        await Sender.Send(new ReserveTicketCommand("user-1", "evt-1", [tickets[0].Id]));
+        await Sender.Send(new ReserveTicketCommand(TestUsers.Owner, "evt-1", [tickets[0].Id]));
 
         var reservation = Assert.Single(
             await Cache.GetByKeysAsync<ReserveTicketDto>([ReservationKeys.Reservation(tickets[0].Id)]));
-        Assert.Equal(new ReserveTicketDto(tickets[0].Id, "evt-1", "user-1"), reservation);
+        Assert.Equal(new ReserveTicketDto(tickets[0].Id, "evt-1", TestUsers.Owner), reservation);
     }
 
     [Fact]
@@ -57,7 +57,7 @@ public sealed class ReserveTicketTests : IntegrationTest
     {
         var tickets = await Seed.TicketsAsync("evt-1", "A1");
 
-        await Sender.Send(new ReserveTicketCommand("user-1", "evt-1", [tickets[0].Id]));
+        await Sender.Send(new ReserveTicketCommand(TestUsers.Owner, "evt-1", [tickets[0].Id]));
 
         var ttl = await Redis.KeyTimeToLiveAsync(ReservationKeys.Reservation(tickets[0].Id));
 
@@ -73,10 +73,10 @@ public sealed class ReserveTicketTests : IntegrationTest
     public async Task Refuses_a_ticket_somebody_else_has_already_reserved()
     {
         var tickets = await Seed.TicketsAsync("evt-1", "A1");
-        await Seed.ReservationAsync("other-user", "evt-1", tickets[0].Id);
+        await Seed.ReservationAsync(TestUsers.Stranger, "evt-1", tickets[0].Id);
 
         await Assert.ThrowsAsync<BookingsApplicationException>(() =>
-            Sender.Send(new ReserveTicketCommand("user-1", "evt-1", [tickets[0].Id])));
+            Sender.Send(new ReserveTicketCommand(TestUsers.Owner, "evt-1", [tickets[0].Id])));
     }
 
     /// <summary>
@@ -87,14 +87,14 @@ public sealed class ReserveTicketTests : IntegrationTest
     public async Task Reserves_nothing_when_one_of_the_tickets_is_taken()
     {
         var tickets = await Seed.TicketsAsync("evt-1", "A1", "A2");
-        await Seed.ReservationAsync("other-user", "evt-1", tickets[1].Id);
+        await Seed.ReservationAsync(TestUsers.Stranger, "evt-1", tickets[1].Id);
 
         await Assert.ThrowsAsync<BookingsApplicationException>(() =>
-            Sender.Send(new ReserveTicketCommand("user-1", "evt-1", tickets.Select(t => t.Id).ToArray())));
+            Sender.Send(new ReserveTicketCommand(TestUsers.Owner, "evt-1", tickets.Select(t => t.Id).ToArray())));
 
         var held = await Cache.GetByKeysAsync<ReserveTicketDto>(
             tickets.Select(t => ReservationKeys.Reservation(t.Id)).ToArray());
-        Assert.Equal([new ReserveTicketDto(tickets[1].Id, "evt-1", "other-user")], held);
+        Assert.Equal([new ReserveTicketDto(tickets[1].Id, "evt-1", TestUsers.Stranger)], held);
     }
 
     [Fact]
@@ -107,7 +107,7 @@ public sealed class ReserveTicketTests : IntegrationTest
         await using var held = await locks.AcquireLockAsync(ReservationKeys.Lock(tickets[0].Id));
 
         await Assert.ThrowsAsync<BookingsApplicationException>(() =>
-            Sender.Send(new ReserveTicketCommand("user-1", "evt-1", [tickets[0].Id])));
+            Sender.Send(new ReserveTicketCommand(TestUsers.Owner, "evt-1", [tickets[0].Id])));
     }
 
     // --- Locking ---
@@ -126,7 +126,7 @@ public sealed class ReserveTicketTests : IntegrationTest
         var locks = Act.GetRequiredService<IDistributedLockProvider>();
         await using var held = await locks.AcquireLockAsync(ReservationKeys.Lock(elsewhere[0].Id));
 
-        await Sender.Send(new ReserveTicketCommand("user-1", "evt-1", [tickets[0].Id]));
+        await Sender.Send(new ReserveTicketCommand(TestUsers.Owner, "evt-1", [tickets[0].Id]));
 
         var reservation = await Cache.GetByKeysAsync<ReserveTicketDto>([ReservationKeys.Reservation(tickets[0].Id)]);
         Assert.Single(reservation);
@@ -152,7 +152,7 @@ public sealed class ReserveTicketTests : IntegrationTest
         await using var held = await locks.AcquireLockAsync(ReservationKeys.Lock(lowerId));
 
         // Not awaited yet: the send has to still be blocked on the lower id's lock when we probe.
-        var send = Sender.Send(new ReserveTicketCommand("user-1", "evt-1", [higherId, lowerId]));
+        var send = Sender.Send(new ReserveTicketCommand(TestUsers.Owner, "evt-1", [higherId, lowerId]));
 
         // Poll rather than sleep a fixed amount: a fixed sleep either races the in-flight window or
         // burns most of the 250ms wait before probing. Bounded well inside that wait so a probe that
@@ -184,7 +184,7 @@ public sealed class ReserveTicketTests : IntegrationTest
         var tickets = await Seed.TicketsAsync("evt-1", "A1", "A2");
         var ids = tickets.Select(t => t.Id).ToArray();
 
-        await Sender.Send(new ReserveTicketCommand("user-1", "evt-1", ids));
+        await Sender.Send(new ReserveTicketCommand(TestUsers.Owner, "evt-1", ids));
 
         var locks = Act.GetRequiredService<IDistributedLockProvider>();
 
@@ -213,7 +213,7 @@ public sealed class ReserveTicketTests : IntegrationTest
         await using var held = await locks.AcquireLockAsync(ReservationKeys.Lock(second));
 
         await Assert.ThrowsAsync<BookingsApplicationException>(() =>
-            Sender.Send(new ReserveTicketCommand("user-1", "evt-1", [first, second])));
+            Sender.Send(new ReserveTicketCommand(TestUsers.Owner, "evt-1", [first, second])));
 
         await using var handle = await locks.TryAcquireLockAsync(ReservationKeys.Lock(first), TimeSpan.Zero);
         Assert.NotNull(handle);
@@ -224,10 +224,10 @@ public sealed class ReserveTicketTests : IntegrationTest
     {
         var tickets = await Seed.TicketsAsync("evt-1", "A1", "A2");
         var ids = tickets.Select(t => t.Id).ToArray();
-        await Seed.ReservationAsync("other-user", "evt-1", ids[1]);
+        await Seed.ReservationAsync(TestUsers.Stranger, "evt-1", ids[1]);
 
         await Assert.ThrowsAsync<BookingsApplicationException>(() =>
-            Sender.Send(new ReserveTicketCommand("user-1", "evt-1", ids)));
+            Sender.Send(new ReserveTicketCommand(TestUsers.Owner, "evt-1", ids)));
 
         var locks = Act.GetRequiredService<IDistributedLockProvider>();
         foreach (var id in ids)
@@ -243,7 +243,7 @@ public sealed class ReserveTicketTests : IntegrationTest
     public async Task Refuses_a_request_with_no_tickets()
     {
         await Assert.ThrowsAsync<BookingsDomainException>(() =>
-            Sender.Send(new ReserveTicketCommand("user-1", "evt-1", [])));
+            Sender.Send(new ReserveTicketCommand(TestUsers.Owner, "evt-1", [])));
     }
 
     [Fact]
@@ -252,7 +252,7 @@ public sealed class ReserveTicketTests : IntegrationTest
         var tickets = await Seed.TicketsAsync("evt-1", "A1", "A2", "A3");
 
         await Assert.ThrowsAsync<BookingsDomainException>(() =>
-            Sender.Send(new ReserveTicketCommand("user-1", "evt-1", tickets.Select(t => t.Id).ToArray())));
+            Sender.Send(new ReserveTicketCommand(TestUsers.Owner, "evt-1", tickets.Select(t => t.Id).ToArray())));
     }
 
     /// <summary>
@@ -266,7 +266,7 @@ public sealed class ReserveTicketTests : IntegrationTest
         var tickets = await Seed.TicketsAsync("evt-1", "A1");
 
         await Assert.ThrowsAsync<BookingsDomainException>(() =>
-            Sender.Send(new ReserveTicketCommand("user-1", "evt-1", [tickets[0].Id, tickets[0].Id])));
+            Sender.Send(new ReserveTicketCommand(TestUsers.Owner, "evt-1", [tickets[0].Id, tickets[0].Id])));
 
         var locks = Act.GetRequiredService<IDistributedLockProvider>();
         await using var handle = await locks.TryAcquireLockAsync(ReservationKeys.Lock(tickets[0].Id), TimeSpan.Zero);
@@ -283,7 +283,7 @@ public sealed class ReserveTicketTests : IntegrationTest
     public async Task Refuses_a_ticket_that_does_not_exist()
     {
         await Assert.ThrowsAsync<NotFoundException>(() =>
-            Sender.Send(new ReserveTicketCommand("user-1", "evt-1", [long.MaxValue])));
+            Sender.Send(new ReserveTicketCommand(TestUsers.Owner, "evt-1", [long.MaxValue])));
 
         Assert.Empty(await Cache.GetByKeysAsync<ReserveTicketDto>([ReservationKeys.Reservation(long.MaxValue)]));
     }
@@ -294,7 +294,7 @@ public sealed class ReserveTicketTests : IntegrationTest
         var tickets = await Seed.TicketsAsync("evt-1", "A1");
 
         await Assert.ThrowsAsync<NotFoundException>(() =>
-            Sender.Send(new ReserveTicketCommand("user-1", "evt-1", [tickets[0].Id, long.MaxValue])));
+            Sender.Send(new ReserveTicketCommand(TestUsers.Owner, "evt-1", [tickets[0].Id, long.MaxValue])));
 
         var held = await Cache.GetByKeysAsync<ReserveTicketDto>(
             [ReservationKeys.Reservation(tickets[0].Id), ReservationKeys.Reservation(long.MaxValue)]);
@@ -307,7 +307,7 @@ public sealed class ReserveTicketTests : IntegrationTest
         var tickets = await Seed.TicketsAsync("evt-2", "B1");
 
         await Assert.ThrowsAsync<BookingsDomainException>(() =>
-            Sender.Send(new ReserveTicketCommand("user-1", "evt-1", [tickets[0].Id])));
+            Sender.Send(new ReserveTicketCommand(TestUsers.Owner, "evt-1", [tickets[0].Id])));
 
         Assert.Empty(await Cache.GetByKeysAsync<ReserveTicketDto>([ReservationKeys.Reservation(tickets[0].Id)]));
     }
@@ -320,10 +320,10 @@ public sealed class ReserveTicketTests : IntegrationTest
     public async Task Refuses_a_ticket_that_is_already_sold()
     {
         var tickets = await Seed.TicketsAsync("evt-1", "A1");
-        await Seed.BookingAsync("other-user", tickets[0].Id);
+        await Seed.BookingAsync(TestUsers.Stranger, tickets[0].Id);
 
         await Assert.ThrowsAsync<BookingsApplicationException>(() =>
-            Sender.Send(new ReserveTicketCommand("user-1", "evt-1", [tickets[0].Id])));
+            Sender.Send(new ReserveTicketCommand(TestUsers.Owner, "evt-1", [tickets[0].Id])));
 
         Assert.Empty(await Cache.GetByKeysAsync<ReserveTicketDto>([ReservationKeys.Reservation(tickets[0].Id)]));
     }
@@ -335,7 +335,7 @@ public sealed class ReserveTicketTests : IntegrationTest
         await CancelAsync(tickets[0].Id, eventVersion: 1);
 
         await Assert.ThrowsAsync<BookingsApplicationException>(() =>
-            Sender.Send(new ReserveTicketCommand("user-1", "evt-1", [tickets[0].Id])));
+            Sender.Send(new ReserveTicketCommand(TestUsers.Owner, "evt-1", [tickets[0].Id])));
 
         Assert.Empty(await Cache.GetByKeysAsync<ReserveTicketDto>([ReservationKeys.Reservation(tickets[0].Id)]));
     }
@@ -350,7 +350,7 @@ public sealed class ReserveTicketTests : IntegrationTest
         var tickets = await Seed.TicketsAsync("evt-1", "A1");
         await BookThenReleaseAsync(tickets[0].Id);
 
-        await Sender.Send(new ReserveTicketCommand("user-1", "evt-1", [tickets[0].Id]));
+        await Sender.Send(new ReserveTicketCommand(TestUsers.Owner, "evt-1", [tickets[0].Id]));
 
         var held = await Cache.GetByKeysAsync<ReserveTicketDto>([ReservationKeys.Reservation(tickets[0].Id)]);
         Assert.Single(held);
@@ -360,10 +360,10 @@ public sealed class ReserveTicketTests : IntegrationTest
     public async Task Reserves_nothing_when_one_of_the_tickets_is_unavailable()
     {
         var tickets = await Seed.TicketsAsync("evt-1", "A1", "A2");
-        await Seed.BookingAsync("other-user", tickets[1].Id);
+        await Seed.BookingAsync(TestUsers.Stranger, tickets[1].Id);
 
         await Assert.ThrowsAsync<BookingsApplicationException>(() =>
-            Sender.Send(new ReserveTicketCommand("user-1", "evt-1", tickets.Select(t => t.Id).ToArray())));
+            Sender.Send(new ReserveTicketCommand(TestUsers.Owner, "evt-1", tickets.Select(t => t.Id).ToArray())));
 
         var held = await Cache.GetByKeysAsync<ReserveTicketDto>(
             tickets.Select(t => ReservationKeys.Reservation(t.Id)).ToArray());
@@ -374,10 +374,10 @@ public sealed class ReserveTicketTests : IntegrationTest
     public async Task Releases_its_locks_when_a_ticket_is_unavailable()
     {
         var tickets = await Seed.TicketsAsync("evt-1", "A1", "A2");
-        await Seed.BookingAsync("other-user", tickets[1].Id);
+        await Seed.BookingAsync(TestUsers.Stranger, tickets[1].Id);
 
         await Assert.ThrowsAsync<BookingsApplicationException>(() =>
-            Sender.Send(new ReserveTicketCommand("user-1", "evt-1", tickets.Select(t => t.Id).ToArray())));
+            Sender.Send(new ReserveTicketCommand(TestUsers.Owner, "evt-1", tickets.Select(t => t.Id).ToArray())));
 
         var locks = Act.GetRequiredService<IDistributedLockProvider>();
         foreach (var ticket in tickets)

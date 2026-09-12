@@ -6,13 +6,9 @@ using Users.Api.Shared;
 
 namespace Users.Api.Features.Users.Introspect;
 
-/// <summary>
-/// Token introspection for the API gateway. The gateway calls this on every authenticated request
-/// and materializes the response into claims, so the response shape is a public contract.
-/// </summary>
 public static class IntrospectUser
 {
-    public sealed record Query(long UserId) : IRequest<Result<Response>>;
+    public sealed record Query(Guid UserId) : IRequest<Result<Response>>;
 
     public sealed record Response(
         string Id,
@@ -57,6 +53,7 @@ public static class IntrospectUser
             // Permissions are part of the agreed contract but no permission model exists yet.
             // Returning an empty collection keeps the wire shape stable for when one is added.
             var result = new Response(
+                // Response.Id is the wire contract the gateway reads back as a string.
                 user.Id.ToString(),
                 user.Email,
                 user.FirstName,
@@ -76,9 +73,10 @@ public sealed class IntrospectEndpoints : IEndpointMarker
     {
         endpoints.MapGet("api/users/auth", async (ClaimsPrincipal principal, ISender sender) =>
         {
-            // The token itself is validated by the JwtBearer handler before reaching here.
+            // The token itself is validated by the JwtBearer handler before reaching here. The subject
+            // is the user's GUID in string form; reject anything that is not a parseable GUID.
             var subject = principal.FindFirstValue(ClaimTypes.NameIdentifier);
-            if (!long.TryParse(subject, out var userId))
+            if (!Guid.TryParse(subject, out var userId))
                 return Results.Unauthorized();
 
             var result = await sender.Send(new IntrospectUser.Query(userId));

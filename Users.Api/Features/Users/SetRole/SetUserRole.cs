@@ -8,7 +8,7 @@ namespace Users.Api.Features.Users.SetRole;
 
 public static class SetUserRole
 {
-    public sealed record Command(long UserId, string Role) : IRequest<Result>;
+    public sealed record Command(Guid UserId, string Role) : IRequest<Result>;
 
     internal sealed class Handler : IRequestHandler<Command, Result>
     {
@@ -42,10 +42,7 @@ public sealed class SetUserRoleEndpoint : IEndpointMarker
 
     public void MapEndpoint(IEndpointRouteBuilder endpoints)
     {
-        // Users.Api validates its own token, so the role claim it issued gates this directly — unlike
-        // Bookings, which trusts the gateway header. The gateway leaves the users route ungated and
-        // forwards the token here untouched.
-        endpoints.MapPut("api/users/{id:long}/role", async (long id, Request request, ISender sender) =>
+        endpoints.MapPut("api/users/{id:guid}/role", async (Guid id, Request request, ISender sender) =>
         {
             var result = await sender.Send(new SetUserRole.Command(id, request.Role));
             return result.IsSuccess ? Results.NoContent() : result.Error!.ToProblem();

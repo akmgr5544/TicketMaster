@@ -18,21 +18,32 @@ public class User
         RefreshToken = string.Empty;
         RefreshTokenExpires = DateTime.MinValue;
         Role = UserRole.Customer;
+
+        // Identity assigned by the app (not the DB). Version 7 is time-ordered, so inserts stay
+        // index-friendly rather than scattering like a random GUID. The wire identity is the string
+        // form (JWT subject, gateway headers); the store keeps it as a native uuid.
+        Id = Guid.CreateVersion7();
     }
 
-    public long Id { get; set; }
-    public string UserName { get; set; }
-    public string Email { get; set; }
-    public string PasswordHash { get; set; }
-    public string FirstName { get; set; }
-    public string LastName { get; set; }
-    public string PhoneNumber { get; set; }
+    // EF rehydrates through this: a load sets every column, so it must not run the public constructor
+    // and mint a throwaway id on each read.
+    private User()
+    {
+    }
 
-    public string RefreshToken { get; set; }
+    public Guid Id { get; set; }
+    public string UserName { get; set; } = null!;
+    public string Email { get; set; } = null!;
+    public string PasswordHash { get; set; } = null!;
+    public string FirstName { get; set; } = null!;
+    public string LastName { get; set; } = null!;
+    public string PhoneNumber { get; set; } = null!;
+
+    public string RefreshToken { get; set; } = null!;
 
     public DateTime RefreshTokenExpires { get; set; }
 
-    // Self-registration always yields Customer; Admin is granted only by the startup seeder. Drives the
-    // role claim in the JWT and the introspection response the gateway propagates downstream.
+    // Customer on self-registration; Admin comes from the first-ever registration or the admin-only
+    // role endpoint. Drives the role claim in the JWT and the introspection response.
     public UserRole Role { get; set; }
 }

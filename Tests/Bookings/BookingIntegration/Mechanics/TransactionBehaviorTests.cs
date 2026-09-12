@@ -34,7 +34,7 @@ public sealed class TransactionBehaviorTests : IntegrationTest
     private IAfterCommitQueue AfterCommit => Act.GetRequiredService<IAfterCommitQueue>();
 
     private static readonly MakeBookingCommand ACommand =
-        new("user-1", "event-1", [1L]);
+        new(TestUsers.Owner, "event-1", [1L]);
 
     private Task<long> Run(RequestHandlerDelegate<long> handler) =>
         new TransactionBehavior<MakeBookingCommand, long>(Context,

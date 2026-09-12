@@ -32,7 +32,7 @@ public sealed class PaymentTests : IntegrationTest
     public async Task Payment_marks_the_booking_paid_and_saves()
     {
         var tickets = await Seed.TicketsAsync("evt-1", "A1");
-        var booking = await Seed.BookingAsync("user-1", tickets[0].Id);
+        var booking = await Seed.BookingAsync(TestUsers.Owner, tickets[0].Id);
 
         await Sender.Send(new ConfirmBookingCommand(booking.Id));
 
@@ -49,7 +49,7 @@ public sealed class PaymentTests : IntegrationTest
     {
         var tickets = await Seed.TicketsAsync("evt-1", "A1", "A2");
         var ids = tickets.Select(t => t.Id).ToArray();
-        var booking = await Seed.BookingAsync("user-1", ids);
+        var booking = await Seed.BookingAsync(TestUsers.Owner, ids);
 
         await Sender.Send(new ConfirmBookingCommand(booking.Id));
 
@@ -66,7 +66,7 @@ public sealed class PaymentTests : IntegrationTest
     {
         var tickets = await Seed.TicketsAsync("evt-1", "A1", "A2");
         var ids = tickets.Select(t => t.Id).ToArray();
-        var booking = await Seed.BookingAsync("user-1", ids);
+        var booking = await Seed.BookingAsync(TestUsers.Owner, ids);
 
         await Sender.Send(new ReleaseUnpaidBookingCommand(booking.Id));
 
@@ -85,7 +85,7 @@ public sealed class PaymentTests : IntegrationTest
     {
         var tickets = await Seed.TicketsAsync("evt-1", "A1", "A2");
         var ids = tickets.Select(t => t.Id).ToArray();
-        var booking = await Seed.BookingAsync("user-1", ids);
+        var booking = await Seed.BookingAsync(TestUsers.Owner, ids);
 
         await Sender.Send(new ReleaseUnpaidBookingCommand(booking.Id));
 
@@ -111,7 +111,7 @@ public sealed class PaymentTests : IntegrationTest
     {
         var cancelledEvent = await Seed.TicketsAsync("evt-1", "A1");
         var otherEvent = await Seed.TicketsAsync("evt-2", "B1");
-        var booking = await Seed.BookingAsync("user-1", cancelledEvent[0].Id, otherEvent[0].Id);
+        var booking = await Seed.BookingAsync(TestUsers.Owner, cancelledEvent[0].Id, otherEvent[0].Id);
 
         await Sender.Send(new CancelEventTicketsCommand("evt-1", Version: 1));
         await Sender.Send(new ReleaseUnpaidBookingCommand(booking.Id));
@@ -130,7 +130,7 @@ public sealed class PaymentTests : IntegrationTest
     public async Task The_same_payment_arriving_twice_settles_the_booking_once()
     {
         var tickets = await Seed.TicketsAsync("evt-1", "A1");
-        var booking = await Seed.BookingAsync("user-1", tickets[0].Id);
+        var booking = await Seed.BookingAsync(TestUsers.Owner, tickets[0].Id);
 
         await Sender.Send(new ConfirmBookingCommand(booking.Id));
         await Sender.Send(new ConfirmBookingCommand(booking.Id));
@@ -148,7 +148,7 @@ public sealed class PaymentTests : IntegrationTest
     public async Task The_same_failure_arriving_twice_releases_the_seats_once()
     {
         var tickets = await Seed.TicketsAsync("evt-1", "A1");
-        var booking = await Seed.BookingAsync("user-1", tickets[0].Id);
+        var booking = await Seed.BookingAsync(TestUsers.Owner, tickets[0].Id);
 
         await Sender.Send(new ReleaseUnpaidBookingCommand(booking.Id));
         await Sender.Send(new ReleaseUnpaidBookingCommand(booking.Id));
@@ -167,7 +167,7 @@ public sealed class PaymentTests : IntegrationTest
     public async Task A_failure_arriving_after_payment_leaves_the_booking_paid()
     {
         var tickets = await Seed.TicketsAsync("evt-1", "A1");
-        var booking = await Seed.BookingAsync("user-1", tickets[0].Id);
+        var booking = await Seed.BookingAsync(TestUsers.Owner, tickets[0].Id);
         await Sender.Send(new ConfirmBookingCommand(booking.Id));
 
         await Assert.ThrowsAsync<BookingsDomainException>(() =>
@@ -182,7 +182,7 @@ public sealed class PaymentTests : IntegrationTest
     public async Task A_payment_arriving_after_a_failure_leaves_the_booking_cancelled()
     {
         var tickets = await Seed.TicketsAsync("evt-1", "A1");
-        var booking = await Seed.BookingAsync("user-1", tickets[0].Id);
+        var booking = await Seed.BookingAsync(TestUsers.Owner, tickets[0].Id);
         await Sender.Send(new ReleaseUnpaidBookingCommand(booking.Id));
 
         await Assert.ThrowsAsync<BookingsDomainException>(() =>

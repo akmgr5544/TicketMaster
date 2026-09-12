@@ -12,8 +12,8 @@ using Users.Api.Database;
 namespace Users.Api.Database.Migrations
 {
     [DbContext(typeof(UsersDomainContext))]
-    [Migration("20260808150849_WidenPasswordHash")]
-    partial class WidenPasswordHash
+    [Migration("20260912201816_InitialCreate")]
+    partial class InitialCreate
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -27,11 +27,8 @@ namespace Users.Api.Database.Migrations
 
             modelBuilder.Entity("Users.Api.Entities.User", b =>
                 {
-                    b.Property<long>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("bigint");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
 
                     b.Property<string>("Email")
                         .IsRequired()
@@ -65,6 +62,11 @@ namespace Users.Api.Database.Migrations
 
                     b.Property<DateTime>("RefreshTokenExpires")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
 
                     b.Property<string>("UserName")
                         .IsRequired()

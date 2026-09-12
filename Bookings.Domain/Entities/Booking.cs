@@ -8,7 +8,7 @@ namespace Bookings.Domain.Entities;
 public sealed class Booking : Entity, IAggregateRoot
 {
     public long Id { get; init; }
-    public string UserId { get; init; } = null!;
+    public Guid UserId { get; init; }
     public DateTime CreatedAt { get; init; }
     public BookingStatus Status { get; private set; }
     public List<BookingHistory> BookingHistories { get; init; }
@@ -21,7 +21,7 @@ public sealed class Booking : Entity, IAggregateRoot
         BookingHistories = [];
     }
 
-    private Booking(string userId,
+    private Booking(Guid userId,
         BookingStatus status) : this()
     {
         UserId = userId;
@@ -89,7 +89,7 @@ public sealed class Booking : Entity, IAggregateRoot
     /// assemble one afterwards, so a new caller cannot create a booking that never announces itself
     /// and leaves its tickets unbooked.
     /// </summary>
-    public static Booking Create(string userId, BookingStatus status, long[] ticketIds)
+    public static Booking Create(Guid userId, BookingStatus status, long[] ticketIds)
     {
         if (ticketIds.Length == 0)
             throw new BookingsDomainException("A booking must cover at least one ticket.");

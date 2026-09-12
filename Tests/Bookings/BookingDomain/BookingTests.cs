@@ -14,11 +14,12 @@ namespace BookingDomain;
 public class BookingTests
 {
     private static readonly long[] TwoTickets = [7L, 9L];
+    private static readonly Guid User = Guid.NewGuid();
 
     [Fact]
     public void Records_the_tickets_it_was_created_for()
     {
-        var booking = Booking.Create("user-1", BookingStatus.Booked, TwoTickets);
+        var booking = Booking.Create(User, BookingStatus.Booked, TwoTickets);
 
         Assert.Equal(TwoTickets, booking.BookedTickets.Select(x => x.TicketId));
     }
@@ -26,7 +27,7 @@ public class BookingTests
     [Fact]
     public void Opens_its_history_with_the_status_it_was_created_in()
     {
-        var booking = Booking.Create("user-1", BookingStatus.Booked, TwoTickets);
+        var booking = Booking.Create(User, BookingStatus.Booked, TwoTickets);
 
         var history = Assert.Single(booking.BookingHistories);
         Assert.Equal(BookingStatus.Booked, history.BookingStatus);
@@ -36,7 +37,7 @@ public class BookingTests
     [Fact]
     public void Raises_its_own_creation_event()
     {
-        var booking = Booking.Create("user-1", BookingStatus.Booked, TwoTickets);
+        var booking = Booking.Create(User, BookingStatus.Booked, TwoTickets);
 
         var domainEvent = Assert.Single(booking.DomainEvents);
         Assert.IsType<BookingCreatedDomainEvent>(domainEvent);
@@ -50,7 +51,7 @@ public class BookingTests
     [Fact]
     public void Creation_event_carries_ticket_ids()
     {
-        var booking = Booking.Create("user-1", BookingStatus.Booked, TwoTickets);
+        var booking = Booking.Create(User, BookingStatus.Booked, TwoTickets);
 
         var created = Assert.IsType<BookingCreatedDomainEvent>(Assert.Single(booking.DomainEvents));
         Assert.Equal(TwoTickets, created.TicketIds);
@@ -60,13 +61,13 @@ public class BookingTests
     public void Refuses_to_be_created_without_tickets()
     {
         Assert.Throws<BookingsDomainException>(() =>
-            Booking.Create("user-1", BookingStatus.Booked, []));
+            Booking.Create(User, BookingStatus.Booked, []));
     }
 
     // --- Payment settled ---
 
     private static Booking ABooking() =>
-        Booking.Create("user-1", BookingStatus.Booked, TwoTickets);
+        Booking.Create(User, BookingStatus.Booked, TwoTickets);
 
     [Fact]
     public void Becomes_paid_when_the_payment_succeeds()

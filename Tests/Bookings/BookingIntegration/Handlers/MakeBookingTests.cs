@@ -36,9 +36,9 @@ public sealed class MakeBookingTests : IntegrationTest
     {
         var tickets = await Seed.TicketsAsync("evt-1", "A1", "A2");
         var ids = tickets.Select(t => t.Id).ToArray();
-        await Seed.ReservationAsync("user-1", "evt-1", ids);
+        await Seed.ReservationAsync(TestUsers.Owner, "evt-1", ids);
 
-        var bookingId = await Sender.Send(new MakeBookingCommand("user-1", "evt-1", ids));
+        var bookingId = await Sender.Send(new MakeBookingCommand(TestUsers.Owner, "evt-1", ids));
 
         Assert.True(bookingId > 0);
 
@@ -46,7 +46,7 @@ public sealed class MakeBookingTests : IntegrationTest
             .Include(b => b.BookedTickets)
             .SingleAsync(b => b.Id == bookingId));
 
-        Assert.Equal("user-1", stored.UserId);
+        Assert.Equal(TestUsers.Owner, stored.UserId);
         Assert.Equal(BookingStatus.Booked, stored.Status);
         Assert.Equal(ids.Order(), stored.BookedTickets.Select(t => t.TicketId).Order());
     }
@@ -60,9 +60,9 @@ public sealed class MakeBookingTests : IntegrationTest
     {
         var tickets = await Seed.TicketsAsync("evt-1", "A1", "A2");
         var ids = tickets.Select(t => t.Id).ToArray();
-        await Seed.ReservationAsync("user-1", "evt-1", ids);
+        await Seed.ReservationAsync(TestUsers.Owner, "evt-1", ids);
 
-        await Sender.Send(new MakeBookingCommand("user-1", "evt-1", ids));
+        await Sender.Send(new MakeBookingCommand(TestUsers.Owner, "evt-1", ids));
 
         // Read through a fresh scope: the interceptor's nested SaveChangesAsync is exactly the thing
         // that could look right in the change tracker and never reach the database.
@@ -83,9 +83,9 @@ public sealed class MakeBookingTests : IntegrationTest
     {
         var tickets = await Seed.TicketsAsync("evt-1", "A1");
         var untouched = await Seed.TicketsAsync("evt-1", "A2");
-        await Seed.ReservationAsync("user-1", "evt-1", tickets[0].Id);
+        await Seed.ReservationAsync(TestUsers.Owner, "evt-1", tickets[0].Id);
 
-        await Sender.Send(new MakeBookingCommand("user-1", "evt-1", [tickets[0].Id]));
+        await Sender.Send(new MakeBookingCommand(TestUsers.Owner, "evt-1", [tickets[0].Id]));
 
         var stored = await ReadAsync(context =>
             context.Tickets.SingleAsync(t => t.Id == untouched[0].Id));
@@ -106,11 +106,11 @@ public sealed class MakeBookingTests : IntegrationTest
         await Cache.SetToCacheAsync(
         [
             new KeyValuePair<string, ReserveTicketDto>(
-                tickets[0].Id.ToString(), new ReserveTicketDto(tickets[0].Id, "evt-1", "user-1"))
+                tickets[0].Id.ToString(), new ReserveTicketDto(tickets[0].Id, "evt-1", TestUsers.Owner))
         ]);
 
         await Assert.ThrowsAsync<BookingsApplicationException>(() =>
-            Sender.Send(new MakeBookingCommand("user-1", "evt-1", [tickets[0].Id])));
+            Sender.Send(new MakeBookingCommand(TestUsers.Owner, "evt-1", [tickets[0].Id])));
     }
 
     // --- All-or-nothing on the reservation checks ---
@@ -119,10 +119,10 @@ public sealed class MakeBookingTests : IntegrationTest
     public async Task Refuses_when_only_some_of_the_tickets_are_still_reserved()
     {
         var tickets = await Seed.TicketsAsync("evt-1", "A1", "A2");
-        await Seed.ReservationAsync("user-1", "evt-1", tickets[0].Id);
+        await Seed.ReservationAsync(TestUsers.Owner, "evt-1", tickets[0].Id);
 
         await Assert.ThrowsAsync<BookingsApplicationException>(() =>
-            Sender.Send(new MakeBookingCommand("user-1", "evt-1", tickets.Select(t => t.Id).ToArray())));
+            Sender.Send(new MakeBookingCommand(TestUsers.Owner, "evt-1", tickets.Select(t => t.Id).ToArray())));
     }
 
     [Fact]
@@ -130,10 +130,10 @@ public sealed class MakeBookingTests : IntegrationTest
     {
         var tickets = await Seed.TicketsAsync("evt-1", "A1");
         var missingId = long.MaxValue;
-        await Seed.ReservationAsync("user-1", "evt-1", tickets[0].Id, missingId);
+        await Seed.ReservationAsync(TestUsers.Owner, "evt-1", tickets[0].Id, missingId);
 
         await Assert.ThrowsAsync<BookingsApplicationException>(() =>
-            Sender.Send(new MakeBookingCommand("user-1", "evt-1", [tickets[0].Id, missingId])));
+            Sender.Send(new MakeBookingCommand(TestUsers.Owner, "evt-1", [tickets[0].Id, missingId])));
     }
 
     /// <summary>
@@ -145,30 +145,30 @@ public sealed class MakeBookingTests : IntegrationTest
     public async Task Refuses_a_ticket_whose_event_is_past_the_sale_window()
     {
         var tickets = await Seed.TicketsAsync("evt-1", Seed.LongPast, eventVersion: 0, "A1");
-        await Seed.ReservationAsync("user-1", "evt-1", tickets[0].Id);
+        await Seed.ReservationAsync(TestUsers.Owner, "evt-1", tickets[0].Id);
 
         await Assert.ThrowsAsync<BookingsApplicationException>(() =>
-            Sender.Send(new MakeBookingCommand("user-1", "evt-1", [tickets[0].Id])));
+            Sender.Send(new MakeBookingCommand(TestUsers.Owner, "evt-1", [tickets[0].Id])));
     }
 
     [Fact]
     public async Task Refuses_a_reservation_belonging_to_somebody_else()
     {
         var tickets = await Seed.TicketsAsync("evt-1", "A1");
-        await Seed.ReservationAsync("other-user", "evt-1", tickets[0].Id);
+        await Seed.ReservationAsync(TestUsers.Stranger, "evt-1", tickets[0].Id);
 
         await Assert.ThrowsAsync<BookingsApplicationException>(() =>
-            Sender.Send(new MakeBookingCommand("user-1", "evt-1", [tickets[0].Id])));
+            Sender.Send(new MakeBookingCommand(TestUsers.Owner, "evt-1", [tickets[0].Id])));
     }
 
     [Fact]
     public async Task Refuses_a_reservation_made_for_a_different_event()
     {
         var tickets = await Seed.TicketsAsync("evt-1", "A1");
-        await Seed.ReservationAsync("user-1", "evt-2", tickets[0].Id);
+        await Seed.ReservationAsync(TestUsers.Owner, "evt-2", tickets[0].Id);
 
         await Assert.ThrowsAsync<BookingsDomainException>(() =>
-            Sender.Send(new MakeBookingCommand("user-1", "evt-1", [tickets[0].Id])));
+            Sender.Send(new MakeBookingCommand(TestUsers.Owner, "evt-1", [tickets[0].Id])));
     }
 
     [Fact]
@@ -177,14 +177,14 @@ public sealed class MakeBookingTests : IntegrationTest
         long[] ticketIds = [long.MaxValue, long.MaxValue - 1, long.MaxValue - 2];
 
         await Assert.ThrowsAsync<BookingsDomainException>(() =>
-            Sender.Send(new MakeBookingCommand("user-1", "evt-1", ticketIds)));
+            Sender.Send(new MakeBookingCommand(TestUsers.Owner, "evt-1", ticketIds)));
     }
 
     [Fact]
     public async Task Refuses_a_request_with_no_tickets()
     {
         await Assert.ThrowsAsync<BookingsDomainException>(() =>
-            Sender.Send(new MakeBookingCommand("user-1", "evt-1", [])));
+            Sender.Send(new MakeBookingCommand(TestUsers.Owner, "evt-1", [])));
     }
 
     // --- Handing the reservation over ---
@@ -197,9 +197,9 @@ public sealed class MakeBookingTests : IntegrationTest
     public async Task Deletes_the_reservation_once_the_transaction_commits()
     {
         var tickets = await Seed.TicketsAsync("evt-1", "A1");
-        await Seed.ReservationAsync("user-1", "evt-1", tickets[0].Id);
+        await Seed.ReservationAsync(TestUsers.Owner, "evt-1", tickets[0].Id);
 
-        await Sender.Send(new MakeBookingCommand("user-1", "evt-1", [tickets[0].Id]));
+        await Sender.Send(new MakeBookingCommand(TestUsers.Owner, "evt-1", [tickets[0].Id]));
 
         var held = await Cache.GetByKeysAsync<ReserveTicketDto>(
             [ReservationKeys.Reservation(tickets[0].Id)]);
@@ -228,12 +228,12 @@ public sealed class MakeBookingTests : IntegrationTest
     public async Task Keeps_the_reservation_until_the_transaction_commits()
     {
         var tickets = await Seed.TicketsAsync("evt-1", "A1");
-        await Seed.ReservationAsync("user-1", "evt-1", tickets[0].Id);
+        await Seed.ReservationAsync(TestUsers.Owner, "evt-1", tickets[0].Id);
 
         Act.GetRequiredService<AfterHandlerFailureSwitch>().ShouldFailAfterHandler = true;
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            Sender.Send(new MakeBookingCommand("user-1", "evt-1", [tickets[0].Id])));
+            Sender.Send(new MakeBookingCommand(TestUsers.Owner, "evt-1", [tickets[0].Id])));
 
         var held = await Cache.GetByKeysAsync<ReserveTicketDto>(
             [ReservationKeys.Reservation(tickets[0].Id)]);
@@ -247,7 +247,7 @@ public sealed class MakeBookingTests : IntegrationTest
         var tickets = await Seed.TicketsAsync("evt-1", "A1");
 
         await Assert.ThrowsAsync<BookingsApplicationException>(() =>
-            Sender.Send(new MakeBookingCommand("user-1", "evt-1", [tickets[0].Id])));
+            Sender.Send(new MakeBookingCommand(TestUsers.Owner, "evt-1", [tickets[0].Id])));
 
         Assert.False(Act.GetRequiredService<IAfterCommitQueue>().HasWork);
     }

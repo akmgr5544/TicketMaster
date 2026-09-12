@@ -24,7 +24,7 @@ public sealed class DomainEventAtomicityTests : IntegrationTest
         var tickets = await Seed.TicketsAsync("evt-atomic-1", "A1");
 
         var context = Act.GetRequiredService<BookingDomainContext>();
-        context.Bookings.Add(Booking.Create("user-1", BookingStatus.Booked, [tickets[0].Id]));
+        context.Bookings.Add(Booking.Create(TestUsers.Owner, BookingStatus.Booked, [tickets[0].Id]));
         await context.SaveChangesAsync();
 
         // The handler loaded and booked this ticket. If it used the caller's context, that context
@@ -44,7 +44,7 @@ public sealed class DomainEventAtomicityTests : IntegrationTest
 
         await using (var transaction = await context.Database.BeginTransactionAsync())
         {
-            context.Bookings.Add(Booking.Create("user-1", BookingStatus.Booked, [ticketId]));
+            context.Bookings.Add(Booking.Create(TestUsers.Owner, BookingStatus.Booked, [ticketId]));
             await context.SaveChangesAsync();
 
             // Exactly what TransactionBehavior does when a handler throws.

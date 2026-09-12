@@ -21,8 +21,8 @@ namespace BookingIntegration.Handlers;
 /// </summary>
 public sealed class CustomerBookingTests : IntegrationTest
 {
-    private const string Owner = "user-1";
-    private const string Stranger = "user-2";
+    private static readonly Guid Owner = TestUsers.Owner;
+    private static readonly Guid Stranger = TestUsers.Stranger;
 
     public CustomerBookingTests(BookingsFixture fixture) : base(fixture)
     {

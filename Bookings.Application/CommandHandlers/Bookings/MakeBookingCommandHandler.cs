@@ -52,7 +52,7 @@ internal sealed class MakeBookingCommandHandler : IRequestHandler<MakeBookingCom
 
     private async Task<long[]> GetValidTicketIdsAsync(long[] ticketIds,
         string eventId,
-        string userId,
+        Guid userId,
         CancellationToken cancellationToken)
     {
         if (ticketIds.Length == 0)

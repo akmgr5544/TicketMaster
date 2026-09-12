@@ -30,7 +30,7 @@ public sealed class SeedTests : IntegrationTest
     public async Task A_seeded_booking_leaves_its_tickets_booked()
     {
         var tickets = await Seed.TicketsAsync("evt-1", "A1");
-        await Seed.BookingAsync("user-1", tickets[0].Id);
+        await Seed.BookingAsync(TestUsers.Owner, tickets[0].Id);
 
         var stored = await ReadAsync(context =>
             context.Tickets.SingleAsync(t => t.Id == tickets[0].Id));
@@ -42,14 +42,14 @@ public sealed class SeedTests : IntegrationTest
     public async Task A_seeded_reservation_is_readable_under_its_namespaced_key()
     {
         var tickets = await Seed.TicketsAsync("evt-1", "A1");
-        await Seed.ReservationAsync("user-1", "evt-1", tickets[0].Id);
+        await Seed.ReservationAsync(TestUsers.Owner, "evt-1", tickets[0].Id);
 
         var cache = Act.GetRequiredService<ICacheService>();
         var held = await cache.GetByKeysAsync<ReserveTicketDto>(
             [ReservationKeys.Reservation(tickets[0].Id)]);
 
         var reservation = Assert.Single(held);
-        Assert.Equal("user-1", reservation.UserId);
+        Assert.Equal(TestUsers.Owner, reservation.UserId);
         Assert.Equal("evt-1", reservation.EventId);
     }
 

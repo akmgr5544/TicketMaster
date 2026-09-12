@@ -7,6 +7,6 @@ namespace Bookings.Application.Commands.Bookings;
 /// Returns the id of the booking it created, so the endpoint can answer 201 with a location the
 /// caller can read back.
 /// </summary>
-public record MakeBookingCommand(string UserId,
+public record MakeBookingCommand(Guid UserId,
     string EventId,
     long[] Tickets) : IRequest<long>, ITransactionalRequest;

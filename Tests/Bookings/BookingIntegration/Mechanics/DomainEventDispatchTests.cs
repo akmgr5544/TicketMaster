@@ -39,7 +39,7 @@ public sealed class DomainEventDispatchTests : IntegrationTest
     {
         var tickets = await Seed.TicketsAsync("event-1", "A1", "A2");
         var context = Act.GetRequiredService<BookingDomainContext>();
-        var booking = Booking.Create("user-1", BookingStatus.Booked, tickets.Select(t => t.Id).ToArray());
+        var booking = Booking.Create(TestUsers.Owner, BookingStatus.Booked, tickets.Select(t => t.Id).ToArray());
 
         context.Bookings.Add(booking);
         await context.SaveChangesAsync();
@@ -69,7 +69,7 @@ public sealed class DomainEventDispatchTests : IntegrationTest
         var tickets = await Seed.TicketsAsync("event-1", "A1");
         var context = Act.GetRequiredService<BookingDomainContext>();
         var publishes = Act.GetRequiredService<BookingCreatedPublishCounter>();
-        var booking = Booking.Create("user-1", BookingStatus.Booked, tickets.Select(t => t.Id).ToArray());
+        var booking = Booking.Create(TestUsers.Owner, BookingStatus.Booked, tickets.Select(t => t.Id).ToArray());
 
         context.Bookings.Add(booking);
         await Record.ExceptionAsync(() => context.SaveChangesAsync());
@@ -91,7 +91,7 @@ public sealed class DomainEventDispatchTests : IntegrationTest
         var tickets = await Seed.TicketsAsync("event-1", "A1");
         var context = Act.GetRequiredService<BookingDomainContext>();
         var publishes = Act.GetRequiredService<BookingCreatedPublishCounter>();
-        var booking = Booking.Create("user-1", BookingStatus.Booked, tickets.Select(t => t.Id).ToArray());
+        var booking = Booking.Create(TestUsers.Owner, BookingStatus.Booked, tickets.Select(t => t.Id).ToArray());
 
         context.Bookings.Add(booking);
         await context.SaveChangesAsync();
@@ -110,7 +110,7 @@ public sealed class DomainEventDispatchTests : IntegrationTest
     {
         var tickets = await Seed.TicketsAsync("event-1", "A1");
         var context = Act.GetRequiredService<BookingDomainContext>();
-        var booking = Booking.Create("user-1", BookingStatus.Booked, [tickets[0].Id, long.MaxValue]);
+        var booking = Booking.Create(TestUsers.Owner, BookingStatus.Booked, [tickets[0].Id, long.MaxValue]);
 
         context.Bookings.Add(booking);
 
@@ -131,7 +131,7 @@ public sealed class DomainEventDispatchTests : IntegrationTest
         ticket.Cancel(eventVersion: 1);
         await context.SaveChangesAsync();
 
-        var booking = Booking.Create("user-1", BookingStatus.Booked, [tickets[0].Id]);
+        var booking = Booking.Create(TestUsers.Owner, BookingStatus.Booked, [tickets[0].Id]);
         context.Bookings.Add(booking);
 
         await Assert.ThrowsAsync<BookingsDomainException>(() => context.SaveChangesAsync());

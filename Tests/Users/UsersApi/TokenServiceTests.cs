@@ -63,6 +63,22 @@ public class TokenServiceTests
         Assert.True(result.Expires > DateTime.UtcNow.AddDays(1));
     }
 
+    [Fact]
+    public void CreateToken_carries_the_user_guid_id_as_the_subject()
+    {
+        var user = new User("name", "user@example.com", "First", "Last", "");
+
+        // The constructor assigns a GUID id; the token's subject is its string form, since the gateway
+        // reads it back as the NameIdentifier and forwards it downstream as identity.
+        var token = new JwtSecurityTokenHandler().ReadJwtToken(TokenService.CreateToken(user, Options()));
+
+        // Serialized under either the short "nameid" name or the full ClaimTypes.NameIdentifier URI
+        // depending on the handler's outbound claim-type map; the value is the user id in both.
+        Assert.Contains(token.Claims,
+            claim => claim.Value == user.Id.ToString() &&
+                     (claim.Type == "nameid" || claim.Type == ClaimTypes.NameIdentifier));
+    }
+
     [Theory]
     [InlineData(UserRole.Admin, "Admin")]
     [InlineData(UserRole.Customer, "Customer")]
