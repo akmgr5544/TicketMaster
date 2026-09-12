@@ -1,36 +1,59 @@
-﻿services:
-  ticketmaster:
-    image: ticketmaster
-    build:
-      context: .
-      dockerfile: TicketMaster/Dockerfile
+# Brings the whole system up: four services, their backing stores, and the broker.
+#
+# In-container everything talks plaintext HTTP on :8080 (the aspnet base image's default), reached by
+# service name rather than localhost. Connection strings and YARP destinations are overridden here
+# through environment variables (double-underscore = config section nesting) so the checked-in
+# appsettings can stay pointed at a developer's localhost.
+#
+#   docker compose up --build          # build images and start everything
+#   http://localhost:8080/...          # the gateway is the only entry point
+#
+# Caveats (see the README's "Known gaps"): the Cosmos emulator image has no arm64 build, so Events'
+# store will not start on Apple Silicon; and the emulator serves a self-signed cert, so a real run
+# needs the SDK configured to trust it.
 
-  bookingapi:
-    image: bookingapi
-    build:
-      context: .
-      dockerfile: BookingApi/Dockerfile
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      # Both Users and Bookings wait on this; each service's EF migration creates its own database on
+      # first boot, so one server with the default 'postgres' database is enough.
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  booking.slq:
-    image: booking.slq
-    build:
-      context: .
-      dockerfile: Booking.Slq/Dockerfile
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  events.api:
-    image: events.api
-    build:
-      context: .
-      dockerfile: Events.Api/Dockerfile
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    ports:
+      - "5672:5672"     # AMQP
+      - "15672:15672"   # management UI
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
-  users.api:
-    image: users.api
-    build:
-      context: .
-      dockerfile: Users.Api/Dockerfile
-
-  # Backing store for Events.Api. The account key below is Microsoft's well-known emulator key,
-  # identical on every machine and not a secret.
+  # Backing store for Events. The account key below is Microsoft's well-known emulator key,
+  # identical on every machine and not a secret. No arm64 build exists — see the caveat above.
   cosmos:
     image: mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator:latest
     container_name: ticketmaster-cosmos
@@ -46,6 +69,91 @@
     volumes:
       - cosmos-data:/tmp/cosmos/appdata
 
-volumes:
-  cosmos-data:
+  users-api:
+    image: users-api
+    build:
+      context: .
+      dockerfile: Users.Api/Dockerfile
+    environment:
+      ConnectionStrings__UsersDatabase: "Host=postgres;Port=5432;Database=users_db;Username=postgres;Password=${POSTGRES_PASSWORD}"
+      # Secrets come from .env (gitignored); see .env.example. The service fails fast without a token.
+      # The first account registered becomes admin, so no admin credential is seeded here.
+      AuthConfigs__Token: "${USERS_AUTH_TOKEN}"
+    ports:
+      - "5054:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
 
+  events-api:
+    image: events-api
+    build:
+      context: .
+      dockerfile: Events.Api/Dockerfile
+    environment:
+      # Two endpoints: REST over HTTP/1 on 8080, and a cleartext HTTP/2 (h2c) endpoint on 8081 that the
+      # Bookings gRPC client dials. gRPC needs HTTP/2, which a plaintext port only speaks when its
+      # protocol is pinned to Http2 — so it gets its own endpoint rather than sharing the REST one.
+      ASPNETCORE_URLS: ""
+      Kestrel__Endpoints__Rest__Url: "http://+:8080"
+      Kestrel__Endpoints__Grpc__Url: "http://+:8081"
+      Kestrel__Endpoints__Grpc__Protocols: "Http2"
+      CosmosConfigs__ConnectionString: "AccountEndpoint=https://cosmos:8081/;AccountKey=C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw=="
+      CosmosConfigs__Database: "events_db"
+      ConnectionStrings__RabbitMQ: "amqp://guest:guest@rabbitmq:5672"
+    ports:
+      - "5158:8080"
+      - "5159:8081"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      cosmos:
+        condition: service_started
+
+  bookings-api:
+    image: bookings-api
+    build:
+      context: .
+      dockerfile: Bookings.Api/Dockerfile
+    environment:
+      ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=bookings_db;Username=postgres;Password=${POSTGRES_PASSWORD}"
+      ConnectionStrings__Redis: "redis:6379"
+      ConnectionStrings__RabbitMQ: "amqp://guest:guest@rabbitmq:5672"
+      Services__Events__GrpcAddress: "http://events-api:8081"
+    ports:
+      - "5225:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      events-api:
+        condition: service_started
+
+  gateway:
+    image: gateway
+    build:
+      context: .
+      dockerfile: TicketMaster.ApiGateway/Dockerfile
+    environment:
+      # The gateway is the only published port. It introspects tokens against Users directly, and
+      # proxies each route to its cluster — both retargeted from localhost to the in-network hostnames.
+      Services__Users__BaseAddress: "http://users-api:8080"
+      ReverseProxy__Clusters__users-cluster__Destinations__destination1__Address: "http://users-api:8080"
+      ReverseProxy__Clusters__bookings-cluster__Destinations__destination1__Address: "http://bookings-api:8080"
+      ReverseProxy__Clusters__events-cluster__Destinations__destination1__Address: "http://events-api:8080"
+    ports:
+      - "8080:8080"
+    depends_on:
+      users-api:
+        condition: service_started
+      bookings-api:
+        condition: service_started
+      events-api:
+        condition: service_started
+
+volumes:
+  postgres-data:
+  cosmos-data:

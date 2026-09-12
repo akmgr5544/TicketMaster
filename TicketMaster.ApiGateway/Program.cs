@@ -23,7 +23,10 @@ builder.Services.AddAuthorization(options =>
 
 builder.Configuration
     .AddJsonFile("YarpConfigurations/yarp.clusters.json", optional: false, reloadOnChange: true)
-    .AddJsonFile("YarpConfigurations/yarp.routes.json", optional: false, reloadOnChange: true);
+    .AddJsonFile("YarpConfigurations/yarp.routes.json", optional: false, reloadOnChange: true)
+    // Re-add env vars last so they win over the YARP JSON just loaded: a deployment (compose, k8s)
+    // must be able to retarget cluster destinations from localhost without editing the baked files.
+    .AddEnvironmentVariables();
 
 var config = builder.Configuration.GetSection("ReverseProxy");
 builder.Services.AddReverseProxy()
