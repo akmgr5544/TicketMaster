@@ -102,6 +102,25 @@ public class EventHandlerTests
         Assert.Equal(1, published.Version);
     }
 
+    [Fact]
+    public async Task Create_throws_when_a_requested_performer_does_not_exist()
+    {
+        var venue = AVenue("A1", "A2");
+        _venues.Seed(venue);
+        var performer = APerformer();
+        _performers.Seed(performer);
+
+        var handler = new CreateEventCommandHandler(_events, _venues, _performers, _publisher);
+
+        // Two ids requested, only one exists: the missing one must be reported, not silently dropped.
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            handler.Handle(new CreateEventCommand(FarEnoughOut, venue.Id, [performer.Id, "missing"]),
+                CancellationToken.None));
+
+        Assert.Empty(_events.Added);
+        Assert.Empty(_publisher.Published);
+    }
+
     // --- Reschedule ---
 
     [Fact]

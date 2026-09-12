@@ -1,5 +1,7 @@
 using Events.Application.Commands;
+using Events.Application.Exceptions;
 using Events.Application.IntegrationEvents;
+using Events.Domain.Entities;
 using Events.Domain.Exceptions;
 using Events.Domain.Repositories;
 using MediatR;
@@ -27,9 +29,19 @@ internal sealed class CreateEventCommandHandler : IRequestHandler<CreateEventCom
 
     public async Task<string> Handle(CreateEventCommand request, CancellationToken cancellationToken)
     {
-        var performers = await _performerRepository.GetPerformersByIdsAsync(request.Performers, cancellationToken);
-        if (performers.Count == 0)
+        var requested = request.Performers.Distinct().ToList();
+        // An empty request is the legacy 400: the caller named no one, so there is nothing to look up.
+        if (requested.Count == 0)
             throw new EventsDomainException("No performers found");
+
+        var performers = await _performerRepository.GetPerformersByIdsAsync(requested, cancellationToken);
+
+        // An id that matched nothing is reported rather than silently dropped — otherwise the caller
+        // asks for three performers, the event is created with a subset, and EventCreated announces the
+        // wrong lineup. Mirrors ChangeEventLineupCommandHandler.
+        var missing = requested.Except(performers.Select(p => p.Id)).ToList();
+        if (missing.Count > 0)
+            throw new NotFoundException(nameof(Performer), string.Join(", ", missing));
 
         var venue = await _venueRepository.GetVenueByIdAsync(request.Venue, cancellationToken);
         if (venue is null)
