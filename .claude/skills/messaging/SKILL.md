@@ -29,8 +29,10 @@ Bookings consumes **six** contracts in `Bookings.Application/IntegrationEventHan
 The two payment contracts are **consumed but not produced anywhere** — no payment service exists yet.
 That is an intentional pending seam, kept in place deliberately (see the `bookings-service` skill).
 
-**Events still has no outbox at all** (see the Events subsection below), so rule 4 does not hold on
-the Events side. **Bookings' outbox is enrolled and proven** — see the Durability section.
+**Both sides now have a durable outbox** — Bookings on Postgres, Events on Cosmos via
+`WolverineFx.CosmosDb` (see the Events subsection below). Bookings' is enrolled and proven; Events'
+is wired but unproven at runtime and, being a separate container, durable-but-not-atomic. So rule 4
+holds on both sides, with the Events caveat that "same transaction" is approximate there.
 
 **The rules below are written for the pattern, not the library.** Wolverine and RabbitMQ specifics
 live in their own sections, so replacing either changes those sections rather than the rules.
@@ -97,7 +99,7 @@ never published to the broker directly.
 
 ## Wolverine today
 
-WolverineFx 5.31.1, configured in `Bookings.Application.Extensions.ConfigureRabbitMq`.
+WolverineFx 5.41.0, configured in `Bookings.Application.Extensions.ConfigureRabbitMq`.
 
 ```csharp
 hostBuilder.UseWolverine(options =>
@@ -223,18 +225,44 @@ The docs recommend registering `DbContextOptions` with `optionsLifetime: Service
 its own `BeginTransactionAsync` around the same `DbContext` competes with Wolverine's middleware
 for transaction ownership. Pick one.
 
-### Events also hosts Wolverine
+### Events hosts Wolverine with a Cosmos outbox
 
-Events.Application hosts its own Wolverine + RabbitMQ (its own `ConfigureRabbitMq`) and publishes
-integration events through `WolverineIntegrationEventPublisher` (behind `IIntegrationEventPublisher`)
-using conventional routing. It calls `Policies.DisableConventionalLocalRouting()` — it only sends,
-never listens in-process.
+Events.Application hosts its own Wolverine + RabbitMQ (its own `ConfigureRabbitMq`) and sends
+integration events using conventional routing. It calls `Policies.DisableConventionalLocalRouting()`
+— it only sends, never listens in-process.
 
-Crucially, Events has **no** `PersistMessagesWithPostgresql` and **no** durability policies — so it
-has **no outbox**. Publishing happens inline, after the Cosmos write, which leaves a known
-lost-message window: a crash between the write and the publish loses the message, and Bookings never
-learns of the change. This is deliberate for now (Cosmos has no Wolverine message store) — see the
-`events-service` skill's Known gaps.
+Events now has a **durable outbox on Cosmos**, via `WolverineFx.CosmosDb`:
+
+```csharp
+options.UseCosmosDbPersistence(databaseName);   // database from CosmosConfigs:Database
+options.Policies.AutoApplyTransactions();
+options.Policies.UseDurableOutboxOnAllSendingEndpoints();
+```
+
+The publish seam is a two-hop indirection so the durable store stays in `Events.Cosmos`:
+
+- Handlers are **unchanged** — they still call `IIntegrationEventPublisher.PublishPendingAsync(aggregate)`.
+- `OutboxIntegrationEventPublisher` (`Events.Application`) translates the aggregate's domain events to
+  public contracts via `IntegrationEventTranslator`, then delegates to `IIntegrationEventDispatcher`
+  and clears the aggregate's events.
+- `CosmosOutboxDispatcher` (`Events.Cosmos`) implements that interface by staging each event through
+  Wolverine's `CosmosDbOutbox` and calling `SaveChangesAsync`, so envelopes persist and a relay
+  resends them after a crash.
+
+**Durable, but not atomic — and that is the accepted trade.** Wolverine keeps its envelopes in a
+separate `wolverine` container (per-item upsert, no cross-container batch), so the message is not
+written in the same batch as the `events` document. A crash can land one without the other — a small
+window, not the wide inline-publish window of before. A hand-rolled in-document outbox would be strictly
+atomic but bespoke; the team chose `WolverineFx.CosmosDb` because it is the standard, maintained
+package. Rule 4 therefore holds only approximately on the Events side. Because delivery is
+at-least-once and Bookings guards on `Ticket.EventVersion` (rule 6), a redelivered or duplicated
+message is harmless.
+
+**Runtime-unverified.** Nothing here can reach Cosmos or a broker, so the `wolverine` container
+auto-provisioning, the relay actually resending, and Wolverine's envelope documents surviving the
+shared custom serializer on the singleton `CosmosClient` are all confirmed by the compiler and unit
+tests only. (`DomainBinding` is scoped to `Events.Domain` and does not touch Wolverine's types, so only
+camelCase / ignore-null on `CosmosJson.Options` could matter.) See the `events-service` skill.
 
 ## When Wolverine is replaced
 

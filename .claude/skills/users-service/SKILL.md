@@ -64,10 +64,23 @@ Code shared by several features in one area sits one level up, at `Features/<Are
 
 The live feature slices under `Features/Users/` are `Authenticate`, `Register`, `RefreshToken`,
 `Introspect` and `SetRole`. `Introspect` (`Introspect/IntrospectUser.cs`) is the gateway-facing
-contract: it maps `GET api/users/auth` with `.RequireAuthorization()` and returns
-`{ id, email, firstName, lastName, userName, role, permissions }` — see rule 11 and the `api-gateway`
-skill. `SetRole` (`SetRole/SetUserRole.cs`) maps `PUT api/users/{id}/role` behind the `AdminOnly`
-policy for promoting/demoting users.
+contract: `IntrospectUser.Query(Guid UserId)` maps `GET api/users/auth` with `.RequireAuthorization()`
+and returns `{ id, email, firstName, lastName, userName, role, permissions }` — see rule 11 and the
+`api-gateway` skill. `SetRole` (`SetRole/SetUserRole.cs`) maps `PUT api/users/{id:guid}/role` behind
+the `AdminOnly` policy for promoting/demoting users.
+
+## User identity is a Guid
+
+`User.Id` is a `System.Guid`, minted in the entity constructor with `Guid.CreateVersion7()` — v7 is
+time-ordered, so app-assigned inserts stay index-friendly rather than scattering like a random GUID.
+It is stored as a native Postgres `uuid` (`ValueGeneratedNever`, since the app assigns it), and EF
+rehydrates through a private parameterless constructor so a load never re-runs the public constructor
+and mints a throwaway id. The migrations were squashed to a single clean `InitialCreate` on the uuid id.
+
+**The store keeps a `Guid`; the wire carries the string form.** The JWT `NameIdentifier` (subject) is
+`Id.ToString()`, and `Introspect` parses the subject back with `Guid.TryParse` before dispatching
+`IntrospectUser.Query(Guid)`. Bookings likewise keys on a `Guid` and parses the gateway's string
+`X-Identity-UserId` header at its edge.
 
 ## Rules
 
@@ -139,7 +152,7 @@ Implemented:
   Register handler decides this by checking whether the `Users` table is empty — there is no seeder and
   no admin credential in config. (A one-time race: two simultaneous first registrations could both win
   admin. Acceptable for bootstrap.)
-- **`PUT api/users/{id}/role`** (the `SetRole` slice) promotes or demotes, behind the `AdminOnly`
+- **`PUT api/users/{id:guid}/role`** (the `SetRole` slice) promotes or demotes, behind the `AdminOnly`
   policy (`RequireRole("Admin")`). Because Users.Api validates its own JWT — which carries the role
   claim `TokenService` issues — this is a real token check, not a trusted header.
 - The role rides into the access token as a claim and is echoed by `Introspect`, which is how the

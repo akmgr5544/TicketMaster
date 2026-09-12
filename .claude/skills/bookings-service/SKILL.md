@@ -268,11 +268,13 @@ GET    /api/bookings?page=&pageSize=    the caller's own, newest first
 POST   /api/bookings/{id}/cancel        204; refuses a paid booking with 400
 ```
 
-27. **Identity comes from `X-Identity-UserId` and nowhere else.** `BaseController.TryGetUserId`
-    reads it and the action answers 401 when it is absent — never a default, never the body. The
-    request records in `Bookings.Api/Requests` deliberately carry no user id, so model binding cannot
-    let a caller act as somebody else. `ReserveTicketCommand` and `MakeBookingCommand` still have a
-    `UserId`, but the controller supplies it.
+27. **Identity comes from `X-Identity-UserId` and nowhere else.** The id is a `Guid` in the store and
+    on the domain (`Booking.UserId`, the commands, the DTOs), but a **string on the wire** — the
+    gateway sets the header from the JWT subject. `BaseController.TryGetUserId(out Guid)` `Guid.TryParse`s
+    that header and the action answers 401 when it is absent, blank, or not a Guid — never a default,
+    never the body, and never a guessed id. The request records in `Bookings.Api/Requests` deliberately
+    carry no user id, so model binding cannot let a caller act as somebody else. `ReserveTicketCommand`
+    and `MakeBookingCommand` still have a `Guid UserId`, but the controller supplies it.
 28. **A read scoped by caller *is* the authorization check.** `FindForUserAsync` and
     `ListForUserAsync` put the user in the query, so somebody else's booking is indistinguishable from
     one that does not exist. Do not "improve" this into a 403 — that confirms the id exists to someone
@@ -374,8 +376,6 @@ non-durable. Fixed: `ServiceCollectionExtension` now calls all three —
 - The gateway sets `X-Identity-UserId` correctly now — the transform replaces rather than appends,
   `api/users/auth` exists, and the cluster addresses are filled in — but nothing tests any of it.
   Calling Bookings directly still means supplying the header by hand.
-- `UserId` is a `string` throughout Bookings while `Users.Api` keys users by `long`. Aligning them
-  means a migration on `Bookings.UserId`.
 - Repositories use `AddAsync`/`AddRangeAsync` (`efcore` rule 1) and each expose their own
   `SaveChangesAsync`, so `IUnitOfWork` is implemented twice over one context.
 - `CacheService` uses Newtonsoft.Json while the rest of the stack is on System.Text.Json.

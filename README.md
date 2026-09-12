@@ -13,7 +13,7 @@ listed honestly under [Known gaps](#-known-gaps) rather than left for you to dis
 | Language / runtime | C# 14, .NET 10 (`net10.0`, stable SDK — see `global.json`) |
 | Architecture | Clean Architecture + DDD (Bookings, Events), vertical slice (Users) |
 | CQRS | MediatR — commands, handlers, pipeline behaviors |
-| Messaging | WolverineFx over RabbitMQ (Postgres-backed durable inbox/outbox in Bookings; Events has none — see [Known gaps](#-known-gaps)) |
+| Messaging | WolverineFx over RabbitMQ (Postgres-backed durable inbox/outbox in Bookings; `WolverineFx.CosmosDb` durable outbox in Events) |
 | Relational store | PostgreSQL via EF Core (Bookings, Users) |
 | Document store | Azure Cosmos DB, NoSQL API (Events) |
 | Caching / locking | Redis via StackExchange.Redis + Medallion.Threading.Redis |
@@ -167,16 +167,26 @@ must save that change itself — the surrounding transaction is what keeps its s
 write that triggered it. Events are cleared before publishing rather than after: a handler that saves
 re-enters the interceptor while the aggregate is still tracked, and one still holding its events would
 publish them again and re-run that handler, which is recursion rather than a duplicate delivery. Events has no such hook available — Cosmos offers no equivalent — so
-dispatch is explicit in the command handler, ordered load → mutate → write → publish. The ordering is
+dispatch is explicit in the command handler, ordered load → mutate → write → stage-to-outbox. The ordering is
 load-bearing in both directions: a refused mutation throws before the write, so nothing is stored
-*and* nothing is announced; publishing after the write means no consumer hears about a change that
+*and* nothing is announced; staging into the outbox after the write means no consumer hears about a change that
 failed to persist.
 
 **Domain events are translated, never published raw (Events).** The aggregate raises a private
 `IDomainEvent`; `Events.Application/IntegrationEvents` maps it to a public contract in
-`TicketMaster.Common` and publishes through a single `IIntegrationEventPublisher`. `Events.Domain`
+`TicketMaster.Common` and stages it through a single `IIntegrationEventPublisher`. `Events.Domain`
 therefore never learns the shared contracts exist. A domain event is allowed to have no public
 counterpart — a lineup change has none, because nothing outside depends on who is performing.
+
+**A durable outbox on Cosmos, via the maintained package (Events).** `WolverineFx.CosmosDb`
+(`UseCosmosDbPersistence`) gives Events a durable outbox: `OutboxIntegrationEventPublisher` translates
+the aggregate's domain events and hands them to an `IIntegrationEventDispatcher`, which
+`CosmosOutboxDispatcher` implements by staging them through Wolverine's `CosmosDbOutbox` and flushing,
+so envelopes persist and a relay resends them after a crash. The trade is honest: Wolverine keeps its
+envelopes in a separate `wolverine` container (per-item upsert, no cross-container batch), so a message
+is durable but **not atomic** with the `events` write — a small crash window remains. A hand-rolled
+in-document outbox would be strictly atomic but bespoke; the team chose the standard package. Bookings'
+version guard makes redelivery harmless, so at-least-once from the outbox is enough.
 
 **Messages carry resulting state, and a version (Events → Bookings).** `EventRelocated` says which
 seats the event *now* has, not which were added or removed, so applying it twice lands in the same
@@ -328,17 +338,9 @@ today rather than what it should do — the fix is a decision, not a gap.
 
 ### Not built
 
-- **Events has no outbox.** Every handler publishes through `IIntegrationEventPublisher` inline after
-  the Cosmos write, so a crash between the two loses the message. Four contracts cross this way
-  (`EventCreated`, `EventRescheduled`, `EventRelocated`, `EventCancelled`), and a lost one leaves
-  Bookings' tickets permanently disagreeing with the catalogue rather than merely behind. Wolverine has
-  no Cosmos message store (Postgres/SqlServer/Marten only), so closing it means a hand-rolled outbox
-  document with a publisher loop, or a Postgres purely for messaging. Highest-value fix, and every
-  publish funnels through one interface, so it is a change in one place.
 - **Nothing pays for a booking.** `BookingPaidIntegrationEvent` and `BookingPaymentFailedIntegrationEvent`
   are defined and consumed, but nothing publishes them — Bookings has no outbound publishing at all. A
   booking therefore stays `Booked` indefinitely and its seats come back only if the owner cancels it.
-- **`UserId` is a `string` in Bookings and a `long` in `Users.Api`.** Aligning them means a migration.
 - **A relocation can strand a paid booking.** `ReconcileEventVenueCommandHandler` calls
   `ticket.Cancel(...)` for every seat the new venue lacks without asking whether that seat is booked,
   and `Booking.Cancel()` refuses anything that is not `Booked`. The parent booking is left pointing at
@@ -347,6 +349,14 @@ today rather than what it should do — the fix is a decision, not a gap.
 
 The code exists and is believed correct; these are the parts nothing exercises.
 
+- **The Events outbox relay has never run.** `WolverineFx.CosmosDb` is wired
+  (`UseCosmosDbPersistence`, `AutoApplyTransactions`, `UseDurableOutboxOnAllSendingEndpoints`), and
+  every handler stages through `OutboxIntegrationEventPublisher` → `CosmosOutboxDispatcher`. But three
+  things are unverified because nothing here can talk to Cosmos or a broker: the `wolverine` container
+  auto-provisioning, the relay actually resending a staged envelope, and Wolverine's envelope documents
+  surviving the custom System.Text.Json serializer on the shared singleton `CosmosClient` (`DomainBinding`
+  is scoped to `Events.Domain` and does not touch Wolverine's types, so only camelCase / ignore-null
+  could bite). Confirmed by the compiler and unit tests, not by execution.
 - **Nothing tests the gateway.** Cluster addresses are filled in and the users route is deliberately
   ungated — it proxies to the service that validates its own tokens — so the system should run end to
   end on the https launch profiles. But routing, the introspection call and the identity headers are all
@@ -370,6 +380,12 @@ The code exists and is believed correct; these are the parts nothing exercises.
 
 Deliberate, and recorded so nobody "fixes" one without knowing what it carries.
 
+- **The Events outbox is durable but not atomic.** `WolverineFx.CosmosDb` stores envelopes in a
+  separate `wolverine` container by per-item upsert, so the message survives a crash but is not written
+  in the same batch as the `events` document — a small window where the write lands and the envelope
+  does not, or vice versa. A hand-rolled in-document outbox would close it but is bespoke; the standard
+  package was chosen deliberately, and Bookings' version guard makes the resulting at-least-once,
+  possibly-lost-once delivery tolerable.
 - **`Events.Application.Pipelines.TransactionBehavior` is a no-op** — its body is `return next(...)`.
   Under Cosmos there is no honest implementation: atomicity is confined to a single logical partition,
   and with `/id` partition keys no two documents ever share one.
@@ -386,8 +402,6 @@ Deliberate, and recorded so nobody "fixes" one without knowing what it carries.
 
 ## 🗺️ Roadmap
 
-- A durable outbox for Events, so catalogue changes cannot be silently lost (Bookings' enrolment is
-  done; Events is the remaining half)
 - A payment service, plus the endpoint and outbound publish that would let a booking actually be paid
   for end to end
 - Refunds and notifications for a paid booking voided by a relocation or cancellation

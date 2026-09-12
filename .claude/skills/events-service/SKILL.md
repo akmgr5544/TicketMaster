@@ -84,9 +84,9 @@ and `Performer` deliberately do not — nothing outside this service reacts to t
    none (rule 7, enforced by `DependenceTest`).
 2. **Dispatch is explicit in the command handler, not an interceptor.** Bookings dispatches from a
    `SaveChangesInterceptor`; Cosmos has no equivalent hook. The order is load → mutate → write →
-   publish, and it matters both ways: a refused mutation throws before the write so nothing is
-   stored *and* nothing is announced, and publishing after the write means no consumer hears about a
-   change that failed to persist.
+   stage-to-outbox, and it matters both ways: a refused mutation throws before the write so nothing is
+   stored *and* nothing is announced, and staging into the outbox after the write means no consumer
+   hears about a change that failed to persist.
 3. **Every mutation bumps `Version` and raises a domain event.** Consumers use the version to
    discard messages that arrive out of order, so a mutation that forgets to bump it is silently
    unprotected. Validate before bumping, so a refused change leaves the version alone.
@@ -99,8 +99,11 @@ and `Performer` deliberately do not — nothing outside this service reacts to t
    allowed to have no public counterpart: `EventLineupChangedDomainEvent` has none, because nothing
    outside depends on who is performing.
 6. **Everything reaches the broker through `IIntegrationEventPublisher`.** It takes the aggregate
-   rather than a list of events, so clearing cannot be forgotten, and it is the single place an
-   outbox will land.
+   rather than a list of events, so clearing cannot be forgotten, and it is the single place the
+   outbox lives. `OutboxIntegrationEventPublisher` translates and delegates to
+   `IIntegrationEventDispatcher`; `CosmosOutboxDispatcher` (in `Events.Cosmos`) stages the events
+   through Wolverine's durable Cosmos outbox. Handlers never see any of that — they call
+   `PublishPendingAsync(aggregate)`.
 7. **`Cancel()` is idempotent.** Cancelling an already-cancelled event changes nothing, raises
    nothing and does not move the version — it is the same request arriving twice, not an error. Any
    other mutation on a cancelled event throws `EventsDomainException`.
@@ -135,9 +138,10 @@ document size drives RU cost directly.
 9. **`EventCreatedIntegrationEvent` is a public contract** in `TicketMaster.Common`. Bookings
    creates tickets from it — changing its shape non-additively breaks ticket creation.
 10. **The integration event must not be published unless the write succeeded and is durable.**
-    Publishing directly after a write loses the message if the process dies in between, and
-    Bookings then never creates tickets for an event that exists. See `messaging` rule 4.
-    **Events does not satisfy this today** — see Known gaps.
+    Staging into the durable outbox happens after the write, so a refused write announces nothing.
+    Events satisfies this via `WolverineFx.CosmosDb` — with one honest caveat: the outbox is a
+    separate `wolverine` container, so the envelope is durable but **not atomic** with the `events`
+    write. See `messaging` rule 4 and the Cosmos-outbox subsection there.
 11. **Geographic coordinates use `GeoLocation`**, a validated value object in `Events.Domain`,
     serialized as a GeoJSON Point. GeoJSON orders coordinates `[longitude, latitude]` — reversed
     from how they are written. `GeoLocationConverter` is the single place that order is decided.
@@ -238,14 +242,25 @@ message that says what happened.
   atomicity is per logical partition and `/id` keys mean nothing shares one. A handler must not
   assume a rollback. The class is documented as a no-op rather than quietly left implying a
   guarantee.
-- **`WolverineIntegrationEventPublisher` publishes inline, with no outbox (rule 10).** Wolverine is
-  configured with RabbitMQ but no message persistence, so a crash between the Cosmos write and the
-  publish loses the message. This is now worse than it was when only creation was published: a lost
-  `EventCancelled` or `EventRelocated` leaves Bookings' tickets permanently out of sync with the
-  catalogue, not merely missing. Still the most valuable remaining fix. Wolverine has **no Cosmos
-  message store** (Postgres/SqlServer/Marten only), so the options are a hand-rolled outbox document
-  plus a publisher loop, or a Postgres purely for messaging. Everything funnels through
-  `IIntegrationEventPublisher`, so it is a change in one place.
+
+**Accepted trade-off:**
+- **The Cosmos outbox is durable but not atomic.** `WolverineFx.CosmosDb` keeps its
+  envelopes in a separate `wolverine` container by per-item upsert, so a staged message is not written
+  in the same batch as the `events` document — a small crash window remains where the write lands and
+  the envelope does not, or vice versa. This is a deliberate trade: the package is the standard,
+  maintained option, whereas a hand-rolled in-document outbox would be strictly atomic but bespoke.
+  Bookings' `Ticket.EventVersion` guard makes the resulting at-least-once (possibly lost-once)
+  delivery harmless.
+
+**Built but unverified at runtime:**
+- The Cosmos outbox has never actually run. `UseCosmosDbPersistence` + `AutoApplyTransactions` +
+  `UseDurableOutboxOnAllSendingEndpoints` are wired and every publish goes
+  `OutboxIntegrationEventPublisher` → `IIntegrationEventDispatcher` → `CosmosOutboxDispatcher`
+  (`CosmosDbOutbox.PublishAsync`/`SaveChangesAsync`). Unverified because nothing here reaches Cosmos or
+  a broker: the `wolverine` container auto-provisioning, the relay resending a staged envelope, and
+  Wolverine's envelope documents surviving the custom serializer on the singleton `CosmosClient`
+  (`DomainBinding` is scoped to `Events.Domain` and does not touch Wolverine's types, so only camelCase
+  / ignore-null on `CosmosJson.Options` could bite).
 
 **Missing:**
 - All three aggregates now have full CRUD. Events use per-facet sub-resources
@@ -298,7 +313,7 @@ message that says what happened.
 |---|---|
 | A past-dated event throws on load | Deserialization routed through the public constructor, re-running creation invariants |
 | Coordinates land in the wrong hemisphere | GeoJSON is `[longitude, latitude]`; the order was swapped |
-| Bookings has no tickets for an existing event | Integration event published without an outbox (rule 10) |
+| Bookings has no tickets for an existing event | The staged envelope was lost in the non-atomic outbox window, or staged before the write (rule 10) |
 | Handler assumes a rollback | `TransactionBehavior` is a no-op, and Cosmos cannot provide one here |
 | Venue rename doesn't appear on old events | Correct — embedded copies are snapshots by design |
 | Venue rename doesn't appear on the venue page either | Reading the embedded copy where the container was wanted |
