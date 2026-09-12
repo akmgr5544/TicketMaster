@@ -6,9 +6,9 @@ namespace Bookings.Application.IntegrationEventHandlers;
 
 public class EventRescheduledIntegrationEventHandler
 {
-    private readonly IMediator _mediator;
+    private readonly ISender _mediator;
 
-    public EventRescheduledIntegrationEventHandler(IMediator mediator)
+    public EventRescheduledIntegrationEventHandler(ISender mediator)
     {
         _mediator = mediator;
     }

@@ -187,7 +187,8 @@ messages as a whole — a seat that does not exist yet has no version to compare
 **Transactional outbox storage (Bookings).** `PersistMessagesWithPostgresql` plus
 `UseEntityFrameworkCoreTransactions` puts the message store alongside the state it describes, and all
 three durability policies are applied, so the broker endpoints are enrolled rather than just the
-in-process queues. No test observes it — see [Known gaps](#-known-gaps).
+in-process queues. The host-boot fixture asserts every broker listener and sender comes up in
+`EndpointMode.Durable`, so the enrolment is observed rather than assumed.
 
 **Persistence-ignorant domain (Events).** `Events.Domain` has *zero* package and project
 references — no driver types, no DI abstractions — enforced by architecture tests. Entity ids are
@@ -243,7 +244,7 @@ other suite green. It is what proves the broker endpoints are actually enrolled 
 and it is where a Wolverine 6 upgrade currently fails.
 
 The two fixtures own separate containers and run in parallel; the fast one never starts a broker,
-which is what keeps the other 116 tests at about a second.
+which is what keeps the other 114 tests at about a second.
 
 **Needs a running Docker daemon** — every test starts containers; with the daemon down the whole
 project fails at fixture initialisation. `Bookings.Sql` and `Bookings.Application` carry

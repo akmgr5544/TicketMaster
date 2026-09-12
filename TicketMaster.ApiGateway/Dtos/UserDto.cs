@@ -1,3 +1,9 @@
 namespace TicketMaster.ApiGateway.Dtos;
 
-public record UserDto(string Id, string Email, string FirstName, string LastName, string UserName);
+public record UserDto(
+    string Id,
+    string Email,
+    string FirstName,
+    string LastName,
+    string UserName,
+    IReadOnlyCollection<string> Permissions);

@@ -1,8 +1,6 @@
 using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
-using Users.Api.Database;
 using Users.Api.Extensions;
 using Users.Api.Options;
 
@@ -18,11 +16,6 @@ builder.Services.AddOpenApi();
 builder.Services.AddProblemDetails();
 
 var configuration = builder.Configuration;
-builder.Services.AddDbContext<UsersDomainContext>(options =>
-{
-    options.UseNpgsql(configuration.GetConnectionString("UsersDatabase"));
-    //More configurations
-});
 builder.Services.AddDatabase(configuration);
 builder.Services.AddBusinessServices(configuration);
 

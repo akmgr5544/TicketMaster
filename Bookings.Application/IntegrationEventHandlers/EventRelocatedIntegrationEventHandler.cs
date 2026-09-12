@@ -10,9 +10,9 @@ namespace Bookings.Application.IntegrationEventHandlers;
 /// </summary>
 public class EventRelocatedIntegrationEventHandler
 {
-    private readonly IMediator _mediator;
+    private readonly ISender _mediator;
 
-    public EventRelocatedIntegrationEventHandler(IMediator mediator)
+    public EventRelocatedIntegrationEventHandler(ISender mediator)
     {
         _mediator = mediator;
     }

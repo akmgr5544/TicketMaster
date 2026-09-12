@@ -250,7 +250,7 @@ a paid booking refuses cancellation.
   which integration tests need in order to build the cache keys a handler will look for. Entries:
   `Bookings.Application → BookingIntegration`, `Bookings.Sql → BookingIntegration`,
   `Bookings.Api → BookingApi`, `Events.Application → EventsApplication`, `Events.Api → EventsApi`,
-  `Users.Api → ArchitectureTests`. Dispatching through `ISender` does not by itself require access to
+  `Users.Api → UsersArchitecture`. Dispatching through `ISender` does not by itself require access to
   a handler — the internals that matter are the keys, the context and the repositories used to seed
   and assert.
 - **Architecture suites:** adding a layer or project means updating that suite's `BaseTest.cs` to load
@@ -260,8 +260,10 @@ a paid booking refuses cancellation.
 
 - **Wolverine `Consume` handlers** — they need a broker, and each is a two-line delegation to a
   command that is covered. Testing them would prove Wolverine works.
-- **The HTTP layer** — `BookingApi` covers exception-to-status mapping. There is no
-  `WebApplicationFactory` suite and `Microsoft.AspNetCore.Mvc.Testing` is not referenced.
+- **The HTTP layer** — `BookingApi` covers exception-to-status mapping. `Microsoft.AspNetCore.Mvc.Testing`
+  *is* referenced and used — `BookingsHostFixture` boots the host through `WebApplicationFactory<Program>`
+  — but only to prove startup and durability, not to send requests: there is no HTTP request/response
+  test suite exercising controllers over the wire.
 - **`IdentifiedCommandHandler`** — inert; `IRequestManager` has no implementation.
 
 ## Known gaps

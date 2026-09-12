@@ -8,7 +8,7 @@ using MediatR;
 
 namespace Bookings.Application.CommandHandlers.Tickets;
 
-internal class CreateTicketCommandHandler : IRequestHandler<CreateTicketCommand>
+internal sealed class CreateTicketCommandHandler : IRequestHandler<CreateTicketCommand>
 {
     private readonly ITicketsRepository _ticketsRepository;
     private readonly IEventsService _eventsService;

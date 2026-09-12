@@ -20,7 +20,7 @@
     </ItemGroup>
 
     <ItemGroup>
-        <InternalsVisibleTo Include="ArchitectureTests" />
+        <InternalsVisibleTo Include="UsersArchitecture" />
     </ItemGroup>
 
 </Project>

@@ -68,14 +68,18 @@ internal class TicketsRepository : ITicketsRepository
                 cancellationToken);
     }
 
-    public async ValueTask AddTicketAsync(Ticket ticket, CancellationToken cancellationToken)
+    // Add/AddRange, not their async counterparts: those only exist to await a value generator such
+    // as HiLo, and none is configured here, so the synchronous calls do the same work without a hop.
+    public ValueTask AddTicketAsync(Ticket ticket, CancellationToken cancellationToken)
     {
-        await _context.Tickets.AddAsync(ticket, cancellationToken);
+        _context.Tickets.Add(ticket);
+        return ValueTask.CompletedTask;
     }
 
-    public async ValueTask AddTicketsAsync(Ticket[] ticket)
+    public ValueTask AddTicketsAsync(Ticket[] tickets, CancellationToken cancellationToken)
     {
-        await _context.Tickets.AddRangeAsync(ticket);
+        _context.Tickets.AddRange(tickets);
+        return ValueTask.CompletedTask;
     }
 
     public async Task SaveChangesAsync(CancellationToken cancellationToken)

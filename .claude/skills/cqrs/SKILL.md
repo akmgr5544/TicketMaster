@@ -26,7 +26,7 @@ registration code — not the rules.
 | **Request** | Immutable data describing one intent. Carries no behavior. |
 | **Handler** | Executes exactly one request type. Owns the operation end to end. |
 | **Dispatcher** | Routes a request to its handler. Callers depend on this, never on handlers. |
-| **Pipeline behavior** | Wraps every request. Home for validation, logging, transactions, metrics. |
+| **Pipeline behavior** | Wraps the requests it applies to. Home for validation, logging, transactions, metrics. |
 
 ## Rules
 
@@ -47,6 +47,11 @@ registration code — not the rules.
    Do not introduce the Result type into Bookings or Events, and do not throw for expected failures
    in Users. Whichever mechanism a service uses, an expected failure must produce the right status
    code — a "not found" that surfaces as 500 is a bug either way.
+
+   Events has an internal **fourth** exception, `ConcurrencyConflictException` — a retry signal, not
+   an edge failure. `ConcurrencyRetryBehavior` catches it, retries the read-modify-write, and on
+   exhaustion converts it to `EventsApplicationException` before it can reach the edge, so the
+   three-exception mapping above still holds at the boundary.
 5. **A handler never dispatches another request.** Handler-to-handler chaining hides the real
    dependency graph and defeats the pipeline (the inner request re-runs every behavior, including
    transactions). Extract shared logic into a service or static helper and call it from both.
@@ -81,12 +86,17 @@ services.AddMediatR(cfg =>
 Behaviors are registered as open generics and run in registration order, outermost first:
 
 ```csharp
-services.AddScoped(typeof(IPipelineBehavior<,>), typeof(TransactionBehavior<,>));
+services.AddTransient(typeof(IPipelineBehavior<,>), typeof(TransactionBehavior<,>));
 ```
 
-`Bookings.Sql/Pipelines/TransactionBehavior.cs` is the reference implementation in this repo — it
-wraps every request in a database transaction, commits on success, rolls back and rethrows on
-exception.
+`Bookings.Sql/Pipelines/TransactionBehavior.cs` is the reference implementation in this repo. It does
+**not** wrap every request: its constraint `where TRequest : notnull, ITransactionalRequest` means DI
+only applies it to requests carrying that marker, and even then it defers when a transaction is
+already open on the context (the Wolverine-message nesting path). When it does own the transaction it
+commits on success, rolls back and rethrows on exception.
+
+Events registers **two** behaviors, in this order: `ConcurrencyRetryBehavior<,>` then
+`TransactionBehavior<,>` — both `AddTransient`.
 
 ## When MediatR is replaced
 

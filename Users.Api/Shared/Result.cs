@@ -2,8 +2,8 @@ namespace Users.Api.Shared;
 
 public record Result()
 {
-    public bool IsSuccess { get; set; }
-    public Error? Error { get; set; }
+    public bool IsSuccess { get; init; }
+    public Error? Error { get; init; }
 
     protected Result(bool isSuccess, Error? error) : this()
     {

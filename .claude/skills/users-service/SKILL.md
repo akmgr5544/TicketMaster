@@ -62,6 +62,11 @@ Code shared by several features in one area sits one level up, at `Features/<Are
 | `Extensions/ServiceCollectionExtension.cs` | DI registration and the migration helper |
 | `Program.cs` | Composition and pipeline |
 
+The live feature slices under `Features/Users/` are `Authenticate`, `Register`, `RefreshToken` and
+`Introspect`. `Introspect` (`Introspect/IntrospectUser.cs`) is the gateway-facing contract: it maps
+`GET api/users/auth` with `.RequireAuthorization()` and returns
+`{ id, email, firstName, lastName, userName, permissions }` — see rule 11 and the `api-gateway` skill.
+
 ## Rules
 
 1. **A feature never reaches into another feature.** No handler references another feature's
@@ -106,22 +111,25 @@ Code shared by several features in one area sits one level up, at `Features/<Are
 6. If the slice needs a schema change, add a migration and read the generated file before
    committing.
 
+## Auth-security posture
+
+The intended design, being implemented now:
+
+- **Refresh tokens are stored hashed** (SHA-256), never in plaintext — a leaked table is not a leaked
+  set of live sessions (rule 8).
+- **The refresh endpoint derives the user by looking up the hashed token**, not from a `UserId` in the
+  request body (rule 9). It returns a single uniform failure for a missing, invalid or expired token,
+  so it does not leak which case occurred.
+- **The refresh token outlives the access token.** The access token expires in 1 day; the refresh
+  token has a longer lifetime, so it can still renew after the access token dies (rule 7).
+- **Register handles the unique-constraint race** by catching `DbUpdateException` from the insert and
+  returning 400, rather than letting the loser of two concurrent registrations surface as a 500
+  (`efcore` rule 4).
+
 ## Known gaps
 
 Current code does not yet match the rules above.
 
-- **No endpoint is ever mapped.** `ServiceCollectionExtension` registers every `IEndpointMarker`
-  via Scrutor, but nothing resolves them and calls `MapEndpoint`, and `Program.cs` never calls a
-  `MapEndpoints()`. The service currently serves zero routes.
-- **`api/users/auth` does not exist**, so the gateway's introspection call cannot succeed.
-- **`PasswordHash` is capped at 60 chars** (`UserConfiguration.cs:21`) but `PasswordHasher<User>`
-  emits exactly 84. The first registration will fail with
-  `value too long for type character varying(60)`.
-- `Program.cs` calls `AddDbContext` inline while `ServiceCollectionExtension.AddDatabase` sits
-  unused and the call to it is commented out. Two sources of truth, one dead.
-- Access token and refresh token both expire in 1 day (rule 7).
-- Refresh tokens are stored in plaintext (rule 8).
-- `UserRefreshToken.Command` takes `UserId` from the request body (rule 9).
 - `AuthenticateUser` ignores `SuccessRehashNeeded` (rule 10).
 - `Error` is still constructed with the sentence in `Code` and `""` in `Message` (rule 4).
   `ErrorResults.ToProblem` compensates by falling back to `Code` for the problem detail, which keeps
@@ -137,9 +145,7 @@ Current code does not yet match the rules above.
 
 | Symptom | Cause |
 |---|---|
-| Endpoint returns 404 though the feature exists | `MapEndpoint` never called — nothing maps discovered endpoints |
-| Registration fails on insert | `PasswordHash` column shorter than the 84-char hash |
 | Every error surfaces as 400 | An endpoint returning `Results.BadRequest` instead of `ToProblem()` (rule 5) |
 | Client can't refresh after the access token dies | Refresh token has the same lifetime (rule 7) |
-| Gateway returns 401 for valid credentials | `api/users/auth` missing or its response shape changed |
+| Gateway returns 401 for valid credentials | `api/users/auth`'s response shape changed |
 | Two features drift apart doing the same thing | Shared logic never promoted to the area or `Shared/` (rule 1) |

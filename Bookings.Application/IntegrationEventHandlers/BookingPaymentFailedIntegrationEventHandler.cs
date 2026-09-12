@@ -7,9 +7,9 @@ namespace Bookings.Application.IntegrationEventHandlers;
 
 public class BookingPaymentFailedIntegrationEventHandler
 {
-    private readonly IMediator _mediator;
+    private readonly ISender _mediator;
 
-    public BookingPaymentFailedIntegrationEventHandler(IMediator mediator)
+    public BookingPaymentFailedIntegrationEventHandler(ISender mediator)
     {
         _mediator = mediator;
     }

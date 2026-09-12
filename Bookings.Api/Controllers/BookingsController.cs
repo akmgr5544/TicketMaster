@@ -61,8 +61,11 @@ public class BookingsController : BaseController
     }
 
     /// <summary>
-    /// The caller's own bookings, newest first. A full page may mean there are more; <c>Booking</c>
-    /// has no timestamp, so there is nothing better than the key to order by.
+    /// The caller's own bookings, newest first. A full page may mean there are more. Ordering stays
+    /// on the key deliberately: it is a sequence allocated at insert, so it is already in creation
+    /// order and walks the primary key index backwards. <c>Booking.CreatedAt</c> exists for
+    /// reporting, not ordering — sorting by it would need an index on (UserId, CreatedAt DESC) just
+    /// to match what the key already gives for free.
     /// </summary>
     [HttpGet]
     [ProducesResponseType<BookingDto[]>(StatusCodes.Status200OK)]

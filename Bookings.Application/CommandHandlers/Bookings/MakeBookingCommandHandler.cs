@@ -12,7 +12,7 @@ using Bookings.Application.Commands.Bookings;
 
 namespace Bookings.Application.CommandHandlers.Bookings;
 
-internal class MakeBookingCommandHandler : IRequestHandler<MakeBookingCommand, long>
+internal sealed class MakeBookingCommandHandler : IRequestHandler<MakeBookingCommand, long>
 {
     private readonly IBookingRepository _bookingRepository;
     private readonly ITicketsRepository _ticketsRepository;
@@ -40,7 +40,7 @@ internal class MakeBookingCommandHandler : IRequestHandler<MakeBookingCommand, l
 
         var booking = Booking.Create(request.UserId, BookingStatus.Booked, ticketIds);
 
-        await _bookingRepository.AddAsync(booking);
+        _bookingRepository.Add(booking);
         await _bookingRepository.SaveChangesAsync(cancellationToken);
         
         var reservationKeys = ticketIds.Select(ReservationKeys.Reservation).ToArray();
@@ -60,6 +60,12 @@ internal class MakeBookingCommandHandler : IRequestHandler<MakeBookingCommand, l
 
         if (ticketIds.Length > TicketCountConfig)
             throw new BookingsDomainException("Too many tickets");
+
+        // A duplicate id would pass the reservation lookup (fewer distinct keys than ids) and then
+        // trip the count mismatch below with the misleading "No reserved tickets found". Reject it
+        // here with a clear message, as ReserveTicketCommandHandler does.
+        if (ticketIds.Distinct().Count() != ticketIds.Length)
+            throw new BookingsDomainException("The same ticket was selected more than once");
 
         var keys = ticketIds.Select(ReservationKeys.Reservation).ToArray();
         var reservedTickets = await _cacheService.GetByKeysAsync<ReserveTicketDto>(keys);

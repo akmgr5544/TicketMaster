@@ -5,7 +5,7 @@ namespace Bookings.Domain.Repositories;
 
 public interface IBookingRepository : IUnitOfWork
 {
-    ValueTask AddAsync(Booking booking);
+    void Add(Booking booking);
 
     /// <summary>
     /// One booking with the tickets it covers, tracked, because callers settle its payment and save.
