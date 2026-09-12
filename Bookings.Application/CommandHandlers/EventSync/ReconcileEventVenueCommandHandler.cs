@@ -43,7 +43,7 @@ internal sealed class ReconcileEventVenueCommandHandler : IRequestHandler<Reconc
             .ToArray();
 
         if (missing.Length > 0)
-            await _tickets.AddTicketsAsync(missing);
+            await _tickets.AddTicketsAsync(missing, cancellationToken);
 
         await _tickets.SaveChangesAsync(cancellationToken);
     }

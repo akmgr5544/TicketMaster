@@ -18,9 +18,11 @@ internal class BookingRepository : IBookingRepository
         await _context.SaveChangesAsync(cancellationToken);
     }
 
-    public async ValueTask AddAsync(Booking booking)
+    // Synchronous Add: AddAsync only exists to await a value generator such as HiLo, and none is
+    // configured, so it would add nothing but a state-machine allocation.
+    public void Add(Booking booking)
     {
-        await _context.Bookings.AddAsync(booking);
+        _context.Bookings.Add(booking);
     }
     
     public async ValueTask<Booking?> FindForUserAsync(long bookingId,

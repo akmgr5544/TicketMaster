@@ -6,7 +6,7 @@ using Bookings.Application.Commands.Tickets;
 
 namespace Bookings.Application.CommandHandlers.Tickets;
 
-internal class CreateTicketsBulkCommandHandler : IRequestHandler<CreateTicketsBulkCommand>
+internal sealed class CreateTicketsBulkCommandHandler : IRequestHandler<CreateTicketsBulkCommand>
 {
     private readonly ITicketsRepository _ticketsRepository;
     
@@ -29,7 +29,7 @@ internal class CreateTicketsBulkCommandHandler : IRequestHandler<CreateTicketsBu
             tickets.Add(ticket);
         }
         
-        await _ticketsRepository.AddTicketsAsync(tickets.ToArray());
+        await _ticketsRepository.AddTicketsAsync(tickets.ToArray(), cancellationToken);
         await _ticketsRepository.SaveChangesAsync(cancellationToken);
     }
 }

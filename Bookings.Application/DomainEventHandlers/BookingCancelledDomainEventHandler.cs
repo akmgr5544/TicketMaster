@@ -14,7 +14,7 @@ namespace Bookings.Application.DomainEventHandlers;
 /// atomic — a booking must never be marked cancelled without its seats actually going back.
 /// </para>
 /// </summary>
-public class BookingCancelledDomainEventHandler : INotificationHandler<BookingCancelledDomainEvent>
+internal sealed class BookingCancelledDomainEventHandler : INotificationHandler<BookingCancelledDomainEvent>
 {
     private readonly ITicketsRepository _ticketsRepository;
 

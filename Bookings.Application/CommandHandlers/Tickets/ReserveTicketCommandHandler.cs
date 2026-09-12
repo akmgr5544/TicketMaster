@@ -11,7 +11,7 @@ using Bookings.Application.Commands.Tickets;
 
 namespace Bookings.Application.CommandHandlers.Tickets;
 
-internal class ReserveTicketCommandHandler : IRequestHandler<ReserveTicketCommand>
+internal sealed class ReserveTicketCommandHandler : IRequestHandler<ReserveTicketCommand>
 {
     private readonly IDistributedLockProvider _lockProvider;
     private readonly ICacheService _cacheService;

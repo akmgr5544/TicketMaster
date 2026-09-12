@@ -15,7 +15,7 @@ namespace Bookings.Application.DomainEventHandlers;
 /// makes this save and the booking's own insert atomic.
 /// </para>
 /// </summary>
-public class BookingCreatedDomainEventHandler : INotificationHandler<BookingCreatedDomainEvent>
+internal sealed class BookingCreatedDomainEventHandler : INotificationHandler<BookingCreatedDomainEvent>
 {
     private readonly ITicketsRepository _ticketsRepository;
 

@@ -26,6 +26,11 @@ internal sealed class EventsService : IEventsService
                 deadline: DateTime.UtcNow.Add(CallDeadline),
                 cancellationToken: cancellationToken);
 
+            // In proto3 a message field can be absent on the wire, so Venue may be null even on a
+            // successful reply. Treat that as no usable answer rather than dereferencing into an NRE.
+            if (reply.Venue is null)
+                return null;
+
             return new EventDto(reply.Id, new VenueDto(reply.Venue.Id, reply.Venue.Name, [..reply.Venue.Seats]));
         }
         catch (RpcException exception) when (exception.StatusCode == StatusCode.NotFound)

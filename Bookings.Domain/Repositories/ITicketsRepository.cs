@@ -17,7 +17,7 @@ public interface ITicketsRepository : IUnitOfWork
 
     ValueTask<bool> SeatIsCoveredAsync(string eventId, string seat, CancellationToken cancellationToken);
 
-    ValueTask AddTicketsAsync(Ticket[] ticket);
+    ValueTask AddTicketsAsync(Ticket[] tickets, CancellationToken cancellationToken);
 
     ValueTask AddTicketAsync(Ticket ticket, CancellationToken cancellationToken);
 }
