@@ -10,7 +10,10 @@ namespace Users.Api.Features.Users.RefreshToken;
 
 public static class UserRefreshToken
 {
-    public record Command(long UserId, string RefreshToken) : IRequest<Result<Response>>;
+    // Identity comes from the presented refresh token, never a user id in the body — a body-supplied
+    // id lets a caller nominate whose session to act on and turns the endpoint into an oracle for
+    // which ids exist.
+    public sealed record Command(string RefreshToken) : IRequest<Result<Response>>;
 
     public sealed record Response(string Token, string RefreshToken);
 
@@ -28,28 +31,29 @@ public static class UserRefreshToken
 
         public async Task<Result<Response>> Handle(Command request, CancellationToken cancellationToken)
         {
-            var user = await _dbContext.Users.FirstOrDefaultAsync(x => x.Id == request.UserId, cancellationToken);
+            var tokenHash = TokenService.HashRefreshToken(request.RefreshToken);
+            var user = await _dbContext.Users.FirstOrDefaultAsync(x => x.RefreshToken == tokenHash,
+                cancellationToken);
 
-            if (user == null)
+            // Not found, expired, or otherwise invalid all collapse to one uniform failure so the
+            // endpoint reveals nothing about which tokens or users exist.
+            if (user == null || user.RefreshTokenExpires <= DateTime.UtcNow)
             {
-                var error = new Error("User not found", ErrorType.BadRequest, "");
-                return Result<Response>.Failure(error);
-            }
-
-            if (user.RefreshToken != request.RefreshToken || user.RefreshTokenExpires <= DateTime.UtcNow)
-            {
-                var error = new Error("Invalid refresh token", ErrorType.Unauthorized, "");
+                var error = new Error("invalid_refresh_token", ErrorType.Unauthorized,
+                    "Invalid or expired refresh token");
                 return Result<Response>.Failure(error);
             }
 
             var token = TokenService.CreateToken(user, _authOptions);
-            var refreshToken = TokenService.CreateRefreshToken(user, _authOptions);
+            var refreshToken = TokenService.CreateRefreshToken(_authOptions);
 
-            user.RefreshToken = refreshToken;
-            _dbContext.Users.Update(user);
+            // Rotate: a fresh access token and a fresh refresh token (new hash + expiry). user is
+            // tracked, so no Update call is needed.
+            user.RefreshToken = refreshToken.Hash;
+            user.RefreshTokenExpires = refreshToken.Expires;
             await _dbContext.SaveChangesAsync(cancellationToken);
 
-            var result = new Response(token, refreshToken);
+            var result = new Response(token, refreshToken.Raw);
             return Result<Response>.Success(result);
         }
     }

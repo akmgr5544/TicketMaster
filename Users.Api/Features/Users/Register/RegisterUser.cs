@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Net.Mail;
 using MediatR;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -12,6 +13,8 @@ namespace Users.Api.Features.Users.Register;
 
 public static class RegisterUser
 {
+    private const int MinPasswordLength = 8;
+
     public sealed record Command(
         string UserName,
         string Email,
@@ -40,21 +43,23 @@ public static class RegisterUser
 
         public async Task<Result<Response>> Handle(Command request, CancellationToken cancellationToken)
         {
+            if (Validate(request) is { } validationError)
+                return Result<Response>.Failure(validationError);
+
             if (request.Password != request.ConfirmPassword)
             {
-                var error = new Error("Passwords do not match", ErrorType.BadRequest, "");
+                var error = new Error("passwords_do_not_match", ErrorType.BadRequest, "Passwords do not match");
                 return Result<Response>.Failure(error);
             }
 
+            // Fast path for the friendly message. The unique indexes on Email/UserName are the real
+            // guard against a concurrent duplicate — see the DbUpdateException catch below.
             var dbUser = await _dbContext.Users.FirstOrDefaultAsync(x =>
                 x.Email == request.Email ||
                 x.UserName == request.UserName, cancellationToken);
 
             if (dbUser != null)
-            {
-                var error = new Error("Email or UserName already in use", ErrorType.BadRequest, "");
-                return Result<Response>.Failure(error);
-            }
+                return Result<Response>.Failure(InUseError());
 
             var user = new User(request.UserName,
                 request.Email,
@@ -66,15 +71,43 @@ public static class RegisterUser
             user.PasswordHash = hashedPass;
 
             var token = TokenService.CreateToken(user, _authOptions);
-            var refreshToken = TokenService.CreateRefreshToken(user, _authOptions);
+            var refreshToken = TokenService.CreateRefreshToken(_authOptions);
 
-            user.RefreshToken = refreshToken;
+            user.RefreshToken = refreshToken.Hash;
+            user.RefreshTokenExpires = refreshToken.Expires;
 
-            await _dbContext.Users.AddAsync(user, cancellationToken);
-            await _dbContext.SaveChangesAsync(cancellationToken);
+            _dbContext.Users.Add(user);
+            try
+            {
+                await _dbContext.SaveChangesAsync(cancellationToken);
+            }
+            catch (DbUpdateException)
+            {
+                // Lost the check-then-insert race against a concurrent registration; the unique index
+                // rejected the duplicate. Map to the same 400 the pre-check would have returned.
+                return Result<Response>.Failure(InUseError());
+            }
 
-            var result = new Response(token, refreshToken);
+            var result = new Response(token, refreshToken.Raw);
             return Result<Response>.Success(result);
+        }
+
+        private static Error InUseError() =>
+            new("email_or_username_in_use", ErrorType.BadRequest, "Email or UserName already in use");
+
+        private static Error? Validate(Command request)
+        {
+            if (string.IsNullOrWhiteSpace(request.Email) || !MailAddress.TryCreate(request.Email, out _))
+                return new Error("invalid_email", ErrorType.BadRequest, "A valid email is required");
+
+            if (string.IsNullOrWhiteSpace(request.UserName))
+                return new Error("invalid_username", ErrorType.BadRequest, "A user name is required");
+
+            if (string.IsNullOrWhiteSpace(request.Password) || request.Password.Length < MinPasswordLength)
+                return new Error("invalid_password", ErrorType.BadRequest,
+                    $"A password of at least {MinPasswordLength} characters is required");
+
+            return null;
         }
     }
 }

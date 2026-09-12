@@ -2,7 +2,7 @@ namespace Users.Api.Shared;
 
 public record Result<T> : Result
 {
-    public T? Value { get; set; }
+    public T? Value { get; init; }
 
     private Result(T value) : base(true, null)
     {

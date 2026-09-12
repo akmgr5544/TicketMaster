@@ -8,7 +8,7 @@ public class UsersDomainContext : DbContext
 {
     public DbSet<User> Users { get; set; }
 
-    public UsersDomainContext(DbContextOptions options) : base(options)
+    public UsersDomainContext(DbContextOptions<UsersDomainContext> options) : base(options)
     {
     }
 

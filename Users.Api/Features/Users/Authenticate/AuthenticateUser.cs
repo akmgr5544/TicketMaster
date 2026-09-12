@@ -35,22 +35,32 @@ public static class AuthenticateUser
             var user = await _dbContext.Users.FirstOrDefaultAsync(x => x.UserName == request.UserName,
                 cancellationToken);
             if (user == null)
-                return Result<Response>.Failure(new Error("Invalid credentials", ErrorType.Unauthorized, ""));
+                return Result<Response>.Failure(
+                    new Error("invalid_credentials", ErrorType.Unauthorized, "Invalid credentials"));
 
-            if (_passwordHasher.VerifyHashedPassword(user, user.PasswordHash, request.Password) ==
-                PasswordVerificationResult.Failed)
+            var verification = _passwordHasher.VerifyHashedPassword(user, user.PasswordHash, request.Password);
+            if (verification == PasswordVerificationResult.Failed)
             {
-                return Result<Response>.Failure(new Error("Invalid credentials", ErrorType.Unauthorized, ""));
+                return Result<Response>.Failure(
+                    new Error("invalid_credentials", ErrorType.Unauthorized, "Invalid credentials"));
+            }
+
+            // The stored hash uses outdated parameters; upgrade it in place. Login still succeeds.
+            if (verification == PasswordVerificationResult.SuccessRehashNeeded)
+            {
+                user.PasswordHash = _passwordHasher.HashPassword(user, request.Password);
             }
 
             var token = TokenService.CreateToken(user, _authOptions);
-            var refreshToken = TokenService.CreateRefreshToken(user, _authOptions);
+            var refreshToken = TokenService.CreateRefreshToken(_authOptions);
 
-            user.RefreshToken = refreshToken;
-            _dbContext.Users.Update(user);
+            // user is tracked, so mutating it is enough — SaveChangesAsync persists only the changed
+            // columns. No Update call (that would rewrite every column).
+            user.RefreshToken = refreshToken.Hash;
+            user.RefreshTokenExpires = refreshToken.Expires;
             await _dbContext.SaveChangesAsync(cancellationToken);
 
-            var result = new Response(token, refreshToken);
+            var result = new Response(token, refreshToken.Raw);
 
             return Result<Response>.Success(result);
         }
