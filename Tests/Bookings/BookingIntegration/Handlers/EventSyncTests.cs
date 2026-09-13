@@ -1,4 +1,5 @@
 using Bookings.Application.Commands;
+using Bookings.Application.Commands.Payments;
 using Bookings.Application.Commands.Tickets;
 using Bookings.Domain.Enums;
 using Bookings.Sql;
@@ -252,6 +253,43 @@ public sealed class EventSyncTests : IntegrationTest
         var stored = await ReadAsync(context => context.Tickets.SingleAsync(t => t.EventId == EventId));
         Assert.Equal(eventDate, stored.EventDate);
         Assert.Equal(5, stored.EventVersion);
+    }
+
+    /// <summary>
+    /// A relocation that drops a seat someone had booked must not leave the booking silently pointing
+    /// at a cancelled ticket. An unpaid booking is called off; the seats it still holds go back through
+    /// the normal release path.
+    /// </summary>
+    [Fact]
+    public async Task Reconcile_cancels_an_unpaid_booking_that_loses_a_seat()
+    {
+        var eventDate = Seed.Soon;
+        var tickets = await Seed.TicketsAsync(EventId, eventDate, eventVersion: 1, "A1", "A2");
+        var booking = await Seed.BookingAsync(TestUsers.Owner, tickets[0].Id);
+
+        await Reconcile(eventDate, version: 2, seats: ["A2"]);
+
+        var stored = await ReadAsync(context => context.Bookings.SingleAsync(b => b.Id == booking.Id));
+        Assert.Equal(BookingStatus.Cancelled, stored.Status);
+    }
+
+    /// <summary>
+    /// A paid booking cannot be cancelled — undoing a payment is a refund — so a lost seat moves it to
+    /// RefundPending rather than leaving it Payed over a cancelled ticket. The refund itself belongs to
+    /// the (unbuilt) payment path.
+    /// </summary>
+    [Fact]
+    public async Task Reconcile_flags_a_paid_booking_for_refund_when_it_loses_a_seat()
+    {
+        var eventDate = Seed.Soon;
+        var tickets = await Seed.TicketsAsync(EventId, eventDate, eventVersion: 1, "A1", "A2");
+        var booking = await Seed.BookingAsync(TestUsers.Owner, tickets[0].Id);
+        await Sender.Send(new ConfirmBookingCommand(booking.Id));
+
+        await Reconcile(eventDate, version: 2, seats: ["A2"]);
+
+        var stored = await ReadAsync(context => context.Bookings.SingleAsync(b => b.Id == booking.Id));
+        Assert.Equal(BookingStatus.RefundPending, stored.Status);
     }
 
     private Task Reconcile(DateTime eventDate, long version, string[] seats) =>

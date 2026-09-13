@@ -56,6 +56,13 @@ internal class BookingRepository : IBookingRepository
             .CountAsync(booking => booking.UserId == userId, cancellationToken);
     }
 
+    public async ValueTask<Booking?> FindByTicketIdAsync(long ticketId, CancellationToken cancellationToken)
+    {
+        return await _context.Bookings.FirstOrDefaultAsync(booking => 
+                booking.BookedTickets.Any(bt => bt.TicketId == ticketId),
+                cancellationToken);
+    }
+
 
     public async ValueTask<Booking?> GetByIdAsync(long bookingId, CancellationToken cancellationToken)
     {

@@ -1,4 +1,5 @@
 using Bookings.Domain.Abstractions;
+using Bookings.Domain.DomainEvents;
 using Bookings.Domain.Enums;
 using Bookings.Domain.Exceptions;
 
@@ -22,9 +23,9 @@ public sealed class Ticket : Entity, IAggregateRoot
     public string Seat { get; init; }
     public DateTime EventDate { get; set; }
     public TicketStatus Status { get; private set; }
-    
+
     public long EventVersion { get; set; }
-    
+
     public static readonly TimeSpan SaleGracePeriod = TimeSpan.FromHours(5);
 
     public static DateTime SaleWindowStart(DateTime utcNow) => utcNow - SaleGracePeriod;
@@ -33,7 +34,7 @@ public sealed class Ticket : Entity, IAggregateRoot
         Status == TicketStatus.None
         && EventId == eventId
         && EventDate > SaleWindowStart(utcNow);
-    
+
     public bool IsStale(long eventVersion) => eventVersion <= EventVersion;
 
     // Each of these guards itself rather than trusting the caller to check IsStale first, so a new
@@ -56,7 +57,7 @@ public sealed class Ticket : Entity, IAggregateRoot
         VenueId = venueId;
         EventVersion = eventVersion;
     }
-    
+
     public void Book()
     {
         if (Status != TicketStatus.None)
@@ -65,7 +66,7 @@ public sealed class Ticket : Entity, IAggregateRoot
 
         Status = TicketStatus.Booked;
     }
-    
+
     public void Release()
     {
         if (Status != TicketStatus.Booked)
@@ -79,7 +80,12 @@ public sealed class Ticket : Entity, IAggregateRoot
         if (IsStale(eventVersion))
             return;
 
+        var wasBooked = Status == TicketStatus.Booked;
+
         Status = TicketStatus.Cancelled;
         EventVersion = eventVersion;
+
+        if (wasBooked)
+            AddDomainEvent(new BookedSeatCancelledDomainEvent(Id));
     }
 }

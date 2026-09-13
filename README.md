@@ -341,13 +341,17 @@ today rather than what it should do — the fix is a decision, not a gap.
 - **Nothing pays for a booking.** `BookingPaidIntegrationEvent` and `BookingPaymentFailedIntegrationEvent`
   are defined and consumed, but nothing publishes them — Bookings has no outbound publishing at all. A
   booking therefore stays `Booked` indefinitely and its seats come back only if the owner cancels it.
-- **A relocation can strand a paid booking.** `ReconcileEventVenueCommandHandler` calls
-  `ticket.Cancel(...)` for every seat the new venue lacks without asking whether that seat is booked,
-  and `Booking.Cancel()` refuses anything that is not `Booked`. The parent booking is left pointing at
-  cancelled tickets. Undoing that is a refund, and refunds and notifications are not built.
+
 ### Built but unproven
 
 The code exists and is believed correct; these are the parts nothing exercises.
+
+- **A relocation no longer silently strands a booking, but the end-to-end path is unrun.** When a
+  relocation cancels a seat that was booked, `Ticket.Cancel` raises `BookedSeatCancelledDomainEvent`
+  and a handler resolves the booking: an unpaid one is cancelled, a paid one moves to `RefundPending`
+  (it cannot be cancelled — that is a refund). The domain rules are covered by `BookingDomain` tests,
+  but the reconcile → event → handler chain has `BookingIntegration` tests that need Docker to run.
+  The refund itself for a `RefundPending` booking is part of the unbuilt payment path.
 
 - **The Events outbox relay has never run.** `WolverineFx.CosmosDb` is wired
   (`UseCosmosDbPersistence`, `AutoApplyTransactions`, `UseDurableOutboxOnAllSendingEndpoints`), and
@@ -404,7 +408,9 @@ Deliberate, and recorded so nobody "fixes" one without knowing what it carries.
 
 - A payment service, plus the endpoint and outbound publish that would let a booking actually be paid
   for end to end
-- Refunds and notifications for a paid booking voided by a relocation or cancellation
+- Processing refunds and notifications for a `RefundPending` booking — a paid booking whose seat a
+  relocation cancelled is already flagged `RefundPending`; issuing the refund and telling the customer
+  is the remaining half, and rides on the payment service above
 - Integration tests against the Cosmos emulator for Events, as Bookings now has against real Postgres
   and Redis — which would also put the `_etag` 412 path under test instead of under a manual check
 - Saga / process-manager work for the full booking flow in Wolverine

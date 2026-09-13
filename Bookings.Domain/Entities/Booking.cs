@@ -16,7 +16,6 @@ public sealed class Booking : Entity, IAggregateRoot
 
     private Booking()
     {
-
         BookedTickets = [];
         BookingHistories = [];
     }
@@ -31,25 +30,11 @@ public sealed class Booking : Entity, IAggregateRoot
         CreatedAt = DateTime.UtcNow;
     }
 
-    /// <summary>
-    /// Private because a booking's tickets, its history entry and its creation event have to be
-    /// established together — a caller that could add a ticket on its own would leave the count in
-    /// the history wrong and the event describing a set that no longer matches.
-    /// </summary>
     private void AddBookedTicket(long bookedTicketId)
     {
         BookedTickets.Add(new BookedTicket(bookedTicketId));
     }
 
-    /// <summary>
-    /// The payment for this booking came through.
-    /// <para>
-    /// Applying the same success twice changes nothing, because payment results are delivered at least
-    /// once. Refusing a cancelled booking is what stops a late success from claiming seats that have
-    /// already gone back on sale — between the two outcomes, whichever lands first is the one that
-    /// sticks.
-    /// </para>
-    /// </summary>
     public void MarkPaid()
     {
         if (Status == BookingStatus.Payed)
@@ -62,14 +47,6 @@ public sealed class Booking : Entity, IAggregateRoot
         BookingHistories.Add(new BookingHistory(Status, BookedTickets.Count));
     }
 
-    /// <summary>
-    /// The payment failed or never came, so the booking is void and its seats go back on sale.
-    /// <para>
-    /// Refuses a booking that has been paid for: undoing that is a refund, which this service does not
-    /// do. Applying the same failure twice announces the release only once, so the tickets are not
-    /// released a second time after somebody else may already have taken them.
-    /// </para>
-    /// </summary>
     public void Cancel()
     {
         if (Status == BookingStatus.Cancelled)
@@ -84,11 +61,25 @@ public sealed class Booking : Entity, IAggregateRoot
             BookedTickets.Select(bookedTicket => bookedTicket.TicketId).ToArray()));
     }
 
-    /// <summary>
-    /// Raises <see cref="BookingCreatedDomainEvent"/> itself rather than leaving the handler to
-    /// assemble one afterwards, so a new caller cannot create a booking that never announces itself
-    /// and leaves its tickets unbooked.
-    /// </summary>
+    public void OnBookedSeatCancelled()
+    {
+        switch (Status)
+        {
+            case BookingStatus.Booked:
+                Cancel();
+                break;
+            case BookingStatus.Payed:
+                FlagForRefund();
+                break;
+        }
+    }
+
+    private void FlagForRefund()
+    {
+        Status = BookingStatus.RefundPending;
+        BookingHistories.Add(new BookingHistory(Status, BookedTickets.Count));
+    }
+
     public static Booking Create(Guid userId, BookingStatus status, long[] ticketIds)
     {
         if (ticketIds.Length == 0)
@@ -102,7 +93,7 @@ public sealed class Booking : Entity, IAggregateRoot
         }
 
         booking.BookingHistories.Add(new BookingHistory(booking.Status, ticketIds.Length));
-        booking.AddDomainEvent(new BookingCreatedDomainEvent([..ticketIds]));
+        booking.AddDomainEvent(new BookingCreatedDomainEvent([.. ticketIds]));
         return booking;
     }
 }

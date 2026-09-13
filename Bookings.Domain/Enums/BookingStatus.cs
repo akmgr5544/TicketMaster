@@ -6,5 +6,6 @@ public enum BookingStatus
     InProgress,
     Cancelled,
     Booked,
-    Payed
+    Payed,
+    RefundPending
 }

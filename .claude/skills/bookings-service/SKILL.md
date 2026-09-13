@@ -135,10 +135,13 @@ handlers that translate each contract into one of them.
    are `internal` per `VisibilityTest`, which is why `Bookings.Application.csproj` carries
    `InternalsVisibleTo` for the test project.
 
-**Known loose end:** a relocation can cancel already-booked tickets, leaving the parent `Booking`
-pointing at cancelled tickets. Refunds, notifications and booking-level cancellation are not built —
-the tickets are cancelled and nothing else happens. Any work on `Booking` cancellation should start
-here.
+**A relocation that cancels a booked seat resolves its booking.** `Ticket.Cancel` raises
+`BookedSeatCancelledDomainEvent` only when the seat was `Booked`; `BookedSeatCancelledDomainEventHandler`
+finds the covering booking (`IBookingRepository.FindByTicketIdAsync`) and calls
+`Booking.OnBookedSeatCancelled()` — an unpaid booking is cancelled, a paid one moves to
+`RefundPending` (it cannot be cancelled: undoing a payment is a refund). It is idempotent, so several
+lost seats on one booking are safe. This closes the silent-strand hole; the actual refund and
+notification for a `RefundPending` booking belong to the unbuilt payment path.
 
 ## The reservation and booking flow
 

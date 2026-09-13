@@ -1,3 +1,4 @@
+using Bookings.Domain.DomainEvents;
 using Bookings.Domain.Entities;
 using Bookings.Domain.Enums;
 using Bookings.Domain.Exceptions;
@@ -321,5 +322,43 @@ public class TicketTests
         var asOf = new DateTime(2030, 1, 1, 20, 0, 0, DateTimeKind.Utc).AddHours(hoursAfterStart);
 
         Assert.Equal(expected, ticket.IsAvailableFor("event-1", asOf));
+    }
+
+    // --- Cancelling a booked seat announces the strand ---
+
+    [Fact]
+    public void Announces_a_lost_seat_when_a_booked_ticket_is_cancelled()
+    {
+        var ticket = ATicket(eventVersion: 1);
+        ticket.Book();
+
+        ticket.Cancel(eventVersion: 2);
+
+        var lost = Assert.Single(ticket.DomainEvents.OfType<BookedSeatCancelledDomainEvent>());
+        Assert.Equal(ticket.Id, lost.TicketId);
+        Assert.Equal(TicketStatus.Cancelled, ticket.Status);
+    }
+
+    [Fact]
+    public void Stays_silent_when_an_unbooked_ticket_is_cancelled()
+    {
+        var ticket = ATicket(eventVersion: 1);
+
+        ticket.Cancel(eventVersion: 2);
+
+        Assert.Empty(ticket.DomainEvents.OfType<BookedSeatCancelledDomainEvent>());
+        Assert.Equal(TicketStatus.Cancelled, ticket.Status);
+    }
+
+    [Fact]
+    public void A_stale_cancel_neither_cancels_nor_announces()
+    {
+        var ticket = ATicket(eventVersion: 3);
+        ticket.Book();
+
+        ticket.Cancel(eventVersion: 2);
+
+        Assert.Empty(ticket.DomainEvents.OfType<BookedSeatCancelledDomainEvent>());
+        Assert.Equal(TicketStatus.Booked, ticket.Status);
     }
 }

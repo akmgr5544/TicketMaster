@@ -15,4 +15,5 @@ public interface IBookingRepository : IUnitOfWork
         CancellationToken cancellationToken);
 
     ValueTask<int> CountForUserAsync(Guid userId, CancellationToken cancellationToken);
+    ValueTask<Booking?> FindByTicketIdAsync(long ticketId, CancellationToken cancellationToken);
 }

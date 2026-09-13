@@ -175,4 +175,42 @@ public class BookingTests
         Assert.Throws<BookingsDomainException>(() => booking.MarkPaid());
         Assert.Equal(BookingStatus.Cancelled, booking.Status);
     }
+
+    // --- A relocation cancels a seat this booking was holding ---
+
+    [Fact]
+    public void An_unpaid_booking_is_cancelled_when_a_booked_seat_is_lost()
+    {
+        var booking = ABooking();
+
+        booking.OnBookedSeatCancelled();
+
+        Assert.Equal(BookingStatus.Cancelled, booking.Status);
+    }
+
+    [Fact]
+    public void A_paid_booking_is_flagged_for_refund_when_a_booked_seat_is_lost()
+    {
+        var booking = ABooking();
+        booking.MarkPaid();
+
+        booking.OnBookedSeatCancelled();
+
+        Assert.Equal(BookingStatus.RefundPending, booking.Status);
+        Assert.Equal(BookingStatus.RefundPending, booking.BookingHistories[^1].BookingStatus);
+    }
+
+    [Fact]
+    public void A_further_lost_seat_on_an_already_resolved_booking_changes_nothing()
+    {
+        var booking = ABooking();
+        booking.MarkPaid();
+        booking.OnBookedSeatCancelled();
+        var historyCount = booking.BookingHistories.Count;
+
+        booking.OnBookedSeatCancelled();
+
+        Assert.Equal(BookingStatus.RefundPending, booking.Status);
+        Assert.Equal(historyCount, booking.BookingHistories.Count);
+    }
 }
