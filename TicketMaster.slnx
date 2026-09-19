@@ -24,6 +24,9 @@
     <Project Path="Tests/Bookings/BookingApi/BookingApi.csproj" />
     <Project Path="Tests/Bookings/BookingIntegration/BookingIntegration.csproj" />
   </Folder>
+  <Folder Name="/Tests/Gateway/">
+    <Project Path="Tests/Gateway/GatewayTests/GatewayTests.csproj" />
+  </Folder>
   <Folder Name="/Tests/Events/">
     <Project Path="Tests/Events/EventsApi/EventsApi.csproj" />
     <Project Path="Tests/Events/EventsApplication/EventsApplication.csproj" />

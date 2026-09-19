@@ -37,3 +37,6 @@ var app = builder.Build();
 
 app.MapReverseProxy();
 await app.RunAsync();
+
+// Top-level statements compile to an internal Program; WebApplicationFactory<Program> needs it public.
+public partial class Program;

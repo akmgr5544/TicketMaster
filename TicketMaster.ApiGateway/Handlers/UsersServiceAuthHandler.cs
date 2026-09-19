@@ -63,7 +63,9 @@ internal sealed class UsersServiceAuthHandler : AuthenticationHandler<Authentica
             new("Role", userInfo.Role)
         ];
 
-        var identity = new ClaimsIdentity(claims);
+        // The authentication type must be set, or ClaimsIdentity.IsAuthenticated stays false and every
+        // GatewayAuthPolicy (RequireAuthenticatedUser) check answers 403 despite a valid token.
+        var identity = new ClaimsIdentity(claims, Scheme.Name);
         var principal = new ClaimsPrincipal(identity);
         var ticket = new AuthenticationTicket(principal, Scheme.Name);
         return AuthenticateResult.Success(ticket);

@@ -196,8 +196,16 @@ what exists.
   authorization beyond "is authenticated" happens downstream. The one role check that exists is
   `POST /bookings-service/api/tickets`: the gateway propagates `X-Identity-Role` and Bookings enforces
   `Admin` there. Coarser gateway-side permission policies are still absent.
-- Nothing verifies the routing. There is no gateway test project, so the anonymous-route precedence
-  below is reasoned from YARP's matching rules, not observed.
+- The gateway now has a test project — `Tests/Gateway/GatewayTests`, an in-process
+  `WebApplicationFactory<Program>` that stubs the `"UsersService"` introspection client and YARP's
+  outbound forwarder (no Docker, no ports). It covers the config invariants (ClusterId / policy /
+  PathPattern resolve, and a prefix is actually stripped), edge auth (401 with no / rejected /
+  unreachable introspection; the ungated users route reachable; the token forwarded as a header to
+  `api/users/auth`; multiple `Authorization` headers rejected), and identity propagation including the
+  spoofing guard on both a gated and the anonymous route. It caught a real bug: the handler built
+  `new ClaimsIdentity(claims)` with **no authentication type**, so `IsAuthenticated` was false and
+  `GatewayAuthPolicy` 403'd every valid token — the gateway was non-functional for all protected
+  routes. Fixed to `new ClaimsIdentity(claims, Scheme.Name)`.
 - No caching of introspection results: every proxied request costs an extra call to Users.Api.
 
 ## Who enforces authentication, per cluster
