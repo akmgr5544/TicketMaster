@@ -80,6 +80,9 @@ public sealed class EventsFixture : IAsyncLifetime
     // and indexes) stay provisioned from InitializeAsync.
     public async Task ResetAsync()
     {
+        // The stub is a singleton and accumulates dispatched events; clear it alongside the store.
+        Services.GetRequiredService<StubIntegrationEventDispatcher>().Clear();
+
         var client = Services.GetRequiredService<CosmosClient>();
         var database = client.GetDatabase(TestDatabase);
 

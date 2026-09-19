@@ -419,8 +419,4 @@ Deliberate, and recorded so nobody "fixes" one without knowing what it carries.
 - Processing refunds and notifications for a `RefundPending` booking — a paid booking whose seat a
   relocation cancelled is already flagged `RefundPending`; issuing the refund and telling the customer
   is the remaining half, and rides on the payment service above
-- ~~Integration tests against the Cosmos emulator for Events~~ — **done.** `EventsIntegration` runs the
-  repositories, the `_etag`/412 conditional-write path and the cross-partition delete guards against the
-  `vnext-latest` emulator (native arm64, Gateway over http). What the emulator can't prove still stands:
-  continuation-token paging (it ignores `MaxItemCount`) and the outbox relay below
 - Saga / process-manager work for the full booking flow in Wolverine

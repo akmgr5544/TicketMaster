@@ -13,6 +13,11 @@ internal sealed class StubIntegrationEventDispatcher : IIntegrationEventDispatch
 
     public IReadOnlyList<object> Dispatched => _dispatched;
 
+    // The stub is a collection-lifetime singleton so events dispatched in a test's act scope stay
+    // readable after that scope disposes. That also means it accumulates across tests, so the fixture
+    // clears it on reset — the Cosmos analogue of flushing state between tests.
+    public void Clear() => _dispatched.Clear();
+
     public Task DispatchAsync(IReadOnlyCollection<object> integrationEvents, CancellationToken cancellationToken)
     {
         _dispatched.AddRange(integrationEvents);
