@@ -257,10 +257,21 @@ and it is where a Wolverine 6 upgrade currently fails.
 The two fixtures own separate containers and run in parallel; the fast one never starts a broker,
 which is what keeps the other 114 tests at about a second.
 
-**Needs a running Docker daemon** — every test starts containers; with the daemon down the whole
-project fails at fixture initialisation. `Bookings.Sql` and `Bookings.Application` carry
-`InternalsVisibleTo("BookingIntegration")` so the tests can construct the internal context,
-repositories and handlers.
+Events has its own container-backed suite, `Tests/Events/EventsIntegration`, running the real
+repositories, pipeline behaviors and handlers against the **Cosmos emulator** in Testcontainers. It
+settles what unit tests and the serialization suite could not reach: the `_etag`/412 conditional-write
+path surfacing as `ConcurrencyConflictException`, the cross-partition delete guards actually refusing a
+delete, and the aggregate documents round-tripping through the real SDK. It pins
+`azure-cosmos-emulator:vnext-latest` — the only line with a native arm64 build — and talks to it in
+Gateway mode over cleartext http, because that emulator rejects the SDK's default Direct mode. A single
+`CosmosOptions.ConnectionMode` config seam (unset, hence Direct, in every real deployment) is the only
+production concession. See the `testing` skill for the fixture, the two-scope 412 trick and the limits.
+
+**Needs a running Docker daemon** — every test in `BookingIntegration` and `EventsIntegration` starts
+containers; with the daemon down the whole project fails at fixture initialisation. `Bookings.Sql` and
+`Bookings.Application` carry `InternalsVisibleTo("BookingIntegration")` so the tests can construct the
+internal context, repositories and handlers; `EventsIntegration` needs no such entry — it reaches
+everything through public interfaces (`ISender`, the repository contracts).
 
 Handlers are `internal` by architecture rule, so each test project that constructs them relies on an
 `InternalsVisibleTo` entry in the production `.csproj`.
@@ -271,6 +282,7 @@ dotnet test Tests/Events/EventsApplication/EventsApplication.csproj
 dotnet test Tests/Events/EventsApi/EventsApi.csproj
 dotnet test Tests/Events/EventsCosmos/EventsCosmos.csproj
 dotnet test Tests/Events/EventsArchitecture/EventsArchitecture.csproj
+dotnet test Tests/Events/EventsIntegration/EventsIntegration.csproj   # Cosmos emulator; needs Docker
 dotnet test Tests/Bookings/BookingDomain/BookingDomain.csproj
 dotnet test Tests/Bookings/BookingIntegration/BookingIntegration.csproj
 dotnet test Tests/Bookings/BookingApi/BookingApi.csproj
@@ -365,16 +377,12 @@ The code exists and is believed correct; these are the parts nothing exercises.
   ungated — it proxies to the service that validates its own tokens — so the system should run end to
   end on the https launch profiles. But routing, the introspection call and the identity headers are all
   reasoned rather than observed. It is the only service with no test of any kind.
-- **The Events 412 path has no automated test.** Reads record the document ETag and updates and deletes
-  send it back as `IfMatchEtag`; a rejected write becomes `ConcurrencyConflictException`, which
-  `ConcurrencyRetryBehavior` retries three times before reporting 409. The retry seam is covered by six
-  tests in `EventsApplication`. The conditional write itself is not — no Events test project talks to
-  Cosmos, so it was confirmed by hand once and nothing re-checks it.
-- **No Events code runs against a live Cosmos instance in the suite.** Provisioning and the repositories
-  are verified by the compiler and by unit-tested serialization, not by execution. The cross-partition
-  delete guards — an `EXISTS` subquery over `c.performers` and a count over `c.venue.id` — have had
-  their shape reviewed and nothing more. The emulator image `compose.yaml` pins has no arm64 build;
-  `azure-cosmos-emulator:vnext-preview` does, but rejects the SDK's default Direct connection mode.
+- **The `ConcurrencyRetryBehavior` retry seam is proven only against fakes.** Reads record the document
+  ETag and updates and deletes send it back as `IfMatchEtag`; a rejected write becomes
+  `ConcurrencyConflictException`, which `ConcurrencyRetryBehavior` retries three times before reporting
+  409. `EventsIntegration` now proves the conditional write that *produces* the conflict against a live
+  emulator; the retry that *consumes* it is still covered by six `EventsApplication` tests using fakes,
+  because forcing exactly-N conflicts against live Cosmos is a race, not a fixture.
 - **The Bookings → Events gRPC seam has never made a call.** Nothing under `Tests/` references
   `EventsLookupService` or `DomainExceptionInterceptor`. Both ends compile against the same generated
   contract and the caller is covered with a stub, but the exception → status → exception round trip is
@@ -411,6 +419,8 @@ Deliberate, and recorded so nobody "fixes" one without knowing what it carries.
 - Processing refunds and notifications for a `RefundPending` booking — a paid booking whose seat a
   relocation cancelled is already flagged `RefundPending`; issuing the refund and telling the customer
   is the remaining half, and rides on the payment service above
-- Integration tests against the Cosmos emulator for Events, as Bookings now has against real Postgres
-  and Redis — which would also put the `_etag` 412 path under test instead of under a manual check
+- ~~Integration tests against the Cosmos emulator for Events~~ — **done.** `EventsIntegration` runs the
+  repositories, the `_etag`/412 conditional-write path and the cross-partition delete guards against the
+  `vnext-latest` emulator (native arm64, Gateway over http). What the emulator can't prove still stands:
+  continuation-token paging (it ignores `MaxItemCount`) and the outbox relay below
 - Saga / process-manager work for the full booking flow in Wolverine

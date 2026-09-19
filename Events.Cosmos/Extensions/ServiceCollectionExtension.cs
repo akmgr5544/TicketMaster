@@ -24,12 +24,23 @@ public static class ServiceCollectionExtension
         {
             var options = provider.GetRequiredService<IOptions<CosmosOptions>>().Value;
 
-            return new CosmosClient(options.ConnectionString, new CosmosClientOptions
+            var clientOptions = new CosmosClientOptions
             {
                 // Mutually exclusive with Serializer/SerializerOptions — setting either alongside
                 // this throws.
                 UseSystemTextJsonSerializerWithOptions = CosmosJson.Options
-            });
+            };
+
+            // Only the emulator sets this (see CosmosOptions.ConnectionMode). LimitToEndpoint travels
+            // with Gateway mode because the emulator advertises internal replica addresses the client
+            // otherwise tries — and fails — to reach.
+            if (options.ConnectionMode is { } connectionMode)
+            {
+                clientOptions.ConnectionMode = connectionMode;
+                clientOptions.LimitToEndpoint = true;
+            }
+
+            return new CosmosClient(options.ConnectionString, clientOptions);
         });
 
         services.AddSingleton<EventsCosmosContext>();
@@ -43,13 +54,19 @@ public static class ServiceCollectionExtension
         return services;
     }
     
-    public static async Task EnsureContainersAsync(this IHost app, CancellationToken cancellationToken = default)
+    public static Task EnsureContainersAsync(this IHost app, CancellationToken cancellationToken = default) =>
+        app.Services.EnsureContainersAsync(cancellationToken);
+
+    // Provider-based core so the integration fixture provisions through the exact same path the host
+    // does, rather than hand-copying it and letting the two drift.
+    public static async Task EnsureContainersAsync(this IServiceProvider services,
+        CancellationToken cancellationToken = default)
     {
-        using var scope = app.Services.CreateScope();
+        using var scope = services.CreateScope();
 
         var client = scope.ServiceProvider.GetRequiredService<CosmosClient>();
         var options = scope.ServiceProvider.GetRequiredService<IOptions<CosmosOptions>>().Value;
-        
+
         var database = await client.CreateDatabaseIfNotExistsAsync(options.Database,
             options.Throughput,
             cancellationToken: cancellationToken);

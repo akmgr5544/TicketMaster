@@ -30,6 +30,7 @@
     <Project Path="Tests/Events/EventsArchitecture/EventsArchitecture.csproj" />
     <Project Path="Tests/Events/EventsCosmos/EventsCosmos.csproj" />
     <Project Path="Tests/Events/EventsDomain/EventsDomain.csproj" />
+    <Project Path="Tests/Events/EventsIntegration/EventsIntegration.csproj" />
   </Folder>
   <Folder Name="/Tests/Users/">
     <Project Path="Tests/Users/UsersApi/UsersApi.csproj" />

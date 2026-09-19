@@ -1,6 +1,6 @@
 ---
 name: testing
-description: Use when writing, moving or restructuring tests in any TicketMaster service — choosing between a unit and an integration test, working with the Testcontainers fixture in BookingIntegration, seeding data, or adding a new test project. Covers xUnit, Respawn, Testcontainers (Postgres + Redis) and the ArchUnit suites.
+description: Use when writing, moving or restructuring tests in any TicketMaster service — choosing between a unit and an integration test, working with the Testcontainers fixtures in BookingIntegration (Postgres + Redis) or EventsIntegration (Cosmos emulator), seeding data, or adding a new test project. Covers xUnit, Respawn, Testcontainers and the ArchUnit suites.
 ---
 
 # Testing
@@ -16,8 +16,12 @@ Everything between those two — a handler's guard clause, a repository method, 
 is an integration test. There is no third tier of fake-backed handler tests, and reintroducing one is
 a regression: see [Why the fakes went away](#why-the-fakes-went-away).
 
-Events and Users are out of scope and still test as they always did — layered projects with fakes and
-no containers. Do not "fix" them to match this document.
+Bookings is the reference for this split. Events now also has a container-backed integration project,
+`EventsIntegration`, against the **Cosmos emulator** — see [Events integration](#events-integration).
+Its fake-backed `EventsApplication` handler tests still stand and are **not** a regression to remove:
+the emulator cannot honour everything (see that section's limits), so the two are complementary, not a
+migration in progress. Users is still layered with fakes and no containers; do not "fix" it to match
+this document.
 
 ## Layout
 
@@ -35,7 +39,13 @@ Tests/Bookings/
   BookingApi/             exception-to-status mapping
   BookingArchitecture/    ArchUnit rules
 
-Tests/Events/   EventsDomain  EventsApplication  EventsApi  EventsCosmos  EventsArchitecture
+Tests/Events/
+  EventsDomain  EventsApplication  EventsApi  EventsCosmos  EventsArchitecture
+  EventsIntegration/      repositories + handlers, on the Cosmos emulator
+    Fixtures/             the fixture, the collection, the base class, the stub dispatcher, seed
+    Repositories/         round-trip and serialization against a live store
+    Concurrency/          the _etag / 412 conditional-write path
+    DeleteGuards/         the cross-partition delete guards, through ISender
 Tests/Users/    UsersApi  UsersArchitecture
 ```
 
@@ -225,6 +235,83 @@ correct, because running it for real would test Events rather than Bookings. `St
 production wiring including the `AddGrpcClient` registration still runs as written and only the last
 hop is replaced. The fixture also has to supply `Services:Events:GrpcAddress`, which is never
 dialled. See the `rpc` skill.
+
+## Events integration
+
+`EventsIntegration` does for Events what `BookingIntegration` does for Bookings: run the real
+repositories, pipeline behaviors and command/query handlers against a **live Cosmos emulator** in
+Testcontainers. It exists for the questions unit tests and the serialization suite could not reach —
+the conditional-write (`_etag` / 412) path, the cross-partition delete guards, and the aggregate
+documents round-tripping through the real SDK and `CosmosJson.Options` together.
+
+### The emulator image is the whole reason this was ever blocked
+
+Pin **`mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator:vnext-latest`**. It is the only line
+with a native **arm64** build (Apple Silicon); the classic `latest` emulator `compose.yaml` pins is
+amd64-only and will not start here. The `vnext` emulator is a different beast from the old one:
+
+- It serves **cleartext `http://` on 8081**, not the old self-signed HTTPS. The connection string uses
+  `http://`.
+- It **rejects the SDK's default Direct mode** — a Direct connection 400s. The client must use
+  **`ConnectionMode.Gateway`**, and `LimitToEndpoint = true` (it advertises internal replica addresses
+  the client otherwise fails to reach).
+
+The wait strategy keys on the log line `fully ready to accept requests`.
+
+### Composition and the one production seam
+
+The fixture composes the production path — real `AddInfrastructureServices` + `AddApplicationServices`
+against in-memory config — exactly as Bookings does, and never calls `ConfigureRabbitMq`. Two
+Events-specific points:
+
+- **The connection mode is a config seam, not a hand-built client.** `CosmosOptions.ConnectionMode` is
+  `null` in every real deployment (SDK default, Direct); the fixture sets `CosmosConfigs:ConnectionMode
+  = Gateway`, and `AddInfrastructureServices` applies it plus `LimitToEndpoint`. This keeps the real
+  client construction — including `UseSystemTextJsonSerializerWithOptions = CosmosJson.Options` —
+  under test rather than copied into the fixture. It mirrors Bookings appending `allowAdmin` to the
+  *test* connection string: touch config, not wiring.
+- **`CosmosOutboxDispatcher` is removed, not shadowed.** It depends on `IWolverineRuntime`, which the
+  no-broker fixture omits. `services.RemoveAll<IIntegrationEventDispatcher>()` then a
+  `StubIntegrationEventDispatcher` — removing rather than registering-after is what lets the provider
+  keep **both** `ValidateScopes` and `ValidateOnBuild` on (a leftover dispatcher registration would
+  fail `ValidateOnBuild` on the missing runtime). Everything above the dispatcher stays real:
+  `OutboxIntegrationEventPublisher` still translates domain events through `IntegrationEventTranslator`.
+  This is the direct analogue of `StubEventsService` — replace the one hop to another process, keep
+  the wiring that leads to it.
+
+Provisioning goes through the **real** `EnsureContainersAsync`, which grew a `this IServiceProvider`
+overload so the fixture and the host share one provisioning path instead of a hand-copy.
+
+### Isolation
+
+Cosmos has no Respawn adapter. The reset analogue in `EventsFixture.ResetAsync`: **delete every
+document in each container** (`SELECT VALUE c.id FROM c`, then a point delete per id). Containers, and
+their database-level throughput and indexes, stay provisioned from `InitializeAsync`. One xUnit
+collection → serial, same reason as Bookings: a single shared database cannot survive cross-collection
+parallelism.
+
+### The two-scope trick for a real 412
+
+Each repository owns its own scoped `ETagCache`, so a genuine conflict needs two scopes. The base
+class exposes the act scope's repositories (`Events`/`Venues`/`Performers`, one instance per scope, so
+its ETag cache persists across calls in a test) and `InScopeAsync` for a fresh scope. A 412 test reads
+in the act scope (caching the ETag), mutates the same document from a fresh scope (advancing the stored
+ETag), then writes from the act scope — the stale `IfMatch` is a real Cosmos 412 that surfaces as
+`ConcurrencyConflictException`. Seeding also uses its own scope for the same reason: it must not prime
+the very cache the test depends on being empty.
+
+### Limits — what the emulator cannot prove, so `EventsApplication` still earns its place
+
+- **`MaxItemCount` is not honoured** the way real Cosmos honours it — a `pageSize` of 2 returns all
+  matching items in one page. Continuation-token paging therefore cannot be faithfully tested here;
+  there is deliberately no paging test, and the manual check against a real account still stands.
+- **The outbox relay is still unproven.** The stub replaces the Wolverine hop, so this suite says
+  nothing about `CosmosOutboxDispatcher`, the `wolverine` container, or redelivery — that needs a
+  broker and a host fixture, and remains a separate open item.
+- The `ConcurrencyRetryBehavior` *retry* seam is still covered by `EventsApplication`'s
+  `ConflictsBeforeSuccess` fakes, because forcing exactly-N conflicts against live Cosmos is a race.
+  This suite proves the conditional write that *produces* the conflict; the fake proves the retry that
+  *consumes* it.
 
 ## Unit tests
 
