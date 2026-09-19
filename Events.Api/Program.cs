@@ -20,7 +20,7 @@ builder.Services.AddControllers();
 
 // Needs an HTTP/2 endpoint. Run the https profile, where ALPN lets these calls share a port with the
 // controllers. The plain http profile is HTTP/1.1 only and cannot serve them.
-builder.Services.AddGrpc(options => options.Interceptors.Add<DomainExceptionInterceptor>());
+builder.Services.AddEventsRpc();
 
 builder.Host.ConfigureRabbitMq(builder.Configuration);
 

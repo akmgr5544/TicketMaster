@@ -168,7 +168,15 @@ Do not restate `testing`; it governs. What it means here:
 - **The one thing worth an integration test is the error round-trip**: a domain exception raised in
   the callee arrives at the caller as the same domain exception, through whatever translation rule 7
   puts at the boundary. It is the only part of the seam that is hand-written on both ends, and the
-  part that silently degrades to "everything is a 500" when it breaks.
+  part that silently degrades to "everything is a 500" when it breaks. This is covered now by
+  **`Tests/Rpc/GrpcSeam`**: the real `EventsLookupService` + `DomainExceptionInterceptor` on one side
+  and the real Bookings `EventsService` on the other, over an in-process `TestServer` channel with a
+  fake repository driving the server's outcomes — no Cosmos, no broker, no Docker. It pins that
+  `NotFoundException` reaches the caller as `null` (not `EventsUnavailableException`), that the two
+  other interceptor arms map to `FailedPrecondition` / `InvalidArgument`, and that the happy path
+  round-trips. Because `events.proto` is generated into both `Events.Api` (server) and
+  `Bookings.Application` (client), the test references one side under an `extern alias` so the
+  duplicated message types do not collide.
 - Adding a project means updating that architecture suite's `BaseTest.cs` to load the new assembly.
 
 ## Not covered, deliberately

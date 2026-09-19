@@ -32,6 +32,9 @@
     <Project Path="Tests/Events/EventsDomain/EventsDomain.csproj" />
     <Project Path="Tests/Events/EventsIntegration/EventsIntegration.csproj" />
   </Folder>
+  <Folder Name="/Tests/Rpc/">
+    <Project Path="Tests/Rpc/GrpcSeam/GrpcSeam.csproj" />
+  </Folder>
   <Folder Name="/Tests/Users/">
     <Project Path="Tests/Users/UsersApi/UsersApi.csproj" />
     <Project Path="Tests/Users/UsersArchitecture/UsersArchitecture.csproj" />

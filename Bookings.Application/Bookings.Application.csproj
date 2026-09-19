@@ -3,6 +3,8 @@
     <ItemGroup>
       <!-- Command handlers are internal by architecture rule; the tests still need to construct them. -->
       <InternalsVisibleTo Include="BookingIntegration" />
+      <!-- The gRPC seam round-trip constructs the internal EventsService client directly. -->
+      <InternalsVisibleTo Include="GrpcSeam" />
     </ItemGroup>
 
     <ItemGroup>
