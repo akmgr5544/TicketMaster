@@ -30,9 +30,9 @@ The two payment contracts are **consumed but not produced anywhere** — no paym
 That is an intentional pending seam, kept in place deliberately (see the `bookings-service` skill).
 
 **Both sides now have a durable outbox** — Bookings on Postgres, Events on Cosmos via
-`WolverineFx.CosmosDb` (see the Events subsection below). Bookings' is enrolled and proven; Events'
-is wired but unproven at runtime and, being a separate container, durable-but-not-atomic. So rule 4
-holds on both sides, with the Events caveat that "same transaction" is approximate there.
+`WolverineFx.CosmosDb` (see the Events subsection below). Both are now proven at runtime; Events',
+being a separate container, is durable-but-not-atomic. So rule 4 holds on both sides, with the Events
+caveat that "same transaction" is approximate there.
 
 **The rules below are written for the pattern, not the library.** Wolverine and RabbitMQ specifics
 live in their own sections, so replacing either changes those sections rather than the rules.
@@ -258,11 +258,14 @@ package. Rule 4 therefore holds only approximately on the Events side. Because d
 at-least-once and Bookings guards on `Ticket.EventVersion` (rule 6), a redelivered or duplicated
 message is harmless.
 
-**Runtime-unverified.** Nothing here can reach Cosmos or a broker, so the `wolverine` container
-auto-provisioning, the relay actually resending, and Wolverine's envelope documents surviving the
-shared custom serializer on the singleton `CosmosClient` are all confirmed by the compiler and unit
-tests only. (`DomainBinding` is scoped to `Events.Domain` and does not touch Wolverine's types, so only
-camelCase / ignore-null on `CosmosJson.Options` could matter.) See the `events-service` skill.
+**Runtime-proven, one case aside.** `EventsIntegration`'s host fixture (collection "Events host")
+boots the real Events host — Wolverine + `UseCosmosDbPersistence` — on a RabbitMQ container and the
+Cosmos emulator, sends a real create-event command, and a second Wolverine consumer host receives the
+relayed `EventCreatedIntegrationEvent`. That round-trip proves the three things nothing used to reach:
+the `wolverine` container auto-provisions, the relay sends a staged envelope, and Wolverine's envelope
+documents survive the shared custom serializer on the singleton `CosmosClient`. Not simulated: a resend
+after the process is killed mid-flight (Bookings' host fixture does not stage that either). The
+durable-but-not-atomic window is a deliberate trade, not a gap. See the `events-service` skill.
 
 ## When Wolverine is replaced
 

@@ -42,3 +42,7 @@ app.MapControllers();
 app.MapGrpcService<EventsLookupService>();
 
 await app.RunAsync();
+
+// Top-level statements generate an internal entry point; WebApplicationFactory<Program> needs a
+// public one. The EventsIntegration host fixture boots this Program unmodified.
+public partial class Program;

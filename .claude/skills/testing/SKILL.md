@@ -41,12 +41,17 @@ Tests/Bookings/
 
 Tests/Events/
   EventsDomain  EventsApplication  EventsApi  EventsCosmos  EventsArchitecture
-  EventsIntegration/      repositories + handlers, on the Cosmos emulator
-    Fixtures/             the fixture, the collection, the base class, the stub dispatcher, seed
+  EventsIntegration/      two collections: fast (Cosmos emulator only) + host (adds RabbitMQ)
+    Fixtures/             the fast EventsFixture, collection, base class, stub dispatcher, seed
     Repositories/         round-trip and serialization against a live store
     Concurrency/          the _etag / 412 conditional-write path
     DeleteGuards/         the cross-partition delete guards, through ISender
+    HostFixtures/         the real Events host (Wolverine + Cosmos outbox) proving the relay
 Tests/Users/    UsersApi  UsersArchitecture
+Tests/Rpc/      GrpcSeam — the one cross-service test: the Bookings↔Events gRPC error round-trip,
+                in-process (TestServer), no containers. See the `rpc` skill.
+Tests/Gateway/  GatewayTests — routing, edge auth and identity headers via WebApplicationFactory with
+                the introspection client and YARP's forwarder stubbed. In-process, no containers.
 ```
 
 There is no aggregating test project. Run them per project.
@@ -305,9 +310,13 @@ the very cache the test depends on being empty.
 - **`MaxItemCount` is not honoured** the way real Cosmos honours it — a `pageSize` of 2 returns all
   matching items in one page. Continuation-token paging therefore cannot be faithfully tested here;
   there is deliberately no paging test, and the manual check against a real account still stands.
-- **The outbox relay is still unproven.** The stub replaces the Wolverine hop, so this suite says
-  nothing about `CosmosOutboxDispatcher`, the `wolverine` container, or redelivery — that needs a
-  broker and a host fixture, and remains a separate open item.
+- **The outbox relay is proven by the host collection, not the fast one.** The fast fixture stubs the
+  Wolverine hop, so *it* says nothing about `CosmosOutboxDispatcher`. The second collection
+  (`HostFixtures/`, "Events host") boots the real host on RabbitMQ + the emulator and drives a real
+  create-event command; a probe consumer host receiving the relayed message proves the `wolverine`
+  container provisions, the relay sends, and envelopes survive the serializer. It mirrors
+  `BookingsHostFixture` — its own containers, its own collection, running in parallel with the fast
+  one. Not simulated: a resend after a mid-flight crash.
 - The `ConcurrencyRetryBehavior` *retry* seam is still covered by `EventsApplication`'s
   `ConflictsBeforeSuccess` fakes, because forcing exactly-N conflicts against live Cosmos is a race.
   This suite proves the conditional write that *produces* the conflict; the fake proves the retry that

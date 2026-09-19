@@ -27,9 +27,11 @@ dotnet test Tests/Events/EventsDomain/EventsDomain.csproj            # Events do
 dotnet test Tests/Events/EventsApplication/EventsApplication.csproj  # handlers, with fake repositories
 dotnet test Tests/Events/EventsApi/EventsApi.csproj                  # exception-to-status mapping
 dotnet test Tests/Events/EventsCosmos/EventsCosmos.csproj            # Cosmos document serialization
-dotnet test Tests/Events/EventsIntegration/EventsIntegration.csproj  # repositories + 412 path + delete guards, Cosmos emulator (needs Docker)
+dotnet test Tests/Events/EventsIntegration/EventsIntegration.csproj  # repositories + 412 + delete guards (Cosmos emulator); outbox relay host fixture (+ RabbitMQ). Needs Docker
 dotnet test Tests/Users/UsersApi/UsersApi.csproj                 # Error-to-status mapping
 dotnet test Tests/Users/UsersArchitecture/UsersArchitecture.csproj
+dotnet test Tests/Rpc/GrpcSeam/GrpcSeam.csproj                       # Bookings↔Events gRPC error round-trip (in-process, no Docker)
+dotnet test Tests/Gateway/GatewayTests/GatewayTests.csproj           # gateway routing/edge-auth/identity headers (in-process, no Docker)
 
 # Single test
 dotnet test Tests/Bookings/BookingArchitecture/BookingArchitecture.csproj --filter "FullyQualifiedName~NamingConventionTest"

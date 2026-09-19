@@ -252,15 +252,15 @@ message that says what happened.
   Bookings' `Ticket.EventVersion` guard makes the resulting at-least-once (possibly lost-once)
   delivery harmless.
 
-**Built but unverified at runtime:**
-- The Cosmos outbox has never actually run. `UseCosmosDbPersistence` + `AutoApplyTransactions` +
-  `UseDurableOutboxOnAllSendingEndpoints` are wired and every publish goes
-  `OutboxIntegrationEventPublisher` → `IIntegrationEventDispatcher` → `CosmosOutboxDispatcher`
-  (`CosmosDbOutbox.PublishAsync`/`SaveChangesAsync`). Unverified because nothing here reaches Cosmos or
-  a broker: the `wolverine` container auto-provisioning, the relay resending a staged envelope, and
-  Wolverine's envelope documents surviving the custom serializer on the singleton `CosmosClient`
-  (`DomainBinding` is scoped to `Events.Domain` and does not touch Wolverine's types, so only camelCase
-  / ignore-null on `CosmosJson.Options` could bite).
+**Proven at runtime (`EventsIntegration`, on the Cosmos emulator):**
+- The Cosmos outbox runs end to end. `EventsIntegration`'s host fixture (collection "Events host")
+  boots the real Events host — Wolverine + `UseCosmosDbPersistence` — on a RabbitMQ container and the
+  emulator, sends a real create-event command, and a second Wolverine consumer host receives the
+  relayed `EventCreatedIntegrationEvent`. That round-trip proves the `wolverine` container
+  auto-provisions, the relay sends a staged envelope, and Wolverine's envelope documents survive the
+  custom serializer on the singleton `CosmosClient`. `UseCosmosDbPersistence` reuses the DI-registered
+  `CosmosClient`, so the emulator's Gateway-mode seam (`CosmosOptions.ConnectionMode`) carries it. Not
+  simulated: a resend after the process is killed mid-flight.
 
 **Missing:**
 - All three aggregates now have full CRUD. Events use per-facet sub-resources
@@ -277,7 +277,9 @@ message that says what happened.
   read-modify-write three times, then reports 409. This is why a handler must keep the shape
   load → mutate → write → publish: a retry re-runs it from the top, so the conflicting write has to be
   its first irreversible side effect. `Event.Version` is unchanged and still only orders messages for
-  consumers. The 412 path itself has no automated test — see the README's "Built but unverified".
+  consumers. The 412 path is now covered by `EventsIntegration` (`Concurrency/ConditionalWriteTests`)
+  against the live emulator: a since-changed document makes the `IfMatchEtag` write surface as
+  `ConcurrencyConflictException` for both update and delete.
 - `CreateEventCommandHandler` now throws `NotFoundException` (→ 404) if **any** requested performer id
   matches nothing, mirroring `ChangeEventLineupCommandHandler` — otherwise the event would be created
   with a subset of the requested lineup and `EventCreated` would announce the wrong one. A **missing
@@ -288,10 +290,15 @@ message that says what happened.
   `CountUpcomingEventsAtVenueAsync` / `CountUpcomingEventsWithPerformerAsync` run before the delete,
   and an event can be created in between; with `/id` partition keys no transaction can close that
   window. They prevent the accident, not the race.
-- The performer delete guard's `EXISTS` subquery over `c.performers` has not been run against
-  Cosmos or the emulator — only its shape is reviewed.
+- The venue and performer delete guards (`CountUpcomingEventsAtVenueAsync` and the `EXISTS` subquery
+  over `c.performers` in `CountUpcomingEventsWithPerformerAsync`) are now run against the emulator by
+  `EventsIntegration` (`DeleteGuards/DeleteGuardTests`) — an upcoming event blocks the delete, none
+  lets it through. The best-effort race above is unchanged; only the query's correctness is now proven.
 - Emulator geospatial support is unverified; `ST_DISTANCE` has not been exercised against it.
-- Nothing in the Cosmos layer has been exercised against a running Cosmos instance.
+- The Cosmos layer now runs against the live emulator in `EventsIntegration` (repositories, the 412
+  path, the delete guards and the outbox relay). Continuation-token paging is the one repository
+  behaviour still unproven there — the `vnext` emulator ignores `MaxItemCount`, so it cannot be
+  faithfully tested against the emulator.
 
 ## Adding a feature
 

@@ -1,4 +1,3 @@
-using DotNet.Testcontainers.Builders;
 using DotNet.Testcontainers.Containers;
 using Events.Application.Extensions;
 using Events.Application.IntegrationEvents;
@@ -15,21 +14,9 @@ namespace EventsIntegration.Fixtures;
 
 public sealed class EventsFixture : IAsyncLifetime
 {
-    // Microsoft's well-known emulator account key — not a secret, the same one appsettings.Development
-    // and compose.yaml already carry.
-    private const string EmulatorKey =
-        "C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw==";
-
     private const string TestDatabase = "events_test";
 
-    // vnext-latest is the only line with a native arm64 build (Apple Silicon); the classic `latest`
-    // emulator is amd64-only. It serves cleartext http on 8081 and rejects the SDK's default Direct
-    // mode — hence the http endpoint and Gateway mode below.
-    private readonly IContainer _cosmos =
-        new ContainerBuilder("mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator:vnext-latest")
-        .WithPortBinding(8081, true)
-        .WithWaitStrategy(Wait.ForUnixContainer().UntilMessageIsLogged("fully ready to accept requests"))
-        .Build();
+    private readonly IContainer _cosmos = CosmosEmulator.NewContainer();
 
     public ServiceProvider Services { get; private set; } = null!;
 
@@ -37,12 +24,10 @@ public sealed class EventsFixture : IAsyncLifetime
     {
         await _cosmos.StartAsync();
 
-        var endpoint = $"http://localhost:{_cosmos.GetMappedPublicPort(8081)}/";
-
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["CosmosConfigs:ConnectionString"] = $"AccountEndpoint={endpoint};AccountKey={EmulatorKey}",
+                ["CosmosConfigs:ConnectionString"] = CosmosEmulator.ConnectionString(_cosmos),
                 ["CosmosConfigs:Database"] = TestDatabase,
                 // The one test-only knob: production leaves this unset (Direct). See CosmosOptions.
                 ["CosmosConfigs:ConnectionMode"] = nameof(ConnectionMode.Gateway)

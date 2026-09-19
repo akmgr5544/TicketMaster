@@ -14,6 +14,9 @@
         <PackageReference Include="xunit"/>
         <PackageReference Include="xunit.runner.visualstudio"/>
         <PackageReference Include="Testcontainers"/>
+        <PackageReference Include="Testcontainers.RabbitMq"/>
+        <!-- The host fixture boots the real Program.cs through WebApplicationFactory<Program>. -->
+        <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing"/>
     </ItemGroup>
 
     <ItemGroup>
@@ -24,6 +27,8 @@
         <!-- The production composition path: AddInfrastructureServices (Cosmos) + AddApplicationServices. -->
         <ProjectReference Include="..\..\..\Events.Application\Events.Application.csproj" />
         <ProjectReference Include="..\..\..\Events.Cosmos\Events.Cosmos.csproj" />
+        <!-- The outbox host fixture boots the real Events host (Wolverine + Cosmos persistence). -->
+        <ProjectReference Include="..\..\..\Events.Api\Events.Api.csproj" />
     </ItemGroup>
 
 </Project>

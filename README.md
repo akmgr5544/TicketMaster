@@ -265,7 +265,11 @@ delete, and the aggregate documents round-tripping through the real SDK. It pins
 `azure-cosmos-emulator:vnext-latest` — the only line with a native arm64 build — and talks to it in
 Gateway mode over cleartext http, because that emulator rejects the SDK's default Direct mode. A single
 `CosmosOptions.ConnectionMode` config seam (unset, hence Direct, in every real deployment) is the only
-production concession. See the `testing` skill for the fixture, the two-scope 412 trick and the limits.
+production concession. A second collection in the same project boots the **real Events host** — Wolverine
+and the Cosmos outbox included — on the emulator plus a **RabbitMQ** container, and proves the outbox
+relay end to end: a create-event command's `EventCreatedIntegrationEvent` reaches a second Wolverine
+consumer host. It mirrors Bookings' host fixture. See the `testing` skill for the fixtures, the
+two-scope 412 trick and the limits.
 
 **Needs a running Docker daemon** — every test in `BookingIntegration` and `EventsIntegration` starts
 containers; with the daemon down the whole project fails at fixture initialisation. `Bookings.Sql` and
@@ -345,48 +349,15 @@ Central package management is enabled: add package versions to `Directory.Packag
 
 ## 🗺️ Known gaps
 
-Split three ways: not built, built but unproven, and deliberate. Every entry names what the code does
-today rather than what it should do — the fix is a decision, not a gap.
+Split two ways: not built, and deliberate. Every entry names what the code does today rather than what
+it should do — the fix is a decision, not a gap. (The "built but unproven" middle category is gone —
+everything that was in it now has a test.)
 
 ### Not built
 
 - **Nothing pays for a booking.** `BookingPaidIntegrationEvent` and `BookingPaymentFailedIntegrationEvent`
   are defined and consumed, but nothing publishes them — Bookings has no outbound publishing at all. A
   booking therefore stays `Booked` indefinitely and its seats come back only if the owner cancels it.
-
-### Built but unproven
-
-The code exists and is believed correct; these are the parts nothing exercises.
-
-- **A relocation no longer silently strands a booking, but the end-to-end path is unrun.** When a
-  relocation cancels a seat that was booked, `Ticket.Cancel` raises `BookedSeatCancelledDomainEvent`
-  and a handler resolves the booking: an unpaid one is cancelled, a paid one moves to `RefundPending`
-  (it cannot be cancelled — that is a refund). The domain rules are covered by `BookingDomain` tests,
-  but the reconcile → event → handler chain has `BookingIntegration` tests that need Docker to run.
-  The refund itself for a `RefundPending` booking is part of the unbuilt payment path.
-
-- **The Events outbox relay has never run.** `WolverineFx.CosmosDb` is wired
-  (`UseCosmosDbPersistence`, `AutoApplyTransactions`, `UseDurableOutboxOnAllSendingEndpoints`), and
-  every handler stages through `OutboxIntegrationEventPublisher` → `CosmosOutboxDispatcher`. But three
-  things are unverified because nothing here can talk to Cosmos or a broker: the `wolverine` container
-  auto-provisioning, the relay actually resending a staged envelope, and Wolverine's envelope documents
-  surviving the custom System.Text.Json serializer on the shared singleton `CosmosClient` (`DomainBinding`
-  is scoped to `Events.Domain` and does not touch Wolverine's types, so only camelCase / ignore-null
-  could bite). Confirmed by the compiler and unit tests, not by execution.
-- **Nothing tests the gateway.** Cluster addresses are filled in and the users route is deliberately
-  ungated — it proxies to the service that validates its own tokens — so the system should run end to
-  end on the https launch profiles. But routing, the introspection call and the identity headers are all
-  reasoned rather than observed. It is the only service with no test of any kind.
-- **The `ConcurrencyRetryBehavior` retry seam is proven only against fakes.** Reads record the document
-  ETag and updates and deletes send it back as `IfMatchEtag`; a rejected write becomes
-  `ConcurrencyConflictException`, which `ConcurrencyRetryBehavior` retries three times before reporting
-  409. `EventsIntegration` now proves the conditional write that *produces* the conflict against a live
-  emulator; the retry that *consumes* it is still covered by six `EventsApplication` tests using fakes,
-  because forcing exactly-N conflicts against live Cosmos is a race, not a fixture.
-- **The Bookings → Events gRPC seam has never made a call.** Nothing under `Tests/` references
-  `EventsLookupService` or `DomainExceptionInterceptor`. Both ends compile against the same generated
-  contract and the caller is covered with a stub, but the exception → status → exception round trip is
-  hand-written on both ends and degrades quietly to "everything is Internal".
 
 ### Accepted limitations
 
