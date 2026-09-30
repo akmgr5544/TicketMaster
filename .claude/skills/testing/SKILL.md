@@ -47,6 +47,9 @@ Tests/Events/
     Concurrency/          the _etag / 412 conditional-write path
     DeleteGuards/         the cross-partition delete guards, through ISender
     HostFixtures/         the real Events host (Wolverine + Cosmos outbox) proving the relay
+Tests/Payments/ PaymentArchitecture  PaymentDomain  PaymentAdapters
+  PaymentIntegration/     Postgres fixture (schema via MigrateAsync) + Mechanics/ real host on RabbitMQ;
+                           Features/<Aggregate>/ per slice — see the `payments-service` skill
 Tests/Users/    UsersApi  UsersArchitecture
 Tests/Rpc/      GrpcSeam — the one cross-service test: the Bookings↔Events gRPC error round-trip,
                 in-process (TestServer), no containers. See the `rpc` skill.

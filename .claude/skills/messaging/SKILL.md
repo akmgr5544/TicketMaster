@@ -26,8 +26,10 @@ Bookings consumes **six** contracts in `Bookings.Application/IntegrationEventHan
 | `BookingPaidIntegrationEvent` | `Payments/Confirm` |
 | `BookingPaymentFailedIntegrationEvent` | `Payments/ReleaseUnpaid` |
 
-The two payment contracts are **consumed but not produced anywhere** — no payment service exists yet.
-That is an intentional pending seam, kept in place deliberately (see the `bookings-service` skill).
+The two payment outcomes are produced by **PaymentSystem**, which in turn consumes `PaymentRequested`
+(published by Bookings' `MakeBooking`) and `BookingCancelled` (published on every booking cancellation).
+Both services publish through an `IIntegrationEventPublisher` that stages into Wolverine's
+`DbContextOutbox` on the open transaction and flushes after commit — see the `payments-service` skill.
 
 **Both sides now have a durable outbox** — Bookings on Postgres, Events on Cosmos via
 `WolverineFx.CosmosDb` (see the Events subsection below). Both are now proven at runtime; Events',

@@ -74,8 +74,8 @@ public static class ServiceCollectionExtension
             // crash mid-handler redelivers instead of losing, and a redelivery is deduplicated.
             options.Policies.UseDurableInboxOnAllListeners();
 
-            // Bookings publishes nothing today. Enrolled anyway so the first thing that does is
-            // durable by default rather than by remembering.
+            // Covers PaymentRequested and BookingCancelled, which conventional routing sends to fanout
+            // exchanges named for the contract — the same names PaymentSystem's listeners bind to.
             options.Policies.UseDurableOutboxOnAllSendingEndpoints();
         });
     }

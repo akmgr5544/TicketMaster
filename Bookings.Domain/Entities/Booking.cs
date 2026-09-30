@@ -57,7 +57,7 @@ public sealed class Booking : Entity, IAggregateRoot
 
         Status = BookingStatus.Cancelled;
         BookingHistories.Add(new BookingHistory(Status, BookedTickets.Count));
-        AddDomainEvent(new BookingCancelledDomainEvent(
+        AddDomainEvent(new BookingCancelledDomainEvent(Id,
             BookedTickets.Select(bookedTicket => bookedTicket.TicketId).ToArray()));
     }
 

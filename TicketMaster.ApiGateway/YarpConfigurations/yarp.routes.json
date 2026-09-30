@@ -6,7 +6,11 @@
         "Match": {
           "Path": "/users-service/{**catch-all}"
         },
-        "Transforms": [{"PathPattern": "{**catch-all}"}]
+        "Transforms": [
+          {
+            "PathPattern": "{**catch-all}"
+          }
+        ]
       },
       "bookings-route": {
         "ClusterId": "bookings-cluster",
@@ -14,7 +18,11 @@
         "Match": {
           "Path": "/bookings-service/{**catch-all}"
         },
-        "Transforms": [{"PathPattern": "{**catch-all}"}]
+        "Transforms": [
+          {
+            "PathPattern": "{**catch-all}"
+          }
+        ]
       },
       "events-route": {
         "ClusterId": "events-cluster",
@@ -22,7 +30,35 @@
         "Match": {
           "Path": "/events-service/{**catch-all}"
         },
-        "Transforms": [{"PathPattern": "{**catch-all}"}]
+        "Transforms": [
+          {
+            "PathPattern": "{**catch-all}"
+          }
+        ]
+      },
+      "payments-webhooks-route": {
+        "ClusterId": "payments-cluster",
+        "Order": -1,
+        "Match": {
+          "Path": "/payments-service/api/payments/webhooks/{**catch-all}"
+        },
+        "Transforms": [
+          {
+            "PathPattern": "api/payments/webhooks/{**catch-all}"
+          }
+        ]
+      },
+      "payments-route": {
+        "ClusterId": "payments-cluster",
+        "AuthorizationPolicy": "GatewayAuthPolicy",
+        "Match": {
+          "Path": "/payments-service/{**catch-all}"
+        },
+        "Transforms": [
+          {
+            "PathPattern": "{**catch-all}"
+          }
+        ]
       }
     }
   }

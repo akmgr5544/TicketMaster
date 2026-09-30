@@ -1,4 +1,4 @@
-# Brings the whole system up: four services, their backing stores, and the broker.
+# Brings the whole system up: five services, their backing stores, and the broker.
 #
 # In-container everything talks plaintext HTTP on :8080 (the aspnet base image's default), reached by
 # service name rather than localhost. Connection strings and YARP destinations are overridden here
@@ -23,7 +23,7 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      # Both Users and Bookings wait on this; each service's EF migration creates its own database on
+      # Users, Bookings and Payments wait on this; each service's EF migration creates its own database on
       # first boot, so one server with the default 'postgres' database is enough.
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
@@ -132,6 +132,26 @@ services:
       events-api:
         condition: service_started
 
+  payments-api:
+    image: payments-api
+    build:
+      context: .
+      dockerfile: PaymentSystem/Dockerfile
+    environment:
+      ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=payments_db;Username=postgres;Password=${POSTGRES_PASSWORD}"
+      ConnectionStrings__RabbitMQ: "amqp://guest:guest@rabbitmq:5672"
+      # The provider options are validated at startup, so the service fails fast without these (see .env.example).
+      PaymentProviders__Default: "Stripe"
+      PaymentProviders__Stripe__SecretKey: "${PAYMENTS_STRIPE_SECRET_KEY}"
+      PaymentProviders__Stripe__WebhookSecret: "${PAYMENTS_STRIPE_WEBHOOK_SECRET}"
+    ports:
+      - "5290:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
   gateway:
     image: gateway
     build:
@@ -144,6 +164,7 @@ services:
       ReverseProxy__Clusters__users-cluster__Destinations__destination1__Address: "http://users-api:8080"
       ReverseProxy__Clusters__bookings-cluster__Destinations__destination1__Address: "http://bookings-api:8080"
       ReverseProxy__Clusters__events-cluster__Destinations__destination1__Address: "http://events-api:8080"
+      ReverseProxy__Clusters__payments-cluster__Destinations__destination1__Address: "http://payments-api:8080"
     ports:
       - "8080:8080"
     depends_on:
@@ -152,6 +173,8 @@ services:
       bookings-api:
         condition: service_started
       events-api:
+        condition: service_started
+      payments-api:
         condition: service_started
 
 volumes:
