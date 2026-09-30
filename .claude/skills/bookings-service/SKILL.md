@@ -301,9 +301,20 @@ refused booking answered 500.
 
 ## Settling a booking
 
-The payment service is not built. What exists here is the seam it publishes into: two contracts in
-`TicketMaster.Common`, two `Consume` handlers, and the `Bookings.Application/Payments` slice behind
-them.
+PaymentSystem takes the money. Bookings asks for it and hears back through contracts in
+`TicketMaster.Common`: it **publishes** `PaymentRequested` from `MakeBookingCommandHandler` (after the
+save, since the id is database-generated) and `BookingCancelled` from `BookingCancelledDomainEventHandler`
+(so every cancel path — owner, failed payment, relocation — announces it), and **consumes** the two
+outcomes below through `Consume` handlers and `Commands/Payments`.
+
+Both publishes go through `IIntegrationEventPublisher` (`Bookings.Domain/Abstractions`, for the
+`IAfterCommitQueue` reason). `Bookings.Sql`'s `OutboxIntegrationEventPublisher` stages each message with
+Wolverine's `DbContextOutbox` on the transaction already open, and `Interceptors/OutboxFlushInterceptor`
+sends it once that transaction commits and drops it on rollback — `IDbContextOutbox.SaveChangesAndFlushMessagesAsync`
+is not used because it commits the transaction itself, i.e. `TransactionBehavior`'s, early. Registered by
+`AddIntegrationEventOutbox()` in `Program.cs` only; `BookingsFixture` records instead. Amount, currency
+and seller come from `Services/PaymentPricing`, a placeholder (`50` USD a ticket, seller hashed from the
+event id) until real pricing exists.
 
 | Contract | Effect |
 |---|---|
@@ -358,8 +369,8 @@ non-durable. Fixed: `ServiceCollectionExtension` now calls all three —
   The Events copy has the same latent trap and passes only because Events has no generic handlers.
 - The architecture suite is green. There is no longer a set of expected failures to look past, so a
   red test means something actually broke.
-- Nothing publishes the payment contracts. Until a payment service does, a booking stays `Booked`
-  forever and its seats are never released (see **Settling a booking**).
+- Pricing is a placeholder (`PaymentPricing`): a flat per-ticket amount and a seller derived from the
+  event id, because Bookings owns neither. Real pricing upstream is out of scope.
 - A command that queues after-commit work cannot be sent from a Wolverine message handler: the
   behavior does not own that transaction, so it logs a warning and drops the work — it does **not**
   throw (`TransactionBehavior.DeferToTheOwnerAsync`), which is what rule 17 above says. Only
@@ -426,7 +437,7 @@ summary repeating it.
 | "Transaction already in progress" on the EventSync path | Behavior opening a second transaction (rule 17) |
 | A new command writes without a transaction | Missing `ITransactionalRequest` (rule 18) |
 | Redis state survives a failed booking | Redis work not queued on `IAfterCommitQueue` (rule 15) |
-| Seats never come back after an unpaid booking | Nothing publishes `BookingPaymentFailedIntegrationEvent` (rule 26) |
+| Seats never come back after an unpaid booking | PaymentSystem never failed the checkout — it expires after 15 minutes and publishes `BookingPaymentFailedIntegrationEvent` (see `payments-service`) |
 | A cancelled seat goes back on sale | `Release()` called on something other than a booked ticket (rule 25) |
 | A late payment result overwrites a settled booking | Guards in `MarkPaid`/`Cancel` bypassed (rule 23) |
 | Aggregate invariant violated with no code path to blame | Mutable collection or public setter (rules 2, 3) |

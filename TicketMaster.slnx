@@ -11,6 +11,10 @@
     <Project Path="Events.Domain/Events.Domain.csproj" />
     <Project Path="Events.Cosmos/Events.Cosmos.csproj" />
   </Folder>
+  <Folder Name="/PaymentService/">
+    <Project Path="PaymentProvider/PaymentProvider.csproj" />
+    <Project Path="PaymentSystem/PaymentSystem.csproj" />
+  </Folder>
   <Folder Name="/Solution Items/">
     <File Path=".editorconfig" />
     <File Path="compose.yaml" />
@@ -34,6 +38,12 @@
     <Project Path="Tests/Events/EventsCosmos/EventsCosmos.csproj" />
     <Project Path="Tests/Events/EventsDomain/EventsDomain.csproj" />
     <Project Path="Tests/Events/EventsIntegration/EventsIntegration.csproj" />
+  </Folder>
+  <Folder Name="/Tests/Payments/">
+    <Project Path="Tests/Payments/PaymentAdapters/PaymentAdapters.csproj" />
+    <Project Path="Tests/Payments/PaymentArchitecture/PaymentArchitecture.csproj" />
+    <Project Path="Tests/Payments/PaymentDomain/PaymentDomain.csproj" />
+    <Project Path="Tests/Payments/PaymentIntegration/PaymentIntegration.csproj" />
   </Folder>
   <Folder Name="/Tests/Rpc/">
     <Project Path="Tests/Rpc/GrpcSeam/GrpcSeam.csproj" />

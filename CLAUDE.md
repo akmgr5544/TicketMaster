@@ -15,6 +15,7 @@ dotnet build TicketMaster.slnx
 dotnet run --project Bookings.Api/Bookings.Api.csproj
 dotnet run --project Events.Api/Events.Api.csproj
 dotnet run --project Users.Api/Users.Api.csproj
+dotnet run --project PaymentSystem/PaymentSystem.csproj
 dotnet run --project TicketMaster.ApiGateway/TicketMaster.ApiGateway.csproj
 
 # Tests — no aggregating test project, run per-project
@@ -30,6 +31,10 @@ dotnet test Tests/Events/EventsCosmos/EventsCosmos.csproj            # Cosmos do
 dotnet test Tests/Events/EventsIntegration/EventsIntegration.csproj  # repositories + 412 + delete guards (Cosmos emulator); outbox relay host fixture (+ RabbitMQ). Needs Docker
 dotnet test Tests/Users/UsersApi/UsersApi.csproj                 # Error-to-status mapping
 dotnet test Tests/Users/UsersArchitecture/UsersArchitecture.csproj
+dotnet test Tests/Payments/PaymentArchitecture/PaymentArchitecture.csproj  # slice isolation, domain purity, visibility, layout
+dotnet test Tests/Payments/PaymentDomain/PaymentDomain.csproj          # checkout/order/wallet/ledger rules
+dotnet test Tests/Payments/PaymentIntegration/PaymentIntegration.csproj  # slices, interceptors, concurrency, outbox (Postgres); Mechanics/ boots the host (+ RabbitMQ). Needs Docker
+dotnet test Tests/Payments/PaymentAdapters/PaymentAdapters.csproj    # Stripe/Braintree adapters in PaymentProvider
 dotnet test Tests/Rpc/GrpcSeam/GrpcSeam.csproj                       # Bookings↔Events gRPC error round-trip (in-process, no Docker)
 dotnet test Tests/Gateway/GatewayTests/GatewayTests.csproj           # gateway routing/edge-auth/identity headers (in-process, no Docker)
 
@@ -40,11 +45,13 @@ dotnet test Tests/Bookings/BookingArchitecture/BookingArchitecture.csproj --filt
 # the DbContext lives in the *.Sql project so `-s` and `-p` differ.
 dotnet ef migrations add <Name> -p Bookings.Sql -s Bookings.Api
 dotnet ef database update            -p Bookings.Sql -s Bookings.Api
+# PaymentSystem keeps its DbContext in the same project
+dotnet ef migrations add <Name> -p PaymentSystem -s PaymentSystem -o Data/Migrations
 ```
 
-Migrations are also applied automatically at startup via `app.ApplyMigrationsAsync()` in `Bookings.Api/Program.cs` and `Users.Api/Program.cs`.
+Migrations are also applied automatically at startup via `app.ApplyMigrationsAsync()` in `Bookings.Api/Program.cs`, `Users.Api/Program.cs` and `PaymentSystem/Program.cs`.
 
-`compose.yaml` exists but references paths that don't match the current project layout (e.g. `BookingApi/Dockerfile`) — it needs updating before it will build. Individual services do have working Dockerfiles.
+`compose.yaml` brings up all five services (`users-api`, `events-api`, `bookings-api`, `payments-api`, `gateway`) plus Postgres, Redis, RabbitMQ and the Cosmos emulator; the gateway on `:8080` is the only entry point. Secrets come from `.env` (copy `.env.example`): `USERS_AUTH_TOKEN`, `POSTGRES_PASSWORD`, and `PAYMENTS_STRIPE_SECRET_KEY` / `PAYMENTS_STRIPE_WEBHOOK_SECRET`, without which PaymentSystem fails fast. Every service has its own Dockerfile.
 
 ## Central Configuration
 
@@ -54,24 +61,23 @@ Migrations are also applied automatically at startup via `app.ApplyMigrationsAsy
 
 ## Architecture
 
-Four .NET services plus a shared kernel, wired together at runtime by a YARP API gateway and RabbitMQ:
+Five .NET services plus a shared kernel, wired together at runtime by a YARP API gateway and RabbitMQ:
 
 ```
                        ┌────────────────────────────┐
   client ── HTTP ──►   │  TicketMaster.ApiGateway   │  (YARP reverse proxy)
                        └─────────────┬──────────────┘
-                                     │  /users-service/**
-                                     │  /bookings-service/**
-                                     │  /events-service/**
-              ┌──────────────────────┼──────────────────────┐
-              ▼                      ▼                      ▼
-        Users.Api            Bookings.Api             Events.Api
-        (Postgres+EF,       (Postgres+EF,             (Cosmos DB,
-         JWT issuer)         Wolverine outbox,
-                             Redis cache/locks)
-                                     │
-                                     ▼
-                              RabbitMQ (Wolverine)
+                                     │  /users-service/**   /bookings-service/**
+                                     │  /events-service/**  /payments-service/**
+              ┌──────────────────────┼──────────────────────┬───────────────────┐
+              ▼                      ▼                      ▼                   ▼
+        Users.Api            Bookings.Api             Events.Api          PaymentSystem
+        (Postgres+EF,       (Postgres+EF,             (Cosmos DB,        (Postgres+EF,
+         JWT issuer)         Wolverine outbox,         Cosmos outbox)     Wolverine outbox,
+                             Redis cache/locks)                           PSPs via PaymentProvider)
+                                     │                                          │
+                                     └──────────► RabbitMQ (Wolverine) ◄────────┘
+                           PaymentRequested, BookingCancelled ──►   ◄── BookingPaid, BookingPaymentFailed
 ```
 
 ### Per-service layering
@@ -87,25 +93,38 @@ Each project has a marker interface (`IApiAssemblyMarker`, `IApplicationAssembly
 
 **Users.Api** is a single-project **vertical slice** design (feature folders under `Features/Users/{Authenticate,RefreshToken,Register}`), not the layered layout above. It is the JWT issuer for the system.
 
+**PaymentSystem** is vertical slices on a rich DDD domain, in one project: `Domain/` (the `PaymentEvent`
+checkout is the aggregate root owning one `PaymentOrder` per seller; `Wallet`; double-entry `LedgerEntry`),
+`Data/`, `Shared/{Endpoints,Pipelines,Results,Messaging,Psp}`, and `Features/<Aggregate>/<Feature>.cs` — one
+file per feature, **no per-feature folder** (`Checkouts/`, `PaymentOrders/`, `Webhooks/`, `Wallets/`).
+Handlers return `Result<T>` like Users. It is **pay-in only**. `PaymentProvider` is the PSP anti-corruption
+library (Stripe, Braintree). See the `payments-service` skill for the rules, the flow and the known gaps.
+
 ### Cross-cutting patterns
 
 - **CQRS via MediatR**: commands live in `*.Application/Commands`, handlers in `CommandHandlers`.
 - **Transactional pipeline**: `Bookings.Sql/Pipelines/TransactionBehavior.cs` is registered as an open-generic `IPipelineBehavior<,>` so every MediatR request runs inside a DB transaction (commit on success, rollback + rethrow on exception).
 - **Domain event dispatch**: `Bookings.Sql/Interceptors/DomainEventPublisherInterceptor` is a `SaveChangesInterceptor` — domain events are published when the DbContext saves. Wired via `options.AddInterceptors(...)` in `AddInfrastructureServices`.
+- **Payment flow**: Bookings' `MakeBooking` publishes `PaymentRequested` (placeholder price: $50/ticket,
+  USD — `Bookings.Application/Services/PaymentPricing`) and every booking cancellation publishes
+  `BookingCancelled`; PaymentSystem answers with `BookingPaid` or `BookingPaymentFailed` (PSP cancel,
+  15-minute checkout expiry, or the booking being cancelled). Both services publish through an
+  `IIntegrationEventPublisher` that stages into Wolverine's `DbContextOutbox` on the open transaction and
+  sends after commit — never `SaveChangesAndFlushMessagesAsync`, which commits the transaction itself.
 - **Outbox / messaging**: `Bookings.Application.Extensions.ConfigureRabbitMq` sets up **WolverineFx** with RabbitMQ transport, Postgres-backed outbox (`PersistMessagesWithPostgresql`), EF Core transactions, and all three durability policies — `UseDurableLocalQueues`, `UseDurableInboxOnAllListeners` and `UseDurableOutboxOnAllSendingEndpoints`. Uses conventional routing and auto-provisioning.
 - **Caching / distributed locks**: Redis via `StackExchange.Redis` + `Medallion.Threading.Redis`. `ICacheService` (`Bookings.Application.Services`) is the abstraction; `IDistributedLockProvider` is registered for cross-instance coordination.
 - **Shared integration contracts**: `TicketMaster.Common/IntegrationEvents` — any message crossing service boundaries lives here so producers and consumers share the type.
 
 ### API Gateway (`TicketMaster.ApiGateway`)
 
-- YARP with config split across two JSON files loaded at startup: `YarpConfigurations/yarp.clusters.json` (destinations) and `yarp.routes.json` (routing + auth policy). Destination addresses point at the services' https launch profiles (`7054` users, `7225` bookings, `7158` events).
-- The bookings and events routes require `GatewayAuthPolicy` (authenticated user). **The users route is deliberately ungated** — it fronts login, registration and token refresh, and Users.Api validates its own tokens. Do not add the policy to it.
+- YARP with config split across two JSON files loaded at startup: `YarpConfigurations/yarp.clusters.json` (destinations) and `yarp.routes.json` (routing + auth policy). Destination addresses point at the services' https launch profiles (`7054` users, `7225` bookings, `7158` events, `7291` payments).
+- The bookings, events and payments routes require `GatewayAuthPolicy` (authenticated user). **Two routes are deliberately ungated**: the users route — it fronts login, registration and token refresh, and Users.Api validates its own tokens — and `payments-webhooks-route` (`/payments-service/api/payments/webhooks/**`, `Order: -1`), because PSPs send no user token and PaymentSystem verifies the provider's signature instead. Do not add the policy to either.
 - Custom auth scheme `UserServiceScheme` (`Handlers/UsersServiceAuthHandler`): the gateway extracts the `Authorization` header from the incoming request, calls `Users.Api` at `api/users/auth` (forwarding the token in the `Authorization` header, not a query parameter), and materializes claims (`UserId`, `Email`, `FirstName`, `LastName`, `UserName`) from the response. The `HttpClient` is the named `"UsersService"` client; its base address comes from `Services:Users:BaseAddress` in `appsettings.json`, and `Program.cs` throws at startup if that key is missing.
 - `AuthTransformProvider` runs per-request on any route with an `AuthorizationPolicy` and copies `UserId` / `UserName` claims into `X-Identity-UserId` / `X-Identity-UserName` headers on the proxied request. Downstream services should read identity from those headers, not re-validate the token.
 
 ### Tests
 
-- **Layout**: test projects are grouped by service — `Tests/Bookings/`, `Tests/Events/`, `Tests/Users/` — so that everything belonging to one service can be extracted together when a module is split out into its own deployable. Put new test projects under the folder for the service they test.
+- **Layout**: test projects are grouped by service — `Tests/Bookings/`, `Tests/Events/`, `Tests/Users/`, `Tests/Payments/` — so that everything belonging to one service can be extracted together when a module is split out into its own deployable. Put new test projects under the folder for the service they test.
 - **Architecture tests** (`Tests/<Service>/*Architecture`) use **ArchUnitNET.xUnit**. Each project has a `BaseTest` that loads the service's assemblies via marker interfaces into a shared `Architecture` instance; concrete tests assert dependencies, naming, visibility, and colocation rules. Adding a new layer/project means updating `BaseTest.cs` to include its assembly.
 - **Unit tests**: `Tests/Events/EventsDomain` covers the Events domain rules; `Tests/Events/EventsCosmos` covers Cosmos document serialization against the real `CosmosJson.Options`, with no emulator needed.
 - **Integration tests**: `Tests/Bookings/BookingIntegration` runs the real `BookingDomainContext`,
@@ -119,8 +138,7 @@ Each project has a marker interface (`IApiAssemblyMarker`, `IApplicationAssembly
   `testing` skill for the fixture, isolation model and known gaps. `Bookings.Sql` and
   `Bookings.Application` both carry `InternalsVisibleTo("BookingIntegration")` so the tests can
   construct the internal context, repositories and handlers.
-- **The whole test suite is green**, including `BookingArchitecture`. There are no expected failures
-  to look past any more, so a red test means something actually broke. `ColocationTest` used to fail by
+- **The whole test suite is green**, so a red test means something actually broke. `ColocationTest` used to fail by
   design and is gone: Bookings organises `Bookings.Application` by type first — `Commands/` and
   `CommandHandlers/<Area>/` — so a handler is never in its command's namespace. `LayoutTest` guards
   that arrangement instead.
@@ -153,3 +171,4 @@ prefer one line at the point of confusion over a paragraph above the type.
   inspection enforces this and silently restores it, so don't hand-maintain a namespace that differs
   from its path — it will be reverted under you.
 - The `Users.Api.csproj` exposes `InternalsVisibleTo("UsersArchitecture")` — internal types are intentionally visible to arch tests.
+- `PaymentSystem.csproj` exposes `InternalsVisibleTo("PaymentIntegration")`. Its integration fixtures build the schema with `MigrateAsync`, never `EnsureCreated`, so a migration that drifts from the model fails in tests.

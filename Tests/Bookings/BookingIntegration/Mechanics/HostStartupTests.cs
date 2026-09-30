@@ -1,8 +1,10 @@
 using BookingIntegration.Fixtures;
 using Microsoft.Extensions.DependencyInjection;
+using TicketMaster.Common.IntegrationEvents;
 using Wolverine;
 using Wolverine.Configuration;
 using Wolverine.Runtime;
+using Wolverine.Runtime.Routing;
 using Wolverine.Transports;
 
 namespace BookingIntegration.Mechanics;
@@ -44,6 +46,22 @@ public sealed class HostStartupTests
         var senders = BrokerEndpoints().Where(endpoint => endpoint.Subscriptions.Count > 0).ToArray();
 
         Assert.All(senders, endpoint => Assert.Equal(EndpointMode.Durable, endpoint.Mode));
+    }
+
+    // Conventional routing creates a sender on first use, so these are resolved through routing rather than
+    // found among the endpoints above — which is also what proves the contracts reach the broker at all.
+    [Theory]
+    [InlineData(typeof(PaymentRequestedIntegrationEvent))]
+    [InlineData(typeof(BookingCancelledIntegrationEvent))]
+    public void Every_published_contract_is_sent_to_the_broker_durably(Type contract)
+    {
+        var routes = _fixture.Services.GetRequiredService<IWolverineRuntime>().RoutingFor(contract).Routes
+            .OfType<MessageRoute>()
+            .ToArray();
+
+        Assert.NotEmpty(routes);
+        Assert.All(routes, route => Assert.Equal("rabbitmq", route.Uri.Scheme));
+        Assert.All(routes, route => Assert.True(route.Sender.IsDurable, $"{route.Uri} is not durable."));
     }
 
     private Endpoint[] BrokerEndpoints()

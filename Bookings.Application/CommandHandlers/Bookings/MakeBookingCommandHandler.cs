@@ -1,6 +1,7 @@
 using Bookings.Application.Dtos;
 using Bookings.Application.Exceptions;
 using Bookings.Application.Extensions;
+using Bookings.Application.Services;
 using Bookings.Application.Services.Interfaces;
 using Bookings.Domain.Abstractions;
 using Bookings.Domain.Entities;
@@ -9,6 +10,7 @@ using Bookings.Domain.Exceptions;
 using Bookings.Domain.Repositories;
 using MediatR;
 using Bookings.Application.Commands.Bookings;
+using TicketMaster.Common.IntegrationEvents;
 
 namespace Bookings.Application.CommandHandlers.Bookings;
 
@@ -18,17 +20,20 @@ internal sealed class MakeBookingCommandHandler : IRequestHandler<MakeBookingCom
     private readonly ITicketsRepository _ticketsRepository;
     private readonly ICacheService _cacheService;
     private readonly IAfterCommitQueue _afterCommit;
+    private readonly IIntegrationEventPublisher _integrationEvents;
     private const int TicketCountConfig = 2;
 
     public MakeBookingCommandHandler(IBookingRepository bookingRepository,
         ITicketsRepository ticketsRepository,
         ICacheService cacheService,
-        IAfterCommitQueue afterCommit)
+        IAfterCommitQueue afterCommit,
+        IIntegrationEventPublisher integrationEvents)
     {
         _bookingRepository = bookingRepository;
         _ticketsRepository = ticketsRepository;
         _cacheService = cacheService;
         _afterCommit = afterCommit;
+        _integrationEvents = integrationEvents;
     }
 
     public async Task<long> Handle(MakeBookingCommand request, CancellationToken cancellationToken)
@@ -42,7 +47,16 @@ internal sealed class MakeBookingCommandHandler : IRequestHandler<MakeBookingCom
 
         _bookingRepository.Add(booking);
         await _bookingRepository.SaveChangesAsync(cancellationToken);
-        
+
+        // After the save, not from BookingCreatedDomainEvent: the id is assigned by the database, and the
+        // domain event is raised before it exists.
+        await _integrationEvents.PublishAsync(new PaymentRequestedIntegrationEvent(booking.Id,
+                request.UserId,
+                PaymentPricing.SellerFor(request.EventId),
+                PaymentPricing.AmountFor(ticketIds.Length),
+                PaymentPricing.Currency),
+            cancellationToken);
+
         var reservationKeys = ticketIds.Select(ReservationKeys.Reservation).ToArray();
         _afterCommit.Enqueue(_ => _cacheService.RemoveAsync(reservationKeys));
 

@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Wolverine.Runtime;
 
 namespace Bookings.Sql.Extensions;
 
@@ -36,6 +37,24 @@ public static class ServiceCollectionExtension
             var interceptor = serviceProvider.GetRequiredService<DomainEventPublisherInterceptor>();
             options.AddInterceptors(interceptor);
         });
+
+        return services;
+    }
+
+    // Kept out of AddInfrastructureServices because it needs a running Wolverine, which only the host
+    // has: a plain ServiceProvider — the fast integration fixture — registers a recording publisher instead.
+    public static IServiceCollection AddIntegrationEventOutbox(this IServiceCollection services)
+    {
+        services.AddScoped<OutboxFlushInterceptor>();
+        services.ConfigureDbContext<BookingDomainContext>((serviceProvider, options) =>
+            options.AddInterceptors(serviceProvider.GetRequiredService<OutboxFlushInterceptor>()));
+
+        // A factory rather than a type mapping, so Wolverine resolves it from the message's own scope — the
+        // one MediatR's handlers and their context come from — instead of building a second copy inline.
+        services.AddScoped<IIntegrationEventPublisher>(serviceProvider =>
+            new OutboxIntegrationEventPublisher(serviceProvider.GetRequiredService<IWolverineRuntime>(),
+                serviceProvider.GetRequiredService<BookingDomainContext>(),
+                serviceProvider.GetRequiredService<OutboxFlushInterceptor>()));
 
         return services;
     }

@@ -11,15 +11,16 @@ listed honestly under [Known gaps](#-known-gaps) rather than left for you to dis
 | Concern | Choice |
 |---|---|
 | Language / runtime | C# 14, .NET 10 (`net10.0`, stable SDK — see `global.json`) |
-| Architecture | Clean Architecture + DDD (Bookings, Events), vertical slice (Users) |
+| Architecture | Clean Architecture + DDD (Bookings, Events), vertical slice (Users), vertical slices on a DDD domain (Payments) |
 | CQRS | MediatR — commands, handlers, pipeline behaviors |
-| Messaging | WolverineFx over RabbitMQ (Postgres-backed durable inbox/outbox in Bookings; `WolverineFx.CosmosDb` durable outbox in Events) |
-| Relational store | PostgreSQL via EF Core (Bookings, Users) |
+| Messaging | WolverineFx over RabbitMQ (Postgres-backed durable inbox/outbox in Bookings and Payments; `WolverineFx.CosmosDb` durable outbox in Events) |
+| Relational store | PostgreSQL via EF Core (Bookings, Users, Payments) |
 | Document store | Azure Cosmos DB, NoSQL API (Events) |
 | Caching / locking | Redis via StackExchange.Redis + Medallion.Threading.Redis |
 | Service-to-service | gRPC over HTTP/2 with Protobuf (Bookings → Events), alongside RabbitMQ |
 | Edge | YARP reverse proxy with a custom authentication scheme |
-| Testing | xUnit + ArchUnitNET, plus Testcontainers (Postgres, Redis, RabbitMQ) for the Bookings integration suite |
+| Payment providers | Stripe and Braintree behind `IPaymentGateway` (`PaymentProvider`), hosted payment page + signed webhooks |
+| Testing | xUnit + ArchUnitNET, plus Testcontainers (Postgres, Redis, RabbitMQ, Cosmos emulator) for the integration suites |
 
 ## 🏗️ Architecture
 
@@ -27,37 +28,50 @@ listed honestly under [Known gaps](#-known-gaps) rather than left for you to dis
                        ┌────────────────────────────┐
   client ── HTTP ──►   │  TicketMaster.ApiGateway   │  (YARP reverse proxy)
                        └─────────────┬──────────────┘
-                                     │  /users-service/**
-                                     │  /bookings-service/**
-                                     │  /events-service/**
-              ┌──────────────────────┼──────────────────────┐
-              ▼                      ▼                      ▼
-        Users.Api            Bookings.Api             Events.Api
-        (Postgres + EF,     (Postgres + EF,           (Cosmos DB,
-         JWT issuer)         Redis cache + locks)      NoSQL API)
-                                     ▲                      │
-                                     │ consumes             │ publishes
-                                     └───── RabbitMQ ◄──────┘   EventCreated
-                                            (Wolverine)         EventRescheduled
-                                                 ▲              EventRelocated
-                                                 │ publishes    EventCancelled
-                                    ┌────────────┴───────┐
-                                    │  payment service   │      BookingPaid
-                                    └────────────────────┘      BookingPaymentFailed
-                                      not built; Bookings
-                                      only consumes it
+                                     │  /users-service/**     /bookings-service/**
+                                     │  /events-service/**    /payments-service/**
+              ┌──────────────────────┼──────────────────────┬─────────────────────┐
+              ▼                      ▼                      ▼                     ▼
+        Users.Api            Bookings.Api             Events.Api            PaymentSystem
+        (Postgres + EF,     (Postgres + EF,           (Cosmos DB,          (Postgres + EF,
+         JWT issuer)         Redis cache + locks)      NoSQL API)           Stripe / Braintree)
+                                     ▲  │                   │                     ▲  │
+                                     │  │ PaymentRequested  │ EventCreated        │  │ BookingPaid
+                                     │  │ BookingCancelled  │ EventRescheduled    │  │ BookingPaymentFailed
+                                     │  ▼                   ▼ EventRelocated      │  ▼
+                                     └────────────── RabbitMQ (Wolverine) ────────┘
+                                                                EventCancelled
 ```
 
-The gateway authenticates every request by calling Users.Api, then forwards the resolved identity
-downstream as `X-Identity-UserId` / `X-Identity-UserName` / `X-Identity-Role` headers — services read
-identity from those rather than re-validating the token. `POST /api/tickets` is the one admin-gated
-action: Bookings refuses it (403) unless that role header says `Admin`.
+The gateway requires an authenticated caller on `/bookings-service/**`, `/events-service/**` and
+`/payments-service/**` (except PSP webhooks), checked by calling Users.Api's `GET api/users/auth`;
+`/users-service/**` is not gated. It forwards the resolved identity downstream as `X-Identity-UserId` /
+`X-Identity-UserName` / `X-Identity-Role` headers — Bookings and PaymentSystem read identity from those
+rather than re-validating the token; Events does not use identity at all. Two actions are admin-gated:
+`POST /api/tickets`, which Bookings refuses (403) unless the role header says `Admin`, and
+`PUT /api/users/{id}/role`, which Users.Api checks against the JWT's role claim.
+
+Bookings also calls Events synchronously over gRPC (`EventsLookup.GetEvent`, contract in
+`TicketMaster.Common/Protos/events.proto`) to validate an event when a ticket is created.
 
 Events owns the catalogue and never learns about bookings; Bookings reacts to the catalogue and never
 writes to it. Every ticket that exists does so because Events said an event exists, and every ticket
 that changes does so because Events said the event changed.
 
 ## 🌐 API surface
+
+Paths below are as each service serves them; through the gateway, prefix them with `/users-service`,
+`/events-service`, `/bookings-service` or `/payments-service` (e.g. `POST /bookings-service/api/bookings`).
+
+Users handles accounts and tokens (ungated at the gateway):
+
+```
+POST   /api/users/registration          # the first account ever registered becomes Admin
+POST   /api/users/login
+POST   /api/users/refreshToken
+GET    /api/users/auth                  # the gateway's introspection call; requires a JWT
+PUT    /api/users/{id}/role             # admin only; 204
+```
 
 Venues and performers each expose a conventional CRUD surface:
 
@@ -81,7 +95,8 @@ PUT    /api/events/{id}/lineup        # change performers
 POST   /api/events/{id}/cancel        # idempotent; no DELETE exists
 ```
 
-Bookings exposes the checkout, with every action scoped to the caller the gateway resolved:
+Bookings exposes the checkout; every action except the admin `POST /api/tickets` is scoped to the caller
+the gateway resolved:
 
 ```
 POST   /api/tickets                     # admin only (403 otherwise); one seat, validated against Events over gRPC
@@ -93,45 +108,65 @@ GET    /api/bookings?page=&pageSize=    # the caller's own, newest first
 POST   /api/bookings/{id}/cancel        # 204; a paid booking is refused with 400
 ```
 
-No request body carries a user id. Identity comes from the gateway's `X-Identity-UserId` header and
-an action answers 401 without it, so a caller cannot book as somebody else by editing the body. A
+Payments exposes the checkout's payment side, also scoped to the caller; PSP webhooks are the one
+route the gateway leaves ungated, because the provider signs them instead:
+
+```
+POST   /api/payments/orders/{id}/checkout        # start the PSP session → client token for the hosted page
+POST   /api/payments/orders/{id}/payment-method  # synchronous charge (Braintree); 202 when the outcome comes by webhook
+POST   /api/payments/webhooks/{provider}         # PSP callback — signature-verified, no user token
+GET    /api/payments/checkouts/{bookingId}       # the buyer's checkout and its orders
+GET    /api/payments/orders/{id}                 # visible to the order's buyer or its seller
+GET    /api/payments/orders/{id}/ledger          # the order's debit/credit pair (sums to zero)
+GET    /api/wallets/me                           # the caller's wallets, one per currency
+```
+
+No request body carries a user id. Identity comes from the gateway's `X-Identity-UserId` header, and
+every Bookings and Payments action that acts for a user answers 401 without it, so a caller cannot book as somebody else by editing the body. A
 booking belonging to another user answers exactly as a nonexistent one does — telling them apart
 would confirm the id exists to someone with no business knowing.
 
 Each event mutation has a different downstream consequence — relocating changes which seats exist,
 rescheduling does not — so they are separate sub-resources rather than one `PUT` that would have to
 infer intent by diffing. And an event is cancelled rather than deleted: tickets exist downstream, so
-removal is a state transition. Collection reads return a `continuationToken`; send it back to page,
-and a null token means there is nothing more. Cosmos charges for rows an `OFFSET` skips, which is why
-there is no page number.
+removal is a state transition. Catalogue collection reads (events, venues, performers) take `pageSize`
+and return a `continuationToken`; send it back to page, and a null token means there is nothing more.
+Cosmos charges for rows an `OFFSET` skips, which is why those have no page number. Bookings, on Postgres,
+pages by `page`/`pageSize` and returns `items`, `page`, `pageSize`, `total` and `hasMore`.
 
 ## 📦 Services
 
 | Service | Layout | Store | Responsibility |
 |---|---|---|---|
-| **Users.Api** | Vertical slice (`Features/Users/…`) | Postgres | Registration, authentication, refresh tokens. Issues the JWTs and answers the gateway's introspection call. |
+| **Users.Api** | Vertical slice (`Features/Users/…`) | Postgres | Registration (the first account becomes Admin), authentication, refresh tokens, admin role assignment. Issues the JWTs and answers the gateway's introspection call. |
 | **Bookings** | `Domain` / `Application` / `Sql` / `Api` | Postgres + Redis | Reservations and bookings. Owns the whole ticket lifecycle — held in Redis, sold in Postgres, settled or released when a payment result arrives — with a distributed lock per seat guarding concurrent reservation. |
-| **Events** | `Domain` / `Application` / `Cosmos` / `Api` | Cosmos DB | The catalogue: events, venues, performers, each with full CRUD. Publishes `EventCreated`, `EventRescheduled`, `EventRelocated` and `EventCancelled` — the first is what causes tickets to exist in Bookings, and the rest are what keep them correct. |
+| **Events** | `Domain` / `Application` / `Cosmos` / `Api` | Cosmos DB | The catalogue: venues and performers with full CRUD; events created, rescheduled, relocated, re-lined-up and cancelled (never deleted). Serves the `EventsLookup` gRPC service Bookings calls. Publishes `EventCreated`, `EventRescheduled`, `EventRelocated` and `EventCancelled` — the first is what causes tickets to exist in Bookings, and the rest are what keep them correct. |
+| **PaymentSystem** | Vertical slices (`Features/<Aggregate>/<Feature>.cs`) on a DDD `Domain/` | Postgres | The pay-in flow: a checkout per booking with one payment order per seller, PSP checkout and webhooks, seller wallets, a double-entry ledger, 15-minute checkout expiry. Publishes `BookingPaid` / `BookingPaymentFailed`. |
+| **PaymentProvider** | Class library | — | Anti-corruption layer over the PSPs (Stripe, Braintree) behind `IPaymentGateway`. |
 | **TicketMaster.ApiGateway** | — | — | YARP routing, edge authentication, identity header propagation. |
-| **TicketMaster.Common** | — | — | Integration event contracts shared across service boundaries. |
+| **TicketMaster.Common** | — | — | Integration event contracts and the `events.proto` gRPC contract shared across service boundaries. |
 
 ## 🔑 Patterns worth looking at
 
-**CQRS with MediatR.** Commands in `*.Application/Commands`, handlers in `CommandHandlers`, with
-open-generic `IPipelineBehavior<,>` for cross-cutting concerns.
+**CQRS with MediatR.** Commands in `*.Application/Commands` (one exception: Bookings'
+`CancelBookingCommand` sits in `Queries/CustomerBookingQueries.cs`, beside the queries it is used with),
+handlers in `CommandHandlers`, with open-generic `IPipelineBehavior<,>` for cross-cutting concerns.
+PaymentSystem keeps each command, query and handler together in its feature file instead.
 
 **Two things hold a seat, at different stages (Bookings).** Reserving writes a Redis key with a TTL
 and nothing else, so a checkout abandoned before booking lapses on its own and needs no compensating
 action. Booking replaces that with a durable hold: the reservation is deleted and the ticket's own
 status carries it. The trade is explicit — after booking, the TTL no longer applies to those seats, so
-only `BookingPaymentFailed` can put them back. That timeout belongs to the payment service.
+only a cancellation of the booking can put them back: a `BookingPaymentFailed`, the owner cancelling, or a
+relocation that removes one of its seats. The unpaid case has a timeout, and it lives in PaymentSystem: a
+checkout nobody pays for fails after 15 minutes.
 
 **Reservation checks the database before holding anything.** `Ticket.IsAvailableFor` is the rule —
 nobody holds the seat, it belongs to the event being asked about, and that event is inside its selling
 window — so a ticket that does not exist, is already sold, or was cancelled with its event is refused
-at the reservation step rather than accepted and rejected later. The predicate inside
-`GetTicketsForBookingAsync` is the database-side mirror of the same rule, since a query cannot call
-into the domain.
+at the reservation step rather than accepted and rejected later. Booking re-checks by calling the same
+method on tickets read by id, so the rule has one evaluator and no database-side copy to keep in step
+(reservation checks event membership separately first, only to return a more specific error).
 
 **A lock per seat, taken in a fixed order (Bookings).** Reservation locks
 `bookings:reserve:ticket:{id}` rather than one shared key, so reservations for different seats run
@@ -161,7 +196,7 @@ unordered, at-least-once delivery — a late failure cannot void a paid booking,
 cannot claim seats already back on sale. Applying the same outcome twice announces the release once,
 so seats are never released a second time after somebody else has taken them.
 
-**Domain event dispatch, two ways.** Bookings uses a `SaveChangesInterceptor`, so persistence and
+**Domain event dispatch, two ways.** Bookings (and Payments) use a `SaveChangesInterceptor`, so persistence and
 event emission cannot diverge. Dispatch runs *after* the write, so a handler that changes something
 must save that change itself — the surrounding transaction is what keeps its save atomic with the
 write that triggered it. Events are cleared before publishing rather than after: a handler that saves
@@ -205,11 +240,30 @@ in-process queues. The host-boot fixture asserts every broker listener and sende
 references — no driver types, no DI abstractions — enforced by architecture tests. Entity ids are
 strings; all Cosmos knowledge lives in `Events.Cosmos`.
 
-**Cosmos modelling (Events).** Three containers sharing database-level throughput, each
-partitioned by `/id` so reads by id are point reads at ~1 RU. Events embed a *snapshot* of their
+**Cosmos modelling (Events).** Three domain containers (`events`, `venues`, `performers`) sharing one
+400 RU/s database-level allocation, alongside the `wolverine` envelope container the outbox adds to the same
+database. Each is partitioned by `/id`, so reads by id are point reads, the cheapest operation Cosmos offers. Events embed a *snapshot* of their
 venue and performers: renaming a venue deliberately does not rewrite history. Documents are
 serialized through a private rehydration constructor, so loading a past event never re-runs the
 creation invariants that would reject it.
+
+**One aggregate per checkout, one order per seller (Payments).** `PaymentEvent` is the root and the only
+way to change its `PaymentOrder`s, so the checkout-wide rule — done once every order has succeeded — cannot
+be bypassed. Repeating an outcome is a no-op and the opposite outcome is refused, which is what makes
+redelivered webhooks and messages safe. The domain refuses any amount `numeric(18,2)` cannot hold exactly,
+because Postgres would otherwise round it and the PSP would charge a different amount than the ledger
+records.
+
+**A version the database checks, set at save time (Payments).** Two orders of one checkout settling at
+once would each see the other unfinished; `PaymentEvent.Version` makes the second save fail and reload. An
+interceptor sets it from the version the checkout was *loaded* with — a domain-side bump let a stale
+disconnected copy overwrite a newer row.
+
+**An outbox on the HTTP path, not only on messages (Bookings, Payments).** Both services publish through
+an `IIntegrationEventPublisher` that stages into Wolverine's `DbContextOutbox` on the transaction already
+open and sends after commit, so a webhook's settlement, its ledger pair and its `BookingPaid` commit or roll
+back together. Wolverine's own `SaveChangesAndFlushMessagesAsync` is avoided because it commits the
+transaction itself.
 
 ## 🧪 Testing
 
@@ -219,11 +273,15 @@ independently deployable microservice:
 ```
 Tests/
 ├── Bookings/   BookingArchitecture, BookingDomain, BookingIntegration, BookingApi
-├── Events/     EventsArchitecture, EventsDomain, EventsApplication, EventsCosmos, EventsApi
+├── Events/     EventsArchitecture, EventsDomain, EventsApplication, EventsCosmos, EventsApi, EventsIntegration
+├── Gateway/    GatewayTests
+├── Payments/   PaymentArchitecture, PaymentDomain, PaymentIntegration, PaymentAdapters
+├── Rpc/        GrpcSeam
 └── Users/      UsersArchitecture, UsersApi
 ```
 
-**Architecture tests** (ArchUnitNET) assert layer dependencies, naming, visibility and layout.
+**Architecture tests** (ArchUnitNET) assert layer dependencies, naming, visibility and — in Bookings and
+Payments — layout; the Users suite checks handler/request colocation.
 The Events suite additionally forbids any database driver, `System.Drawing`, or DI abstraction from
 appearing in `Events.Domain` — the rules that keep the store swappable.
 
@@ -251,11 +309,10 @@ RabbitMQ included — through `WebApplicationFactory<Program>` against its own P
 RabbitMQ containers. It exists because a whole class of failure here is invisible to everything else:
 a durability policy that was never applied, a handler dependency Wolverine cannot resolve, a
 code-generation mode with no compiler behind it. All of them compile, and all of them leave every
-other suite green. It is what proves the broker endpoints are actually enrolled in the durable inbox,
-and it is where a Wolverine 6 upgrade currently fails.
+other suite green. It is what proves the broker endpoints are actually enrolled in the durable inbox.
 
 The two fixtures own separate containers and run in parallel; the fast one never starts a broker,
-which is what keeps the other 114 tests at about a second.
+which is what keeps the rest of the suite at about a second.
 
 Events has its own container-backed suite, `Tests/Events/EventsIntegration`, running the real
 repositories, pipeline behaviors and handlers against the **Cosmos emulator** in Testcontainers. It
@@ -271,11 +328,28 @@ relay end to end: a create-event command's `EventCreatedIntegrationEvent` reache
 consumer host. It mirrors Bookings' host fixture. See the `testing` skill for the fixtures, the
 two-scope 412 trick and the limits.
 
-**Needs a running Docker daemon** — every test in `BookingIntegration` and `EventsIntegration` starts
+Payments has `Tests/Payments/PaymentIntegration`: every slice through the production
+`AddInfrastructureServices` against real Postgres, with the schema built by the real migrations, plus
+concurrency, integrity, precision, timestamp and domain-event suites, and a `Mechanics/` collection that boots
+the real host on Postgres and RabbitMQ with a stand-in Bookings host (request → checkout, cancel, expiry,
+outbox rollback). `PaymentDomain` covers every aggregate rule, `PaymentAdapters` the PSP adapters, and
+`PaymentArchitecture` the slice rules — the domain depends on nothing but itself, `PaymentSystem.Enums`, the BCL and MediatR, no feature area
+reaches into another, `PaymentProvider` never references `PaymentSystem`, handlers are internal and sealed,
+and every writing command is transactional.
+
+**Needs a running Docker daemon** — every test in `BookingIntegration`, `EventsIntegration` and `PaymentIntegration` starts
 containers; with the daemon down the whole project fails at fixture initialisation. `Bookings.Sql` and
 `Bookings.Application` carry `InternalsVisibleTo("BookingIntegration")` so the tests can construct the
-internal context, repositories and handlers; `EventsIntegration` needs no such entry — it reaches
-everything through public interfaces (`ISender`, the repository contracts).
+internal context, repositories and handlers; `Bookings.Application` and `Events.Api` also expose internals
+to `GrpcSeam`, and `PaymentSystem` to `PaymentIntegration`. `EventsIntegration` needs no such entry — it
+reaches everything through public interfaces (`ISender`, the repository contracts).
+
+`Tests/Gateway/GatewayTests` boots the real gateway in-process through `WebApplicationFactory<Program>`,
+stubbing only the Users introspection client and YARP's forwarder, and covers edge auth, identity-header
+propagation, the payments routes (including the ungated webhook route) and config invariants.
+`Tests/Rpc/GrpcSeam` runs an in-process gRPC round trip — the real `EventsLookupService` and
+`DomainExceptionInterceptor` against the real Bookings `EventsService` client over a TestServer — to prove
+domain errors survive the seam. Neither needs Docker.
 
 Handlers are `internal` by architecture rule, so each test project that constructs them relies on an
 `InternalsVisibleTo` entry in the production `.csproj`.
@@ -293,12 +367,19 @@ dotnet test Tests/Bookings/BookingApi/BookingApi.csproj
 dotnet test Tests/Bookings/BookingArchitecture/BookingArchitecture.csproj
 dotnet test Tests/Users/UsersArchitecture/UsersArchitecture.csproj
 dotnet test Tests/Users/UsersApi/UsersApi.csproj
+dotnet test Tests/Payments/PaymentArchitecture/PaymentArchitecture.csproj
+dotnet test Tests/Payments/PaymentDomain/PaymentDomain.csproj
+dotnet test Tests/Payments/PaymentIntegration/PaymentIntegration.csproj   # needs Docker
+dotnet test Tests/Payments/PaymentAdapters/PaymentAdapters.csproj
+dotnet test Tests/Gateway/GatewayTests/GatewayTests.csproj
+dotnet test Tests/Rpc/GrpcSeam/GrpcSeam.csproj
 ```
 
-**Not covered, deliberately:** Wolverine `Consume` handlers need a broker and each is a two-line
-delegation to a command that is already covered, so testing them would only prove Wolverine works.
-The broker topology, at-least-once redelivery and version-based staleness guards under genuine
-out-of-order delivery are therefore untested by design, not by gap. See the `testing` skill's "Not
+**Not covered, deliberately:** most Wolverine `Consume` handlers are two-line delegations to commands
+that are already covered directly, so only a representative few are driven off a real broker by the host
+fixtures — Bookings' `BookingPaymentFailed`, and Payments' `PaymentRequested` (including a redelivery) and
+`BookingCancelled` — alongside assertions that every broker endpoint is durable. Version-based staleness
+guards under genuine out-of-order delivery remain untested by design. See the `testing` skill's "Not
 covered, deliberately" for the rest of that list.
 
 **The suite is green on a clean checkout**, architecture tests included, so a red test means
@@ -310,15 +391,19 @@ among the command handlers.
 
 ## ▶️ Running locally
 
-The whole system, in containers — the gateway is the only published port (`http://localhost:8080`):
+The whole system, in containers — use the gateway at `http://localhost:8080` as the entry point (each
+service and backing store is also published on the host for debugging: users 5054, events 5158/5159,
+bookings 5225, payments 5290):
 
 ```bash
-cp .env.example .env      # then set USERS_AUTH_TOKEN, e.g. openssl rand -hex 64
+cp .env.example .env      # then set USERS_AUTH_TOKEN (e.g. openssl rand -hex 64) and the two
+                          # PAYMENTS_STRIPE_* test-mode keys — PaymentSystem refuses to start without them
 docker compose up --build
 ```
 
 The first account you register becomes the admin; everyone after is a customer. On Apple Silicon the
-Cosmos emulator has no arm64 image, so Events' store will not start — see [Known gaps](#-known-gaps).
+Cosmos emulator image compose uses has no arm64 build, so Events' store will not start — see
+[Known gaps](#-known-gaps).
 
 Or run the services directly:
 
@@ -326,23 +411,38 @@ Or run the services directly:
 dotnet restore TicketMaster.slnx
 dotnet build TicketMaster.slnx
 
-dotnet run --project Users.Api/Users.Api.csproj
-dotnet run --project Bookings.Api/Bookings.Api.csproj
-dotnet run --project Events.Api/Events.Api.csproj
-dotnet run --project TicketMaster.ApiGateway/TicketMaster.ApiGateway.csproj
+dotnet run --project Users.Api/Users.Api.csproj --launch-profile https          # https://localhost:7054
+dotnet run --project Bookings.Api/Bookings.Api.csproj --launch-profile https    # https://localhost:7225
+dotnet run --project Events.Api/Events.Api.csproj --launch-profile https        # https://localhost:7158 (gRPC needs HTTP/2)
+dotnet run --project PaymentSystem/PaymentSystem.csproj                         # https://localhost:7291
+dotnet run --project TicketMaster.ApiGateway/TicketMaster.ApiGateway.csproj     # http://localhost:5203
+
+The `https` profiles matter: the gateway's clusters and Bookings' gRPC client point at those ports, while a
+plain `dotnet run` picks each service's first (`http`) profile.
 ```
 
-Bookings and Users apply EF Core migrations at startup; Events creates its Cosmos database and
-containers at startup. The JWT signing key is **not** committed, so Users.Api fails fast until it is
-set once via user-secrets (or the `AuthConfigs__Token` env var):
+PaymentSystem validates its PSP settings at startup, so it does not boot with the empty secrets in
+`appsettings.json`:
+
+```bash
+dotnet user-secrets set "PaymentProviders:Stripe:SecretKey" "sk_test_…" --project PaymentSystem
+dotnet user-secrets set "PaymentProviders:Stripe:WebhookSecret" "whsec_…" --project PaymentSystem
+```
+
+Bookings, Users and PaymentSystem apply EF Core migrations at startup; Events creates its Cosmos database and
+containers at startup. The JWT signing key is empty in `appsettings.json`, so outside Development (in
+compose, for instance) Users.Api fails fast until `AuthConfigs__Token` is set. `appsettings.Development.json`
+currently carries a development key; override it with user-secrets:
 
 ```bash
 dotnet user-secrets set "AuthConfigs:Token" "$(openssl rand -hex 64)" --project Users.Api
 ```
 
 Events expects the Cosmos emulator on `https://localhost:8081` — the emulator's well-known account key
-is already in `appsettings.Development.json` and is not a secret. Bring up just the backing stores with
-`docker compose up postgres redis rabbitmq cosmos`.
+is already in `appsettings.Development.json` and is not a secret. The emulator's certificate is
+self-signed, so trust it on the host before Events can connect. Bring up just the backing stores with
+`POSTGRES_PASSWORD=password docker compose up postgres redis rabbitmq cosmos` — the checked-in connection
+strings use the password `password`.
 
 Central package management is enabled: add package versions to `Directory.Packages.props`, never
 `Version="…"` on an individual `<PackageReference>`.
@@ -355,14 +455,21 @@ everything that was in it now has a test.)
 
 ### Not built
 
-- **Nothing pays for a booking.** `BookingPaidIntegrationEvent` and `BookingPaymentFailedIntegrationEvent`
-  are defined and consumed, but nothing publishes them — Bookings has no outbound publishing at all. A
-  booking therefore stays `Booked` indefinitely and its seats come back only if the owner cancels it.
+- **Ticket prices are placeholders.** Neither Events nor Bookings has a price or a seller, so Bookings
+  sends `$50 × tickets` in USD and a seller derived from the event id (`PaymentPricing`). Payments treats the
+  request's amount as authoritative, so it is correct the moment real pricing exists upstream.
+- **No refunds.** Payments is pay-in only. A booking cancelled after its payment succeeded is logged as
+  needing a refund, and a `RefundPending` booking in Bookings is still never refunded.
+- **No reconciliation job** against PSP settlement files, so a charge the service failed to record stays
+  `Executing` until someone looks.
 
 ### Accepted limitations
 
 Deliberate, and recorded so nobody "fixes" one without knowing what it carries.
 
+- **Compose runs the classic Cosmos emulator.** `compose.yaml` uses `azure-cosmos-emulator:latest`, which
+  is amd64-only, so on Apple Silicon Events' store does not start under `docker compose`. The test suite uses
+  `vnext-latest` (native arm64, Gateway mode over http) instead.
 - **The Events outbox is durable but not atomic.** `WolverineFx.CosmosDb` stores envelopes in a
   separate `wolverine` container by per-item upsert, so the message survives a crash but is not written
   in the same batch as the `events` document — a small window where the write lands and the envelope
@@ -378,6 +485,9 @@ Deliberate, and recorded so nobody "fixes" one without knowing what it carries.
 - **Reservation correctness rests entirely on the distributed locks.** The check and the write both
   happen with every seat's lock held, but the write is not conditional, so a lock lost mid-operation is
   a real double-reservation window rather than a wasted attempt.
+- **A cancellation that reaches Payments before its `PaymentRequested`** is a no-op; the checkout is then
+  created, and only the 15-minute expiry fails it — a buyer who pays inside that window pays for a cancelled
+  booking.
 - **After-commit work is dropped when a command is sent from a message handler.** `TransactionBehavior`
   does not own that transaction, so it logs a warning rather than running the queued work — the same way
   a failure on the owned path is treated. Only `MakeBookingCommand` queues any, and only over HTTP, so
@@ -385,9 +495,7 @@ Deliberate, and recorded so nobody "fixes" one without knowing what it carries.
 
 ## 🗺️ Roadmap
 
-- A payment service, plus the endpoint and outbound publish that would let a booking actually be paid
-  for end to end
-- Processing refunds and notifications for a `RefundPending` booking — a paid booking whose seat a
-  relocation cancelled is already flagged `RefundPending`; issuing the refund and telling the customer
-  is the remaining half, and rides on the payment service above
+- Real ticket pricing and sellers in Events, replacing Bookings' `PaymentPricing` placeholder
+- Refunds and notifications — for a `RefundPending` booking and for a booking cancelled after payment
+- Reconciliation against PSP settlement files, using `IPaymentGateway.LookupAsync`
 - Saga / process-manager work for the full booking flow in Wolverine

@@ -1,5 +1,6 @@
 using Bookings.Application.Extensions;
 using Bookings.Application.Services.Interfaces;
+using Bookings.Domain.Abstractions;
 using Bookings.Domain.DomainEvents;
 using Bookings.Sql;
 using Bookings.Sql.Extensions;
@@ -57,6 +58,11 @@ public sealed class BookingsFixture : IAsyncLifetime
         // after it so this wins. See StubEventsService.
         services.AddScoped<StubEventsService>();
         services.AddScoped<IEventsService>(sp => sp.GetRequiredService<StubEventsService>());
+
+        // The real outbox publisher is registered by AddIntegrationEventOutbox, which needs a running
+        // Wolverine and so is left to BookingsHostFixture. See RecordingIntegrationEventPublisher.
+        services.AddScoped<IntegrationEventLog>();
+        services.AddScoped<IIntegrationEventPublisher, RecordingIntegrationEventPublisher>();
 
         // Test-only observability hook: a second handler for BookingCreatedDomainEvent so mechanics
         // tests can assert on publish counts directly, without a hand-built IPublisher that would also

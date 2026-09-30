@@ -218,6 +218,7 @@ One route per service, no endpoint ever named in gateway config. Which cluster c
 | `users-cluster` | **none** | Users.Api validates JWTs itself and each endpoint declares its own requirement — only `api/users/auth` has `.RequireAuthorization()` |
 | `bookings-cluster` | `GatewayAuthPolicy` | Bookings never validates a token; it trusts `X-Identity-UserId` |
 | `events-cluster` | `GatewayAuthPolicy` | same |
+| `payments-cluster` | `GatewayAuthPolicy`, **except** `payments-webhooks-route` | Payments trusts `X-Identity-UserId` like Bookings. PSP webhooks carry no user token — the provider's signature, verified by Payments, is their credential — so `/payments-service/api/payments/webhooks/**` is a separate ungated route at `Order: -1`, ahead of the catch-all. Covered by `GatewayTests/PaymentsRouteTests` |
 
 **Do not put `GatewayAuthPolicy` on the users route.** It would cover `api/users/login`,
 `api/users/registration` and `api/users/refreshToken` — every way of obtaining a token — so a caller

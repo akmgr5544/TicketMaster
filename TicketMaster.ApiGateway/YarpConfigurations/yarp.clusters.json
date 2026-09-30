@@ -21,6 +21,13 @@
             "Address": "https://localhost:7158"
           }
         }
+      },
+      "payments-cluster": {
+        "Destinations": {
+          "destination1": {
+            "Address": "https://localhost:7291"
+          }
+        }
       }
     }
   }

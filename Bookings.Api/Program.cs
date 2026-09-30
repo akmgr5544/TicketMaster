@@ -19,6 +19,7 @@ builder.Services.AddControllers();
 builder.Services.AddOpenApi();
 
 builder.Host.ConfigureRabbitMq(configuration);
+builder.Services.AddIntegrationEventOutbox();
 
 var app = builder.Build();
 
