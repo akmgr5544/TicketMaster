@@ -11,9 +11,9 @@ public class CosmosOptions
 
     /// <summary>
     /// Left unset in every real deployment, which leaves the SDK on its default (Direct) mode. It
-    /// exists for the integration emulator, which serves cleartext http and only accepts Gateway
-    /// mode — setting it there lets the fixture use the real client construction rather than a
-    /// hand-copied one. When set, the client is also pinned to the single endpoint.
+    /// exists for the vnext emulator — in the integration fixtures, compose and Development — which
+    /// serves cleartext http and only accepts Gateway mode. When set, the client is also pinned to
+    /// the single endpoint.
     /// </summary>
     public ConnectionMode? ConnectionMode { get; set; }
 
