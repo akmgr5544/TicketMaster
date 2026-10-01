@@ -33,6 +33,11 @@ internal sealed class GatewayApp : WebApplicationFactory<Program>
     // The last request the handler sent to Users.Api, so a test can assert how the token was forwarded.
     public HttpRequestMessage? LastIntrospection { get; private set; }
 
+    public int IntrospectionCount { get; private set; }
+
+    // Stands in for TimeProvider.System, so the introspection cache's lifetime can be crossed without waiting.
+    public ManualClock Clock { get; } = new();
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.ConfigureTestServices(services =>
@@ -46,6 +51,9 @@ internal sealed class GatewayApp : WebApplicationFactory<Program>
             // answers 200, so identity-propagation can be observed without a downstream.
             services.RemoveAll<IForwarderHttpClientFactory>();
             services.AddSingleton<IForwarderHttpClientFactory>(Forwarder);
+
+            services.RemoveAll<TimeProvider>();
+            services.AddSingleton<TimeProvider>(Clock);
         });
     }
 
@@ -82,9 +90,19 @@ internal sealed class GatewayApp : WebApplicationFactory<Program>
             // Record before responding so a test can assert the handler forwarded the token to the
             // right endpoint, as a header rather than a query parameter.
             _owner.LastIntrospection = request;
+            _owner.IntrospectionCount++;
             return Task.FromResult(_owner.OnIntrospect());
         }
     }
+}
+
+internal sealed class ManualClock : TimeProvider
+{
+    private DateTimeOffset _now = new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+
+    public override DateTimeOffset GetUtcNow() => _now;
+
+    public void Advance(TimeSpan by) => _now += by;
 }
 
 // Captures the last request YARP tried to forward, so a test can read the X-Identity-* headers the

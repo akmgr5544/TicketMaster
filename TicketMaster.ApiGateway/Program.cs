@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using TicketMaster.ApiGateway.Handlers;
 using TicketMaster.ApiGateway.Transforms;
 
@@ -12,6 +13,9 @@ builder.Services.AddHttpClient("UsersService", config =>
 {
     config.BaseAddress = new Uri(usersServiceAddress);
 });
+
+builder.Services.TryAddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<IntrospectionCache>();
 
 builder.Services.AddAuthentication("UserServiceScheme")
     .AddScheme<AuthenticationSchemeOptions, UsersServiceAuthHandler>("UserServiceScheme", null);
