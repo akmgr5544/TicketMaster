@@ -152,6 +152,14 @@ library (Stripe, Braintree). See the `payments-service` skill for the rules, the
   gone; there is no hand-written fake for a Bookings handler dependency anywhere in the solution. See
   the `testing` skill's "Known gaps" section for what remains open in the current suite.
 
+## Knowledge and decisions
+
+`.claude/knowledge/` holds the cross-service reference (see its `README.md`): anti-patterns with
+the repo's deliberate exceptions, where shared infrastructure already lives, package policy,
+.NET 10 notes, and ADRs in `decisions/`. Check `common-antipatterns.md` before review, and the ADRs
+before reversing a cross-service choice (architecture per service, Result vs exceptions,
+repositories, Redis reservations, MediatR).
+
 ## Comments
 
 Comment the non-obvious and nothing else. Explain a decision a reader would otherwise undo — why a
