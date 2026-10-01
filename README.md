@@ -24,24 +24,129 @@ listed honestly under [Known gaps](#-known-gaps) rather than left for you to dis
 
 ## 🏗️ Architecture
 
+### System
+
+Every request enters through the gateway. Services own their stores outright: none reads another's
+database, and they talk only through RabbitMQ messages and one gRPC call.
+
+```mermaid
+flowchart TB
+    client(["Client"])
+    psp(["Stripe / Braintree"])
+
+    subgraph edge["Edge"]
+        gateway["<b>TicketMaster.ApiGateway</b><br/>YARP reverse proxy · :8080<br/>edge auth → X-Identity-UserId / UserName / Role"]
+    end
+
+    subgraph services["Services"]
+        users["<b>Users.Api</b><br/>vertical slices<br/>JWT issuer · roles"]
+        events["<b>Events.Api</b><br/>Clean Architecture<br/>catalogue: events, venues, performers"]
+        bookings["<b>Bookings.Api</b><br/>Clean Architecture + DDD<br/>tickets, reservations, bookings"]
+        payments["<b>PaymentSystem</b><br/>vertical slices on a DDD domain<br/>checkouts, wallets, ledger · pay-in only"]
+    end
+
+    subgraph data["Stores and broker"]
+        postgres[("<b>PostgreSQL</b><br/>users_db · bookings_db · payments_db<br/>+ Wolverine outbox tables")]
+        redis[("<b>Redis</b><br/>seat reservations, 5-min TTL<br/>per-seat distributed locks")]
+        cosmos[("<b>Cosmos DB</b><br/>events · venues · performers<br/>+ wolverine outbox container")]
+        broker{{"<b>RabbitMQ</b><br/>Wolverine, durable inbox/outbox"}}
+    end
+
+    client -- "HTTPS · Bearer JWT" --> gateway
+    gateway -- "/users-service/** · ungated" --> users
+    gateway -. "GET api/users/auth<br/>introspection, cached 30 s" .-> users
+    gateway -- "/events-service/** · GatewayAuthPolicy" --> events
+    gateway -- "/bookings-service/** · GatewayAuthPolicy" --> bookings
+    gateway -- "/payments-service/** · GatewayAuthPolicy<br/>webhooks route ungated" --> payments
+    psp -- "signed webhooks" --> gateway
+    payments -- "hosted page, charge<br/>(PaymentProvider · IPaymentGateway)" --> psp
+    bookings -- "gRPC · EventsLookup.GetEvent" --> events
+
+    users --> postgres
+    bookings --> postgres
+    bookings --> redis
+    payments --> postgres
+    events --> cosmos
+    events <--> broker
+    bookings <--> broker
+    payments <--> broker
 ```
-                       ┌────────────────────────────┐
-  client ── HTTP ──►   │  TicketMaster.ApiGateway   │  (YARP reverse proxy)
-                       └─────────────┬──────────────┘
-                                     │  /users-service/**     /bookings-service/**
-                                     │  /events-service/**    /payments-service/**
-              ┌──────────────────────┼──────────────────────┬─────────────────────┐
-              ▼                      ▼                      ▼                     ▼
-        Users.Api            Bookings.Api             Events.Api            PaymentSystem
-        (Postgres + EF,     (Postgres + EF,           (Cosmos DB,          (Postgres + EF,
-         JWT issuer)         Redis cache + locks)      NoSQL API)           Stripe / Braintree)
-                                     ▲  │                   │                     ▲  │
-                                     │  │ PaymentRequested  │ EventCreated        │  │ BookingPaid
-                                     │  │ BookingCancelled  │ EventRescheduled    │  │ BookingPaymentFailed
-                                     │  ▼                   ▼ EventRelocated      │  ▼
-                                     └────────────── RabbitMQ (Wolverine) ────────┘
-                                                                EventCancelled
+
+### Messages
+
+Every cross-service message is a contract in `TicketMaster.Common/IntegrationEvents`, staged in the
+publisher's outbox in the same transaction as the write it announces, and handled idempotently on the other
+side.
+
+```mermaid
+flowchart LR
+    events["<b>Events</b>"]
+    bookings["<b>Bookings</b>"]
+    payments["<b>Payments</b>"]
+
+    events -- "EventCreated<br/>EventRescheduled<br/>EventRelocated<br/>EventCancelled" --> bookings
+    bookings -- "PaymentRequested<br/>BookingCancelled" --> payments
+    payments -- "BookingPaid<br/>BookingPaymentFailed" --> bookings
 ```
+
+| Message | From → To | What the consumer does |
+|---|---|---|
+| `EventCreated` | Events → Bookings | Creates one ticket per seat of the event's venue |
+| `EventRescheduled` | Events → Bookings | Moves every ticket's event date; ignored if not newer than the ticket's `EventVersion` |
+| `EventRelocated` | Events → Bookings | Reconciles tickets to the seats the event *now* has; a booking that loses a seat is cancelled, or flagged `RefundPending` if paid |
+| `EventCancelled` | Events → Bookings | Cancels the event's tickets |
+| `PaymentRequested` | Bookings → Payments | Opens a checkout (one payment order per seller) and schedules its 15-minute expiry |
+| `BookingCancelled` | Bookings → Payments | Fails the checkout's unsettled orders; a paid one is left and logged for refund |
+| `BookingPaid` | Payments → Bookings | Confirms the booking |
+| `BookingPaymentFailed` | Payments → Bookings | Cancels the unpaid booking and releases its seats |
+
+### A booking, end to end
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Buyer
+    participant GW as Gateway
+    participant BK as Bookings
+    participant RD as Redis
+    participant MQ as RabbitMQ
+    participant PY as Payments
+    participant PSP as Stripe
+
+    Buyer->>GW: POST /bookings-service/api/tickets/reserve
+    GW->>BK: proxied with X-Identity-UserId
+    BK->>RD: lock each seat (ascending id), write reservation, 5-min TTL
+    BK-->>Buyer: 200
+
+    Buyer->>GW: POST /bookings-service/api/bookings
+    GW->>BK: proxied
+    BK->>BK: tickets Booked + booking saved, PaymentRequested staged (one transaction)
+    BK->>RD: delete the reservation, after commit
+    BK-->>Buyer: 201 { id }
+    BK-)MQ: PaymentRequested
+    MQ-)PY: PaymentRequested
+    PY->>PY: create checkout + schedule CheckoutExpiryDue (+15 min)
+
+    Buyer->>GW: GET /payments-service/api/payments/checkouts/{bookingId}
+    GW->>PY: proxied
+    PY-->>Buyer: checkout and its payment orders
+    Buyer->>GW: POST /payments-service/api/payments/orders/{id}/checkout
+    GW->>PY: proxied
+    PY->>PSP: create session, idempotency key = payment order id
+    PSP-->>PY: session reference + client token
+    PY-->>Buyer: client token
+    Buyer->>PSP: pays on the provider's hosted page
+
+    PSP->>GW: POST /payments-service/api/payments/webhooks/stripe (ungated)
+    GW->>PY: proxied
+    PY->>PY: verify signature, succeed order, credit seller wallet,<br/>write ledger pair, stage BookingPaid (one transaction)
+    PY-)MQ: BookingPaid
+    MQ-)BK: BookingPaid
+    BK->>BK: booking marked paid
+```
+
+If nobody pays, the expiry fails the checkout after 15 minutes and `BookingPaymentFailed` releases the
+seats. A cancelled booking sends `BookingCancelled` the other way.
 
 The gateway requires an authenticated caller on `/bookings-service/**`, `/events-service/**` and
 `/payments-service/**` (except PSP webhooks), checked by calling Users.Api's `GET api/users/auth`;
@@ -277,7 +382,7 @@ Tests/
 ├── Gateway/    GatewayTests
 ├── Payments/   PaymentArchitecture, PaymentDomain, PaymentIntegration, PaymentAdapters
 ├── Rpc/        GrpcSeam
-└── Users/      UsersArchitecture, UsersApi
+└── Users/      UsersArchitecture, UsersApi, UsersIntegration
 ```
 
 **Architecture tests** (ArchUnitNET) assert layer dependencies, naming, visibility and — in Bookings and
@@ -344,6 +449,13 @@ internal context, repositories and handlers; `Bookings.Application` and `Events.
 to `GrpcSeam`, and `PaymentSystem` to `PaymentIntegration`. `EventsIntegration` needs no such entry — it
 reaches everything through public interfaces (`ISender`, the repository contracts).
 
+Users.Api has `Tests/Users/UsersIntegration`: the real host on a Postgres container, driving registration,
+login and `PUT /api/users/{id}/role` over HTTP with tokens from the real endpoints. It covers the
+first-account-becomes-Admin bootstrap (including the race between two first registrations) and the admin-only
+role change. It is what found that every register, login and refresh had been answering 500 — the handlers'
+`IOptions<AuthOptions>` could not be constructed from a positional record — and that a numeric or
+comma-joined role string was accepted.
+
 `Tests/Gateway/GatewayTests` boots the real gateway in-process through `WebApplicationFactory<Program>`,
 stubbing only the Users introspection client and YARP's forwarder, and covers edge auth, identity-header
 propagation, the payments routes (including the ungated webhook route) and config invariants.
@@ -367,6 +479,7 @@ dotnet test Tests/Bookings/BookingApi/BookingApi.csproj
 dotnet test Tests/Bookings/BookingArchitecture/BookingArchitecture.csproj
 dotnet test Tests/Users/UsersArchitecture/UsersArchitecture.csproj
 dotnet test Tests/Users/UsersApi/UsersApi.csproj
+dotnet test Tests/Users/UsersIntegration/UsersIntegration.csproj   # needs Docker
 dotnet test Tests/Payments/PaymentArchitecture/PaymentArchitecture.csproj
 dotnet test Tests/Payments/PaymentDomain/PaymentDomain.csproj
 dotnet test Tests/Payments/PaymentIntegration/PaymentIntegration.csproj   # needs Docker
@@ -401,9 +514,8 @@ cp .env.example .env      # then set USERS_AUTH_TOKEN (e.g. openssl rand -hex 64
 docker compose up --build
 ```
 
-The first account you register becomes the admin; everyone after is a customer. On Apple Silicon the
-Cosmos emulator image compose uses has no arm64 build, so Events' store will not start — see
-[Known gaps](#-known-gaps).
+The first account you register becomes the admin; everyone after is a customer. Compose runs the
+`vnext-latest` Cosmos emulator, which has a native arm64 build, so this works on Apple Silicon too.
 
 Or run the services directly:
 
@@ -438,9 +550,9 @@ currently carries a development key; override it with user-secrets:
 dotnet user-secrets set "AuthConfigs:Token" "$(openssl rand -hex 64)" --project Users.Api
 ```
 
-Events expects the Cosmos emulator on `https://localhost:8081` — the emulator's well-known account key
-is already in `appsettings.Development.json` and is not a secret. The emulator's certificate is
-self-signed, so trust it on the host before Events can connect. Bring up just the backing stores with
+Events expects the Cosmos emulator on `http://localhost:8081`, in Gateway mode — both set in
+`appsettings.Development.json`, along with the emulator's well-known account key, which is not a secret.
+The vnext emulator serves plain http, so there is no certificate to trust. Bring up just the backing stores with
 `POSTGRES_PASSWORD=password docker compose up postgres redis rabbitmq cosmos` — the checked-in connection
 strings use the password `password`.
 
@@ -450,8 +562,7 @@ Central package management is enabled: add package versions to `Directory.Packag
 ## 🗺️ Known gaps
 
 Split two ways: not built, and deliberate. Every entry names what the code does today rather than what
-it should do — the fix is a decision, not a gap. (The "built but unproven" middle category is gone —
-everything that was in it now has a test.)
+it should do — the fix is a decision, not a gap.
 
 ### Not built
 
@@ -462,14 +573,20 @@ everything that was in it now has a test.)
   needing a refund, and a `RefundPending` booking in Bookings is still never refunded.
 - **No reconciliation job** against PSP settlement files, so a charge the service failed to record stays
   `Executing` until someone looks.
+- **A role change takes effect at the next login.** `AdminOnly` reads the role claim baked into the token,
+  never the store, so a demoted admin keeps admin access until their token expires (1 day) and a promoted
+  user must log in again. Nothing stops an admin demoting the last admin, themselves included.
 
 ### Accepted limitations
 
 Deliberate, and recorded so nobody "fixes" one without knowing what it carries.
 
-- **Compose runs the classic Cosmos emulator.** `compose.yaml` uses `azure-cosmos-emulator:latest`, which
-  is amd64-only, so on Apple Silicon Events' store does not start under `docker compose`. The test suite uses
-  `vnext-latest` (native arm64, Gateway mode over http) instead.
+- **The gateway trusts an introspection for 30 seconds.** A successful check is cached by a hash of the
+  token (`IntrospectionCache`), so a token revoked or a role changed in Users.Api keeps working at the edge
+  for up to that long. Refusals and outages are never cached.
+- **Two first registrations at once both become Admin.** The empty-table check and the insert are separate
+  statements with no guard between them — acceptable for a one-time bootstrap, and pinned by a test that
+  will turn red if a guard is ever added.
 - **The Events outbox is durable but not atomic.** `WolverineFx.CosmosDb` stores envelopes in a
   separate `wolverine` container by per-item upsert, so the message survives a crash but is not written
   in the same batch as the `events` document — a small window where the write lands and the envelope
