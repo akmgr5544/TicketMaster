@@ -51,6 +51,7 @@
   <Folder Name="/Tests/Users/">
     <Project Path="Tests/Users/UsersApi/UsersApi.csproj" />
     <Project Path="Tests/Users/UsersArchitecture/UsersArchitecture.csproj" />
+    <Project Path="Tests/Users/UsersIntegration/UsersIntegration.csproj" />
   </Folder>
   <Folder Name="/Tests/Test Items/">
     <File Path="Tests\Directory.Packages.props" />

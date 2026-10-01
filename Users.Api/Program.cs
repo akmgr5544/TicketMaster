@@ -20,7 +20,6 @@ builder.Services.AddDatabase(configuration);
 builder.Services.AddBusinessServices(configuration);
 
 var section = configuration.GetSection("AuthConfigs");
-builder.Services.Configure<AuthOptions>(section);
 var authOptions = section.Get<AuthOptions>()!;
 
 // The signing key is a secret and is intentionally not committed: supply it via user-secrets locally
@@ -28,6 +27,10 @@ var authOptions = section.Get<AuthOptions>()!;
 if (string.IsNullOrWhiteSpace(authOptions.Token))
     throw new InvalidOperationException(
         "'AuthConfigs:Token' is not configured. Set it via user-secrets or the AuthConfigs__Token environment variable.");
+
+// The bound instance, not Configure<AuthOptions>: the options factory needs a parameterless constructor, which
+// the positional record has not, so every handler taking IOptions<AuthOptions> failed to construct (a 500).
+builder.Services.AddSingleton(Microsoft.Extensions.Options.Options.Create(authOptions));
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>

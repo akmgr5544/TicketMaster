@@ -21,7 +21,11 @@ public static class SetUserRole
 
         public async Task<Result> Handle(Command request, CancellationToken cancellationToken)
         {
-            if (!Enum.TryParse<UserRole>(request.Role, ignoreCase: true, out var role))
+            // By name only: Enum.TryParse also accepts "7" and "Admin,Customer", and would store a role that is
+            // no UserRole at all.
+            if (Enum.GetValues<UserRole>().Cast<UserRole?>()
+                    .FirstOrDefault(r => string.Equals(r.ToString(), request.Role, StringComparison.OrdinalIgnoreCase))
+                is not { } role)
                 return new Error("invalid_role", ErrorType.BadRequest, $"Unknown role '{request.Role}'");
 
             var user = await _dbContext.Users.FirstOrDefaultAsync(x => x.Id == request.UserId, cancellationToken);
