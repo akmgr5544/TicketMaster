@@ -12,7 +12,9 @@ builder.Services.AddExceptionHandler<BookingsExceptionHandler>();
 builder.Services.AddInfrastructureServices(configuration);
 builder.Services.AddApplicationServices(configuration);
 
-builder.Services.AddControllers();
+// MakeBooking names its GET action as nameof(GetBookingAsync); MVC strips the suffix by default, and then
+// CreatedAtAction finds no route and answers 500 after the booking is already committed.
+builder.Services.AddControllers(options => options.SuppressAsyncSuffixInActionNames = false);
 
 // Add services to the container.
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
