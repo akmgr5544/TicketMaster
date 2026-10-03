@@ -2,6 +2,7 @@ using Events.Domain.Abstractions;
 using Events.Domain.DomainEvents;
 using Events.Domain.Enums;
 using Events.Domain.Exceptions;
+using Events.Domain.ValueObjects;
 
 namespace Events.Domain.Entities;
 
@@ -15,20 +16,29 @@ public class Event : Entity
 
     private readonly List<Performer> _performers;
 
-    public Event(DateTime startDate, Venue venue, IEnumerable<Performer> performers)
+    public Event(DateTime startDate,
+        Venue venue,
+        IEnumerable<Performer> performers,
+        TicketPrice ticketPrice,
+        Guid organizerId)
     {
         _performers = [..performers];
 
         if (_performers.Count == 0)
             throw new EventsDomainException("An event must have at least one performer");
 
+        if (organizerId == Guid.Empty)
+            throw new EventsDomainException("An event must have an organizer");
+
         Id = Guid.CreateVersion7().ToString();
         StartDate = FarEnoughOut(startDate);
         Venue = venue;
+        TicketPrice = ticketPrice;
+        OrganizerId = organizerId;
         Status = EventStatus.Scheduled;
         Version = 1;
 
-        Raise(new EventCreatedDomainEvent(Id, Version, venue.Id, StartDate, [..venue.Seats]));
+        Raise(new EventCreatedDomainEvent(Id, Version, venue.Id, StartDate, [..venue.Seats], TicketPrice, OrganizerId));
     }
 
     /// <summary>
@@ -41,6 +51,7 @@ public class Event : Entity
         _performers = [];
         Id = null!;
         Venue = null!;
+        TicketPrice = null!;
     }
 
     public string Id { get; private set; }
@@ -59,6 +70,15 @@ public class Event : Entity
     /// venue in the venues container deliberately does not rewrite this copy.
     /// </summary>
     public Venue Venue { get; private set; }
+
+    /// <summary>
+    /// Every seat sells at this price; per-category pricing would replace it. Null only on a document
+    /// written before pricing existed, and such an event's tickets cannot be sold.
+    /// </summary>
+    public TicketPrice TicketPrice { get; private set; }
+
+    /// <summary>The user who created the event, and the seller every payment for it goes to.</summary>
+    public Guid OrganizerId { get; private set; }
 
     /// <summary>Snapshots of the performers, on the same terms as <see cref="Venue"/>.</summary>
     public IReadOnlyList<Performer> Performers => _performers;
@@ -83,7 +103,7 @@ public class Event : Entity
 
         Venue = venue;
 
-        Raise(new EventRelocatedDomainEvent(Id, Bump(), venue.Id, StartDate, [..venue.Seats]));
+        Raise(new EventRelocatedDomainEvent(Id, Bump(), venue.Id, StartDate, [..venue.Seats], TicketPrice, OrganizerId));
     }
 
     public void ChangeLineup(IEnumerable<Performer> performers)

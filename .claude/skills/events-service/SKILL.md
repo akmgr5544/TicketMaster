@@ -108,6 +108,22 @@ and `Performer` deliberately do not — nothing outside this service reacts to t
    nothing and does not move the version — it is the same request arriving twice, not an error. Any
    other mutation on a cancelled event throws `EventsDomainException`.
 
+## Pricing and the organizer
+
+An `Event` carries one `TicketPrice` (a value object: positive amount, three-letter currency, upper-cased)
+and an `OrganizerId` — the user who created it, and the seller every payment for it goes to. Both are set at
+creation and nothing changes them yet.
+
+- **The organizer comes from `X-Identity-UserId`, never the body.** `EventsController.CreateEventAsync`
+  reads the header and overwrites `CreateEventCommand.OrganizerId`; no header is a 401. This is the one place
+  Events reads identity. A body naming somebody else must not make them the payee (pinned in
+  `EventsIntegration`'s `CreateEndpointTests`).
+- **`EventCreated` and `EventRelocated` both carry them** as one optional `EventPricing` — relocation
+  too, because Bookings creates tickets for the seats a relocation adds. The gRPC `GetEventReply` carries
+  the same, with the price as an invariant-culture decimal string (proto3 has no decimal).
+- **A document written before pricing existed loads with a null `TicketPrice`.** The translator then
+  publishes no pricing and Bookings' tickets for it are unsellable. Do not "fix" that by inventing a price.
+
 ## Data model and the embedding decision
 
 An `Event` embeds its `Venue` in full and its `Performer` list in full. `Venue` and `Performer`

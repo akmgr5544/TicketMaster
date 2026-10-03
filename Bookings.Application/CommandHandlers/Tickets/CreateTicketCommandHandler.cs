@@ -44,7 +44,8 @@ internal sealed class CreateTicketCommandHandler : IRequestHandler<CreateTicketC
             request.VenueId,
             request.EventId,
             request.EventDate,
-            await _ticketsRepository.GetAppliedVersionForEventAsync(request.EventId, cancellationToken));
+            await _ticketsRepository.GetAppliedVersionForEventAsync(request.EventId, cancellationToken),
+            @event.Pricing);
 
         await _ticketsRepository.AddTicketAsync(ticket, cancellationToken);
         await _ticketsRepository.SaveChangesAsync(cancellationToken);

@@ -16,7 +16,7 @@ public sealed class StubEventsService : IEventsService
     public Exception? Fails { get; set; }
 
     public void Knows(string eventId, string venueId, params string[] seats) =>
-        _catalogue[eventId] = new EventDto(eventId, new VenueDto(venueId, $"{venueId} name", seats));
+        _catalogue[eventId] = new EventDto(eventId, new VenueDto(venueId, $"{venueId} name", seats), Seed.Pricing);
 
     public Task<EventDto?> GetEventByIdAsync(string id, CancellationToken cancellationToken)
     {

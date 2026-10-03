@@ -1,4 +1,5 @@
 using Bookings.Domain.Abstractions;
+using Bookings.Domain.Entities;
 using MediatR;
 
 namespace Bookings.Application.Commands;
@@ -12,4 +13,5 @@ public record ReconcileEventVenueCommand(string EventId,
     long Version,
     string VenueId,
     DateTime StartDate,
-    string[] Seats) : IRequest, ITransactionalRequest;
+    string[] Seats,
+    TicketPricing? Pricing = null) : IRequest, ITransactionalRequest;

@@ -1,10 +1,13 @@
 using Bookings.Application.Commands;
 using Bookings.Application.Commands.Payments;
 using Bookings.Application.Commands.Tickets;
+using Bookings.Application.IntegrationEventHandlers;
+using Bookings.Domain.Entities;
 using Bookings.Domain.Enums;
 using Bookings.Sql;
 using BookingIntegration.Fixtures;
 using Microsoft.EntityFrameworkCore;
+using TicketMaster.Common.IntegrationEvents;
 
 namespace BookingIntegration.Handlers;
 
@@ -292,6 +295,52 @@ public sealed class EventSyncTests : IntegrationTest
         Assert.Equal(BookingStatus.RefundPending, stored.Status);
     }
 
+    // --- Pricing ---
+
+    [Fact]
+    public async Task Tickets_created_from_the_catalogue_carry_its_price_and_seller()
+    {
+        var organizer = Guid.CreateVersion7();
+
+        await new EventCreatedIntegrationEventHandler(Sender).Consume(
+            new EventCreatedIntegrationEvent(EventId, NewVenue, Seed.Soon, ["A1", "A2"], 1,
+                new EventPricing(30m, "EUR", organizer)),
+            CancellationToken.None);
+
+        var stored = await ReadAsync(context => context.Tickets.Where(t => t.EventId == EventId).ToArrayAsync());
+        Assert.Equal(2, stored.Length);
+        Assert.All(stored, ticket => Assert.Equal(new TicketPricing(30m, "EUR", organizer), ticket.Pricing));
+    }
+
+    // A message from before Events had pricing still creates the seats, so inventory is right, but unpriced —
+    // and an unpriced ticket is not on sale.
+    [Fact]
+    public async Task Tickets_created_from_a_message_without_pricing_are_unpriced()
+    {
+        await new EventCreatedIntegrationEventHandler(Sender).Consume(
+            new EventCreatedIntegrationEvent(EventId, NewVenue, Seed.Soon, ["A1"], 1),
+            CancellationToken.None);
+
+        var stored = await ReadAsync(context => context.Tickets.SingleAsync(t => t.EventId == EventId));
+        Assert.Null(stored.Pricing);
+        Assert.False(stored.IsAvailableFor(EventId, DateTime.UtcNow));
+    }
+
+    [Fact]
+    public async Task Seats_a_relocation_adds_are_priced_from_the_message()
+    {
+        var organizer = Guid.CreateVersion7();
+        await Seed.TicketsAsync(EventId, Seed.Soon, eventVersion: 1, "A1");
+
+        await new EventRelocatedIntegrationEventHandler(Sender).Consume(
+            new EventRelocatedIntegrationEvent(EventId, 2, NewVenue, Seed.Soon, ["A1", "B1"],
+                new EventPricing(30m, "EUR", organizer)),
+            CancellationToken.None);
+
+        var added = await ReadAsync(context => context.Tickets.SingleAsync(t => t.EventId == EventId && t.Seat == "B1"));
+        Assert.Equal(new TicketPricing(30m, "EUR", organizer), added.Pricing);
+    }
+
     private Task Reconcile(DateTime eventDate, long version, string[] seats) =>
-        Sender.Send(new ReconcileEventVenueCommand(EventId, version, NewVenue, eventDate, seats));
+        Sender.Send(new ReconcileEventVenueCommand(EventId, version, NewVenue, eventDate, seats, Seed.Pricing));
 }

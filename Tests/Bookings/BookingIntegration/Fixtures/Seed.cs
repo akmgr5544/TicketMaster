@@ -24,19 +24,30 @@ public sealed class Seed
     /// <summary>Outside Ticket.SaleGracePeriod, so the seat is no longer sellable.</summary>
     public static DateTime LongPast => DateTime.UtcNow.AddHours(-6);
 
+    public static readonly Guid Seller = Guid.Parse("0199a000-0000-7000-8000-00000000beef");
+
+    public static readonly TicketPricing Pricing = new(25m, "USD", Seller);
+
     public Task<Ticket[]> TicketsAsync(string eventId, params string[] seats) =>
         TicketsAsync(eventId, Soon, eventVersion: 0, seats);
+
+    public Task<Ticket[]> TicketsAsync(string eventId,
+        DateTime eventDate,
+        long eventVersion,
+        params string[] seats) =>
+        TicketsAsync(eventId, eventDate, eventVersion, Pricing, seats);
 
     public async Task<Ticket[]> TicketsAsync(string eventId,
         DateTime eventDate,
         long eventVersion,
+        TicketPricing? pricing,
         params string[] seats)
     {
         await using var scope = _root.CreateAsyncScope();
         var context = scope.ServiceProvider.GetRequiredService<BookingDomainContext>();
 
         var tickets = seats
-            .Select(seat => new Ticket(seat, $"venue-for-{eventId}", eventId, eventDate, eventVersion))
+            .Select(seat => new Ticket(seat, $"venue-for-{eventId}", eventId, eventDate, eventVersion, pricing))
             .ToArray();
 
         context.Tickets.AddRange(tickets);
@@ -44,6 +55,10 @@ public sealed class Seed
 
         return tickets;
     }
+
+    /// <summary>Tickets created from a message sent before Events had pricing — not on sale.</summary>
+    public Task<Ticket[]> UnpricedTicketsAsync(string eventId, params string[] seats) =>
+        TicketsAsync(eventId, Soon, eventVersion: 0, pricing: null, seats);
 
     /// <summary>Tickets that exist but are cancelled — what reconciliation treats as uncovered.</summary>
     public async Task<Ticket[]> CancelledTicketsAsync(string eventId, params string[] seats)
@@ -54,7 +69,7 @@ public sealed class Seed
         var tickets = seats
             .Select(seat =>
             {
-                var ticket = new Ticket(seat, $"venue-for-{eventId}", eventId, Soon);
+                var ticket = new Ticket(seat, $"venue-for-{eventId}", eventId, Soon, pricing: Pricing);
                 ticket.Cancel(eventVersion: 1);
                 return ticket;
             })

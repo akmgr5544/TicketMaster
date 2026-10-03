@@ -44,7 +44,7 @@ public sealed class TransactionBehaviorTests : IntegrationTest
 
     private Task AddATicketAsync()
     {
-        Context.Tickets.Add(new Ticket("A1", "venue-1", "event-1", Seed.Soon));
+        Context.Tickets.Add(new Ticket("A1", "venue-1", "event-1", Seed.Soon, pricing: Seed.Pricing));
         return Context.SaveChangesAsync();
     }
 

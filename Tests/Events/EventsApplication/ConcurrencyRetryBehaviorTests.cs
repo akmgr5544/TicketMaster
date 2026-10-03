@@ -163,7 +163,8 @@ public class ConcurrencyRetryBehaviorTests
             new GeoLocation(40.1872, 44.5152),
             ["A1"]);
 
-        var @event = new Event(DateTime.UtcNow.AddDays(11), venue, [new Performer("System of a Down", "Band")]);
+        var @event = new Event(DateTime.UtcNow.AddDays(11), venue, [new Performer("System of a Down", "Band")],
+            new TicketPrice(25m, "USD"), Guid.CreateVersion7());
         @event.ClearDomainEvents();
         _events.Seed(@event);
 

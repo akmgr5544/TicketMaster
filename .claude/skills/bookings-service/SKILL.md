@@ -313,8 +313,11 @@ Wolverine's `DbContextOutbox` on the transaction already open, and `Interceptors
 sends it once that transaction commits and drops it on rollback — `IDbContextOutbox.SaveChangesAndFlushMessagesAsync`
 is not used because it commits the transaction itself, i.e. `TransactionBehavior`'s, early. Registered by
 `AddIntegrationEventOutbox()` in `Program.cs` only; `BookingsFixture` records instead. Amount, currency
-and seller come from `Services/PaymentPricing`, a placeholder (`50` USD a ticket, seller hashed from the
-event id) until real pricing exists.
+and seller come from the tickets themselves: each `Ticket` carries a `TicketPricing` (price, currency,
+seller — an EF optional complex type over three nullable columns) copied from `EventCreated` /
+`EventRelocated`, or from the gRPC reply on the admin repair path. `MakeBookingCommandHandler` sums the
+prices and refuses a mix of sellers or currencies. A ticket with no pricing — created from a message sent
+before Events had any — fails `IsAvailableFor`, so it is refused at reservation, not after.
 
 | Contract | Effect |
 |---|---|
@@ -369,8 +372,9 @@ non-durable. Fixed: `ServiceCollectionExtension` now calls all three —
   The Events copy has the same latent trap and passes only because Events has no generic handlers.
 - The architecture suite is green. There is no longer a set of expected failures to look past, so a
   red test means something actually broke.
-- Pricing is a placeholder (`PaymentPricing`): a flat per-ticket amount and a seller derived from the
-  event id, because Bookings owns neither. Real pricing upstream is out of scope.
+- A surviving ticket keeps the pricing it was created with when its event relocates; only seats the
+  relocation adds take the message's pricing. Nothing changes an event's price today, so this only matters
+  for tickets that were unpriced before pricing existed — they stay unsellable.
 - A command that queues after-commit work cannot be sent from a Wolverine message handler: the
   behavior does not own that transaction, so it logs a warning and drops the work — it does **not**
   throw (`TransactionBehavior.DeferToTheOwnerAsync`), which is what rule 17 above says. Only

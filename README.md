@@ -152,7 +152,8 @@ The gateway requires an authenticated caller on `/bookings-service/**`, `/events
 `/payments-service/**` (except PSP webhooks), checked by calling Users.Api's `GET api/users/auth`;
 `/users-service/**` is not gated. It forwards the resolved identity downstream as `X-Identity-UserId` /
 `X-Identity-UserName` / `X-Identity-Role` headers — Bookings and PaymentSystem read identity from those
-rather than re-validating the token; Events does not use identity at all. Two actions are admin-gated:
+rather than re-validating the token; Events reads `X-Identity-UserId` only to make an event's creator its
+organizer, the seller every payment for it goes to. Two actions are admin-gated:
 `POST /api/tickets`, which Bookings refuses (403) unless the role header says `Admin`, and
 `PUT /api/users/{id}/role`, which Users.Api checks against the caller's role in its own store — not the
 token's role claim — so a promotion or demotion applies on the next request. The last admin cannot be
@@ -195,7 +196,7 @@ Events deliberately differ:
 ```
 GET    /api/events                    # cursor-paged
 GET    /api/events/{id}
-POST   /api/events                    # 201 + { id }
+POST   /api/events                    # 201 + { id }; body carries ticketPrice + currency, caller becomes organizer
 PUT    /api/events/{id}/schedule      # reschedule
 PUT    /api/events/{id}/venue         # relocate — reconciles tickets downstream
 PUT    /api/events/{id}/lineup        # change performers
@@ -583,9 +584,10 @@ it should do — the fix is a decision, not a gap.
 
 ### Not built
 
-- **Ticket prices are placeholders.** Neither Events nor Bookings has a price or a seller, so Bookings
-  sends `$50 × tickets` in USD and a seller derived from the event id (`PaymentPricing`). Payments treats the
-  request's amount as authoritative, so it is correct the moment real pricing exists upstream.
+- **One price per event, fixed at creation.** An event has a single ticket price and currency, and its
+  creator is the organizer every payment goes to. There are no seat categories, and nothing changes a price
+  or the organizer after creation. An event created before pricing existed has none: its tickets are unpriced
+  and cannot be reserved.
 - **No refunds.** Payments is pay-in only. A booking cancelled after its payment succeeded is logged as
   needing a refund, a PSP success that lands after the cancellation is logged as needing reconciling, and a
   `RefundPending` booking in Bookings is still never refunded. In every case the money stays taken.
@@ -638,12 +640,11 @@ Deliberate, and recorded so nobody "fixes" one without knowing what it carries.
   concurrency token, so two orders crediting the same seller's wallet at once make one of them lose with a
   409; a webhook is then redelivered by the PSP and settles, and the synchronous Braintree path falls into
   the case above. (Two settlements creating a seller's *first* wallet do not conflict: the one that loses on
-  the unique index credits the winner's wallet in the same transaction.) With the placeholder seller
-  derived from the event id, every payment for one event shares a wallet.
+  the unique index credits the winner's wallet in the same transaction.) The seller is the event's
+  organizer, so every payment for one organizer's events shares a wallet.
 
 ## 🗺️ Roadmap
 
-- Real ticket pricing and sellers in Events, replacing Bookings' `PaymentPricing` placeholder
 - Refunds and notifications — for a `RefundPending` booking and for a booking cancelled after payment
 - Reconciliation against PSP settlement files, beyond the per-order lookup `ReconcileOrdersJob` does
 - Saga / process-manager work for the full booking flow in Wolverine

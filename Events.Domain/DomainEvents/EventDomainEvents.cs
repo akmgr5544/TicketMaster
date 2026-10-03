@@ -1,4 +1,5 @@
 using Events.Domain.Abstractions;
+using Events.Domain.ValueObjects;
 
 namespace Events.Domain.DomainEvents;
 
@@ -16,17 +17,25 @@ public record EventCreatedDomainEvent(string EventId,
     long Version,
     string VenueId,
     DateTime StartDate,
-    IReadOnlyList<string> Seats) : IDomainEvent;
+    IReadOnlyList<string> Seats,
+    TicketPrice? TicketPrice,
+    Guid OrganizerId) : IDomainEvent;
 
 public record EventRescheduledDomainEvent(string EventId,
     long Version,
     DateTime StartDate) : IDomainEvent;
 
+/// <summary>
+/// Carries the price and organizer although a relocation changes neither: the consumer creates tickets
+/// for seats the new venue adds, and a ticket cannot be sold without them.
+/// </summary>
 public record EventRelocatedDomainEvent(string EventId,
     long Version,
     string VenueId,
     DateTime StartDate,
-    IReadOnlyList<string> Seats) : IDomainEvent;
+    IReadOnlyList<string> Seats,
+    TicketPrice? TicketPrice,
+    Guid OrganizerId) : IDomainEvent;
 
 /// <summary>
 /// Raised for completeness of the aggregate's history. It has no integration contract, because

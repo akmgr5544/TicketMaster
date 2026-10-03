@@ -1,4 +1,5 @@
 using Bookings.Domain.Abstractions;
+using Bookings.Domain.Entities;
 using MediatR;
 
 namespace Bookings.Application.Commands.Tickets;
@@ -8,4 +9,5 @@ public record CreateTicketsBulkCommand(
     string VenueId,
     DateTime EventDate,
     string[] Seats,
-    long Version):IRequest, ITransactionalRequest;
+    long Version,
+    TicketPricing? Pricing = null):IRequest, ITransactionalRequest;

@@ -11,5 +11,12 @@ public class TicketConfiguration : IEntityTypeConfiguration<Ticket>
         builder.ToTable("Tickets");
         builder.HasKey(p => p.Id);
         builder.Property(p => p.Id).ValueGeneratedOnAdd();
+
+        builder.ComplexProperty(p => p.Pricing, pricing =>
+        {
+            pricing.Property(p => p.Price).HasColumnName("Price").HasPrecision(18, 2);
+            pricing.Property(p => p.Currency).HasColumnName("Currency").HasMaxLength(3);
+            pricing.Property(p => p.SellerId).HasColumnName("SellerId");
+        });
     }
 }

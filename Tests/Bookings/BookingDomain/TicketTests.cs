@@ -12,8 +12,19 @@ namespace BookingDomain;
 /// </summary>
 public class TicketTests
 {
-    private static Ticket ATicket(long eventVersion = 1) =>
-        new("A1", "venue-1", "event-1", new DateTime(2030, 1, 1, 20, 0, 0, DateTimeKind.Utc), eventVersion);
+    private static readonly TicketPricing APrice = new(25m, "USD", Guid.CreateVersion7());
+
+    private static Ticket ATicket(long eventVersion = 1, TicketPricing? pricing = null) =>
+        new("A1", "venue-1", "event-1", new DateTime(2030, 1, 1, 20, 0, 0, DateTimeKind.Utc), eventVersion,
+            pricing ?? APrice);
+
+    [Fact]
+    public void An_unpriced_ticket_is_not_available()
+    {
+        var unpriced = new Ticket("A1", "venue-1", "event-1", new DateTime(2030, 1, 1, 20, 0, 0, DateTimeKind.Utc));
+
+        Assert.False(unpriced.IsAvailableFor("event-1", new DateTime(2029, 12, 1, 0, 0, 0, DateTimeKind.Utc)));
+    }
 
     [Fact]
     public void Remembers_the_event_version_it_was_created_from()

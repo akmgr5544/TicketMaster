@@ -1,5 +1,6 @@
 using Events.Domain.Abstractions;
 using Events.Domain.DomainEvents;
+using Events.Domain.ValueObjects;
 using TicketMaster.Common.IntegrationEvents;
 
 namespace Events.Application.IntegrationEvents;
@@ -26,17 +27,23 @@ public static class IntegrationEventTranslator
     private static object? Translate(IDomainEvent domainEvent) => domainEvent switch
     {
         EventCreatedDomainEvent e =>
-            new EventCreatedIntegrationEvent(e.EventId, e.VenueId, e.StartDate, [..e.Seats], e.Version),
+            new EventCreatedIntegrationEvent(e.EventId, e.VenueId, e.StartDate, [..e.Seats], e.Version,
+                PricingOf(e.TicketPrice, e.OrganizerId)),
 
         EventRescheduledDomainEvent e =>
             new EventRescheduledIntegrationEvent(e.EventId, e.Version, e.StartDate),
 
         EventRelocatedDomainEvent e =>
-            new EventRelocatedIntegrationEvent(e.EventId, e.Version, e.VenueId, e.StartDate, [..e.Seats]),
+            new EventRelocatedIntegrationEvent(e.EventId, e.Version, e.VenueId, e.StartDate, [..e.Seats],
+                PricingOf(e.TicketPrice, e.OrganizerId)),
 
         EventCancelledDomainEvent e =>
             new EventCancelledIntegrationEvent(e.EventId, e.Version),
 
         _ => null
     };
+
+    // Null for an event stored before pricing existed; Bookings then creates its tickets unpriced and unsellable.
+    private static EventPricing? PricingOf(TicketPrice? price, Guid organizerId) =>
+        price is null ? null : new EventPricing(price.Amount, price.Currency, organizerId);
 }

@@ -39,7 +39,8 @@ public sealed class Seed
         venue ??= await VenueAsync();
         performer ??= await PerformerAsync();
 
-        var @event = new Event(startDate ?? SoonEnough, venue, [performer]);
+        var @event = new Event(startDate ?? SoonEnough, venue, [performer], new TicketPrice(25m, "USD"),
+            Guid.CreateVersion7());
         await InScopeAsync((IEventRepository repo, CancellationToken ct) => repo.AddEventAsync(@event, ct));
         return @event;
     }

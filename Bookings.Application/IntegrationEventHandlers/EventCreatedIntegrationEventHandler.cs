@@ -20,7 +20,8 @@ public class EventCreatedIntegrationEventHandler
             request.VenueId,
             request.EventDate,
             request.Seats,
-            request.Version);
+            request.Version,
+            request.Pricing.ToTicketPricing());
         await _mediator.Send(command, cancellationToken);
     }
 }

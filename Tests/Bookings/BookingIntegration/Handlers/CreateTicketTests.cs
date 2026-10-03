@@ -38,6 +38,8 @@ public sealed class CreateTicketTests : IntegrationTest
         Assert.Equal(Venue, stored.VenueId);
         Assert.Equal(eventDate, stored.EventDate);
         Assert.Equal(TicketStatus.None, stored.Status);
+        // Priced from the catalogue, so a repaired seat is sellable like its siblings.
+        Assert.Equal(Seed.Pricing, stored.Pricing);
     }
 
     /// <summary>

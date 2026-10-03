@@ -1,3 +1,4 @@
+using System.Globalization;
 using Events.Application.Queries;
 using Grpc.Core;
 using MediatR;
@@ -28,7 +29,15 @@ internal sealed class EventsLookupService : EventsLookup.EventsLookupBase
                 Id = @event.Venue.Id,
                 Name = @event.Venue.Name,
                 Seats = { @event.Venue.Seats }
-            }
+            },
+            Pricing = @event is { TicketPrice: { } price, Currency: { } currency }
+                ? new Pricing
+                {
+                    TicketPrice = price.ToString(CultureInfo.InvariantCulture),
+                    Currency = currency,
+                    OrganizerId = @event.OrganizerId.ToString()
+                }
+                : null
         };
     }
 }

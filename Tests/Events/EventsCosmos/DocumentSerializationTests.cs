@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Events.Cosmos.Serialization;
 using Events.Domain.Entities;
 using Events.Domain.ValueObjects;
@@ -71,7 +72,7 @@ public class DocumentSerializationTests
     [Fact]
     public void Event_survives_a_round_trip_with_its_embedded_snapshots()
     {
-        var @event = new Event(DateTime.UtcNow.AddDays(11), AVenue(), [APerformer()]);
+        var @event = AnEvent();
 
         var loaded = RoundTrip(@event);
 
@@ -79,7 +80,27 @@ public class DocumentSerializationTests
         Assert.Equal(@event.Venue.Id, loaded.Venue.Id);
         Assert.Equal(@event.Venue.Seats, loaded.Venue.Seats);
         Assert.Equal(@event.Performers.Single().Id, loaded.Performers.Single().Id);
+        Assert.Equal(@event.TicketPrice, loaded.TicketPrice);
+        Assert.Equal(@event.OrganizerId, loaded.OrganizerId);
     }
+
+    // A document written before pricing existed has no ticketPrice. It must still load — as an unpriced event,
+    // whose tickets Bookings will not sell — rather than fail every read of the old catalogue.
+    [Fact]
+    public void Event_written_before_pricing_existed_loads_unpriced()
+    {
+        var json = JsonNode.Parse(JsonSerializer.Serialize(AnEvent(), Options))!.AsObject();
+        json.Remove("ticketPrice");
+        json.Remove("organizerId");
+
+        var loaded = json.Deserialize<Event>(Options)!;
+
+        Assert.Null(loaded.TicketPrice);
+        Assert.Equal(Guid.Empty, loaded.OrganizerId);
+    }
+
+    private static Event AnEvent() =>
+        new(DateTime.UtcNow.AddDays(11), AVenue(), [APerformer()], new TicketPrice(49.99m, "USD"), Guid.CreateVersion7());
 
     /// <summary>
     /// Domain events are in-memory bookkeeping, not persisted state. They must not reach the
@@ -89,7 +110,7 @@ public class DocumentSerializationTests
     [Fact]
     public void Event_does_not_write_its_domain_events_to_the_document()
     {
-        var @event = new Event(DateTime.UtcNow.AddDays(11), AVenue(), [APerformer()]);
+        var @event = AnEvent();
 
         var json = JsonSerializer.Serialize(@event, Options);
 
@@ -105,7 +126,7 @@ public class DocumentSerializationTests
     [Fact]
     public void Event_status_is_written_as_a_name()
     {
-        var @event = new Event(DateTime.UtcNow.AddDays(11), AVenue(), [APerformer()]);
+        var @event = AnEvent();
         @event.Cancel();
 
         using var document = JsonDocument.Parse(JsonSerializer.Serialize(@event, Options));
@@ -116,7 +137,7 @@ public class DocumentSerializationTests
     [Fact]
     public void Event_round_trip_keeps_its_status_and_version()
     {
-        var @event = new Event(DateTime.UtcNow.AddDays(11), AVenue(), [APerformer()]);
+        var @event = AnEvent();
         @event.Reschedule(DateTime.UtcNow.AddDays(30));
 
         var loaded = RoundTrip(@event);

@@ -15,11 +15,13 @@ namespace TicketMaster.Common.IntegrationEvents;
 /// <paramref name="StartDate"/> is unchanged by a relocation, but it is carried anyway: reconciling
 /// means creating tickets for seats the new venue has and the old one did not, and a ticket cannot be
 /// created without it. Leaving it out would force the consumer to call back into Events for a fact
-/// the producer already had.
+/// the producer already had. <paramref name="Pricing"/> is carried for the same reason, and defaulted so
+/// a message from before pricing existed still deserializes.
 /// </remarks>
 public record EventRelocatedIntegrationEvent(
     string EventId,
     long Version,
     string VenueId,
     DateTime StartDate,
-    string[] Seats);
+    string[] Seats,
+    EventPricing? Pricing = null);

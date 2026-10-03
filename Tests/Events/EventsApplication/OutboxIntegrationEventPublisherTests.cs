@@ -28,7 +28,8 @@ public class OutboxIntegrationEventPublisherTests
 
     private static Performer APerformer() => new("System of a Down", "Armenian-American rock band");
 
-    private static Event AnEvent() => new(DateTime.UtcNow.AddDays(11), AVenue(), [APerformer()]);
+    private static Event AnEvent() =>
+        new(DateTime.UtcNow.AddDays(11), AVenue(), [APerformer()], new TicketPrice(25m, "USD"), Guid.CreateVersion7());
 
     [Fact]
     public async Task Stages_translated_contracts_and_clears_the_aggregate()

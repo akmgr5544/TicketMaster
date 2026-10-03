@@ -7,14 +7,28 @@ namespace Bookings.Domain.Entities;
 
 public sealed class Ticket : Entity, IAggregateRoot
 {
-    public Ticket(string seat, string venueId, string eventId, DateTime eventDate, long eventVersion = 0)
+    public Ticket(string seat,
+        string venueId,
+        string eventId,
+        DateTime eventDate,
+        long eventVersion = 0,
+        TicketPricing? pricing = null)
     {
         Seat = seat;
         VenueId = venueId;
         EventId = eventId;
         EventDate = eventDate;
         EventVersion = eventVersion;
+        Pricing = pricing;
         Status = TicketStatus.None;
+    }
+
+    // For EF: a complex property cannot be bound through a constructor parameter.
+    private Ticket()
+    {
+        Seat = null!;
+        VenueId = null!;
+        EventId = null!;
     }
 
     public long Id { get; set; }
@@ -26,12 +40,18 @@ public sealed class Ticket : Entity, IAggregateRoot
 
     public long EventVersion { get; set; }
 
+    /// <summary>Null for a ticket created from a message sent before Events had pricing.</summary>
+    public TicketPricing? Pricing { get; private set; }
+
     public static readonly TimeSpan SaleGracePeriod = TimeSpan.FromHours(5);
 
     public static DateTime SaleWindowStart(DateTime utcNow) => utcNow - SaleGracePeriod;
 
+    // An unpriced ticket is not on sale: there is nothing to charge and nobody to pay. Refused here, so it is
+    // refused at reservation rather than after a reservation has held it.
     public bool IsAvailableFor(string eventId, DateTime utcNow) =>
         Status == TicketStatus.None
+        && Pricing is not null
         && EventId == eventId
         && EventDate > SaleWindowStart(utcNow);
 

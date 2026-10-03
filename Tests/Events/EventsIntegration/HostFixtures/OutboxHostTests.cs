@@ -2,6 +2,7 @@ using Events.Application.Commands;
 using EventsIntegration.Fixtures;
 using MediatR;
 using Microsoft.Extensions.DependencyInjection;
+using TicketMaster.Common.IntegrationEvents;
 using Wolverine.Runtime;
 
 namespace EventsIntegration.HostFixtures;
@@ -37,7 +38,11 @@ public sealed class OutboxHostTests
 
         Assert.Equal(eventId, relayed.EventId);
         Assert.Equal(seats, relayed.Seats);
+        // The nested pricing record has to survive the envelope serializer too, or Bookings gets unsellable tickets.
+        Assert.Equal(new EventPricing(49.99m, "USD", Organizer), relayed.Pricing);
     }
+
+    private static readonly Guid Organizer = Guid.CreateVersion7();
 
     // Seeds a venue and performer directly, then drives the real create-event command so the handler
     // stages EventCreated through the production outbox seam. Returns what the relayed message must
@@ -53,7 +58,10 @@ public sealed class OutboxHostTests
 
         var eventId = await sender.Send(new CreateEventCommand(DateTime.UtcNow.AddDays(14),
             venue.Id,
-            [performer.Id]));
+            [performer.Id],
+            49.99m,
+            "USD",
+            Organizer));
 
         return (eventId, [..venue.Seats]);
     }

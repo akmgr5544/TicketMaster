@@ -27,9 +27,11 @@ public class EventHandlerTests
 
     private static DateTime FarEnoughOut => DateTime.UtcNow.AddDays(11);
 
+    private static readonly Guid AnOrganizer = Guid.CreateVersion7();
+
     private Event AnEvent()
     {
-        var @event = new Event(FarEnoughOut, AVenue(), [APerformer()]);
+        var @event = new Event(FarEnoughOut, AVenue(), [APerformer()], new TicketPrice(25m, "USD"), AnOrganizer);
         @event.ClearDomainEvents();
         _events.Seed(@event);
         return @event;
@@ -90,7 +92,7 @@ public class EventHandlerTests
         _performers.Seed(performer);
 
         var id = await new CreateEventCommandHandler(_events, _venues, _performers, _publisher).Handle(
-            new CreateEventCommand(FarEnoughOut, venue.Id, [performer.Id]),
+            new CreateEventCommand(FarEnoughOut, venue.Id, [performer.Id], 49.99m, "usd", AnOrganizer),
             CancellationToken.None);
 
         Assert.False(string.IsNullOrWhiteSpace(id));
@@ -100,6 +102,25 @@ public class EventHandlerTests
         Assert.Equal(venue.Id, published.VenueId);
         Assert.Equal(["A1", "A2"], published.Seats);
         Assert.Equal(1, published.Version);
+        Assert.Equal(new EventPricing(49.99m, "USD", AnOrganizer), published.Pricing);
+    }
+
+    [Fact]
+    public async Task Create_refuses_an_invalid_price_and_announces_nothing()
+    {
+        var venue = AVenue("A1");
+        _venues.Seed(venue);
+        var performer = APerformer();
+        _performers.Seed(performer);
+
+        var handler = new CreateEventCommandHandler(_events, _venues, _performers, _publisher);
+
+        await Assert.ThrowsAsync<EventsDomainException>(() =>
+            handler.Handle(new CreateEventCommand(FarEnoughOut, venue.Id, [performer.Id], 0m, "USD", AnOrganizer),
+                CancellationToken.None));
+
+        Assert.Empty(_events.Added);
+        Assert.Empty(_publisher.Published);
     }
 
     [Fact]
@@ -114,7 +135,8 @@ public class EventHandlerTests
 
         // Two ids requested, only one exists: the missing one must be reported, not silently dropped.
         await Assert.ThrowsAsync<NotFoundException>(() =>
-            handler.Handle(new CreateEventCommand(FarEnoughOut, venue.Id, [performer.Id, "missing"]),
+            handler.Handle(
+                new CreateEventCommand(FarEnoughOut, venue.Id, [performer.Id, "missing"], 25m, "USD", AnOrganizer),
                 CancellationToken.None));
 
         Assert.Empty(_events.Added);
@@ -185,6 +207,7 @@ public class EventHandlerTests
         Assert.Equal(destination.Id, published.VenueId);
         Assert.Equal(["B1", "B2"], published.Seats);
         Assert.Equal(2, published.Version);
+        Assert.Equal(new EventPricing(25m, "USD", AnOrganizer), published.Pricing);
     }
 
     [Fact]

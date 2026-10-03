@@ -29,11 +29,13 @@ public sealed class GrpcErrorRoundTripTests
     }
 
     [Fact]
-    public async Task A_found_event_round_trips_its_venue_and_seats()
+    public async Task A_found_event_round_trips_its_venue_seats_and_pricing()
     {
         await using var host = await GrpcSeamHost.StartAsync();
         var venue = new Venue("The Forum", "1 Main St", new GeoLocation(40, -70), ["A1", "A2"]);
-        var @event = new Event(DateTime.UtcNow.AddDays(14), venue, [new Performer("Headliner", "headliner")]);
+        var organizer = Guid.CreateVersion7();
+        var @event = new Event(DateTime.UtcNow.AddDays(14), venue, [new Performer("Headliner", "headliner")],
+            new TicketPrice(1234.56m, "EUR"), organizer);
         host.Repository.Returns(@event);
 
         var result = await host.Client.GetEventByIdAsync(@event.Id, CancellationToken.None);
@@ -42,6 +44,11 @@ public sealed class GrpcErrorRoundTripTests
         Assert.Equal(@event.Id, result!.Id);
         Assert.Equal("The Forum", result.Venue.Name);
         Assert.Equal(["A1", "A2"], result.Venue.Seats);
+        // Sent as a decimal string, so an exact amount must come back exact, not rounded through a double.
+        Assert.NotNull(result.Pricing);
+        Assert.Equal(1234.56m, result.Pricing!.Price);
+        Assert.Equal("EUR", result.Pricing.Currency);
+        Assert.Equal(organizer, result.Pricing.SellerId);
     }
 
     [Fact]

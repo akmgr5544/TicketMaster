@@ -1,6 +1,8 @@
+using System.Globalization;
 using Bookings.Application.Dtos.EventsServiceDtos;
 using Bookings.Application.Exceptions;
 using Bookings.Application.Services.Interfaces;
+using Bookings.Domain.Entities;
 using Grpc.Core;
 using TicketMaster.Common.Protos.Events.V1;
 
@@ -31,7 +33,9 @@ internal sealed class EventsService : IEventsService
             if (reply.Venue is null)
                 return null;
 
-            return new EventDto(reply.Id, new VenueDto(reply.Venue.Id, reply.Venue.Name, [..reply.Venue.Seats]));
+            return new EventDto(reply.Id,
+                new VenueDto(reply.Venue.Id, reply.Venue.Name, [..reply.Venue.Seats]),
+                PricingOf(reply.Pricing));
         }
         catch (RpcException exception) when (exception.StatusCode == StatusCode.NotFound)
         {
@@ -45,4 +49,12 @@ internal sealed class EventsService : IEventsService
                 $"The events service could not answer for '{id}' ({exception.StatusCode}).");
         }
     }
+
+    // Absent pricing, or pricing that does not parse, yields an unpriced ticket — unsellable, not a guess.
+    private static TicketPricing? PricingOf(Pricing? pricing) =>
+        pricing is not null
+        && decimal.TryParse(pricing.TicketPrice, NumberStyles.Number, CultureInfo.InvariantCulture, out var price)
+        && Guid.TryParse(pricing.OrganizerId, out var sellerId)
+            ? new TicketPricing(price, pricing.Currency, sellerId)
+            : null;
 }

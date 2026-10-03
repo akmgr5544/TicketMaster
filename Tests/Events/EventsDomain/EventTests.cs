@@ -18,12 +18,16 @@ public class EventTests
 
     private static DateTime FarEnoughOut => DateTime.UtcNow.AddDays(11);
 
-    private static Event AnEvent() => new(FarEnoughOut, AVenue(), [APerformer()]);
+    private static readonly TicketPrice APrice = new(49.99m, "USD");
+
+    private static readonly Guid AnOrganizer = Guid.CreateVersion7();
+
+    private static Event AnEvent() => new(FarEnoughOut, AVenue(), [APerformer()], APrice, AnOrganizer);
 
     [Fact]
     public void Generates_its_own_id_on_creation()
     {
-        var @event = new Event(FarEnoughOut, AVenue(), [APerformer()]);
+        var @event = AnEvent();
 
         Assert.False(string.IsNullOrWhiteSpace(@event.Id));
     }
@@ -31,19 +35,28 @@ public class EventTests
     [Fact]
     public void Rejects_a_start_date_inside_the_minimum_lead_time()
     {
-        Assert.Throws<EventsDomainException>(() => new Event(DateTime.UtcNow.AddDays(9), AVenue(), [APerformer()]));
+        Assert.Throws<EventsDomainException>(() =>
+            new Event(DateTime.UtcNow.AddDays(9), AVenue(), [APerformer()], APrice, AnOrganizer));
     }
 
     [Fact]
     public void Rejects_a_start_date_in_the_past()
     {
-        Assert.Throws<EventsDomainException>(() => new Event(DateTime.UtcNow.AddDays(-1), AVenue(), [APerformer()]));
+        Assert.Throws<EventsDomainException>(() =>
+            new Event(DateTime.UtcNow.AddDays(-1), AVenue(), [APerformer()], APrice, AnOrganizer));
     }
 
     [Fact]
     public void Rejects_an_event_with_no_performers()
     {
-        Assert.Throws<EventsDomainException>(() => new Event(FarEnoughOut, AVenue(), []));
+        Assert.Throws<EventsDomainException>(() => new Event(FarEnoughOut, AVenue(), [], APrice, AnOrganizer));
+    }
+
+    [Fact]
+    public void Rejects_an_event_with_no_organizer()
+    {
+        Assert.Throws<EventsDomainException>(() =>
+            new Event(FarEnoughOut, AVenue(), [APerformer()], APrice, Guid.Empty));
     }
 
     [Fact]
@@ -52,16 +65,25 @@ public class EventTests
         var venue = AVenue();
         var performer = APerformer();
 
-        var @event = new Event(FarEnoughOut, venue, [performer]);
+        var @event = new Event(FarEnoughOut, venue, [performer], APrice, AnOrganizer);
 
         Assert.Equal(venue.Id, @event.Venue.Id);
         Assert.Equal(performer.Id, Assert.Single(@event.Performers).Id);
     }
 
     [Fact]
+    public void Keeps_the_price_and_organizer_it_was_created_with()
+    {
+        var @event = AnEvent();
+
+        Assert.Equal(APrice, @event.TicketPrice);
+        Assert.Equal(AnOrganizer, @event.OrganizerId);
+    }
+
+    [Fact]
     public void Reschedules_to_a_later_date()
     {
-        var @event = new Event(FarEnoughOut, AVenue(), [APerformer()]);
+        var @event = AnEvent();
         var newDate = DateTime.UtcNow.AddDays(30);
 
         @event.Reschedule(newDate);
@@ -73,7 +95,7 @@ public class EventTests
     public void Refuses_to_reschedule_inside_the_minimum_lead_time()
     {
         var original = FarEnoughOut;
-        var @event = new Event(original, AVenue(), [APerformer()]);
+        var @event = new Event(original, AVenue(), [APerformer()], APrice, AnOrganizer);
 
         Assert.Throws<EventsDomainException>(() => @event.Reschedule(DateTime.UtcNow.AddDays(9)));
         Assert.Equal(original, @event.StartDate);
@@ -83,7 +105,7 @@ public class EventTests
     public void Does_not_share_performer_storage_with_the_caller()
     {
         var performers = new List<Performer> { APerformer() };
-        var @event = new Event(FarEnoughOut, AVenue(), performers);
+        var @event = new Event(FarEnoughOut, AVenue(), performers, APrice, AnOrganizer);
 
         performers.Add(APerformer());
 
@@ -109,6 +131,8 @@ public class EventTests
         var created = Assert.Single(@event.DomainEvents.OfType<EventCreatedDomainEvent>());
         Assert.Equal(@event.Id, created.EventId);
         Assert.Equal(1, created.Version);
+        Assert.Equal(APrice, created.TicketPrice);
+        Assert.Equal(AnOrganizer, created.OrganizerId);
     }
 
     // --- Version ---
@@ -191,6 +215,9 @@ public class EventTests
         Assert.Equal(@event.Id, raised.EventId);
         Assert.Equal(venue.Id, raised.VenueId);
         Assert.Equal(["B1", "B2"], raised.Seats);
+        // Unchanged by a relocation, but carried so new seats can be priced downstream.
+        Assert.Equal(APrice, raised.TicketPrice);
+        Assert.Equal(AnOrganizer, raised.OrganizerId);
     }
 
     // --- Lineup ---

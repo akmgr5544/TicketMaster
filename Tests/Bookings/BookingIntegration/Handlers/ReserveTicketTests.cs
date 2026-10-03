@@ -340,6 +340,18 @@ public sealed class ReserveTicketTests : IntegrationTest
         Assert.Empty(await Cache.GetByKeysAsync<ReserveTicketDto>([ReservationKeys.Reservation(tickets[0].Id)]));
     }
 
+    // Nothing to charge and nobody to pay, so it is refused here rather than after a reservation has held it.
+    [Fact]
+    public async Task Refuses_a_ticket_that_has_no_price()
+    {
+        var tickets = await Seed.UnpricedTicketsAsync("evt-1", "A1");
+
+        await Assert.ThrowsAsync<BookingsApplicationException>(() =>
+            Sender.Send(new ReserveTicketCommand(TestUsers.Owner, "evt-1", [tickets[0].Id])));
+
+        Assert.Empty(await Cache.GetByKeysAsync<ReserveTicketDto>([ReservationKeys.Reservation(tickets[0].Id)]));
+    }
+
     /// <summary>
     /// The other side of it: a seat released because its payment failed has to be holdable again, or a
     /// failed payment would take it out of circulation as surely as a successful one.

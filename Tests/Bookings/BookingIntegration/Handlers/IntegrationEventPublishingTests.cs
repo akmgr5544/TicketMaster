@@ -3,7 +3,6 @@ using Bookings.Application.Commands.Bookings;
 using Bookings.Application.Commands.Payments;
 using Bookings.Application.Exceptions;
 using Bookings.Application.Queries;
-using Bookings.Application.Services;
 using Bookings.Domain.Enums;
 using BookingIntegration.Fixtures;
 using Microsoft.EntityFrameworkCore;
@@ -38,19 +37,40 @@ public sealed class IntegrationEventPublishingTests : IntegrationTest
         var request = Assert.IsType<PaymentRequestedIntegrationEvent>(published.Event);
         Assert.Equal(bookingId, request.BookingId);
         Assert.Equal(TestUsers.Owner, request.BuyerId);
-        Assert.Equal(PaymentPricing.SellerFor(EventId), request.SellerId);
-        Assert.Equal(100m, request.Amount);
-        Assert.Equal("USD", request.Currency);
+        Assert.Equal(Seed.Seller, request.SellerId);
+        Assert.Equal(2 * Seed.Pricing.Price, request.Amount);
+        Assert.Equal(Seed.Pricing.Currency, request.Currency);
         Assert.NotNull(published.TransactionId);
     }
 
+    // The amount is the tickets' own prices summed, not a count times a flat rate: two seats at different
+    // prices charge exactly their total.
     [Fact]
-    public void The_placeholder_seller_is_stable_per_event_and_is_not_the_buyer()
+    public async Task The_payment_request_charges_each_tickets_own_price()
     {
-        Assert.Equal(PaymentPricing.SellerFor(EventId), PaymentPricing.SellerFor(EventId));
-        Assert.NotEqual(PaymentPricing.SellerFor(EventId), PaymentPricing.SellerFor("evt-2"));
-        Assert.NotEqual(Guid.Empty, PaymentPricing.SellerFor(EventId));
-        Assert.NotEqual(TestUsers.Owner, PaymentPricing.SellerFor(EventId));
+        var cheap = await Seed.TicketsAsync(EventId, Seed.Soon, 0, Seed.Pricing with { Price = 10.50m }, "A1");
+        var dear = await Seed.TicketsAsync(EventId, Seed.Soon, 0, Seed.Pricing with { Price = 99.99m }, "A2");
+        long[] ids = [cheap[0].Id, dear[0].Id];
+        await Seed.ReservationAsync(TestUsers.Owner, EventId, ids);
+
+        await Sender.Send(new MakeBookingCommand(TestUsers.Owner, EventId, ids));
+
+        var request = Assert.Single(Log.OfType<PaymentRequestedIntegrationEvent>());
+        Assert.Equal(110.49m, request.Amount);
+    }
+
+    [Fact]
+    public async Task Tickets_sold_by_different_sellers_are_refused_and_request_no_payment()
+    {
+        var mine = await Seed.TicketsAsync(EventId, "A1");
+        var theirs = await Seed.TicketsAsync(EventId, Seed.Soon, 0, Seed.Pricing with { SellerId = Guid.CreateVersion7() }, "A2");
+        long[] ids = [mine[0].Id, theirs[0].Id];
+        await Seed.ReservationAsync(TestUsers.Owner, EventId, ids);
+
+        await Assert.ThrowsAsync<BookingsApplicationException>(() =>
+            Sender.Send(new MakeBookingCommand(TestUsers.Owner, EventId, ids)));
+
+        Assert.Empty(Log.Published);
     }
 
     [Fact]

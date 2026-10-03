@@ -106,8 +106,9 @@ library (Stripe, Braintree). See the `payments-service` skill for the rules, the
 - **CQRS via MediatR**: commands live in `*.Application/Commands`, handlers in `CommandHandlers`.
 - **Transactional pipeline**: `Bookings.Sql/Pipelines/TransactionBehavior.cs` is registered as an open-generic `IPipelineBehavior<,>` so every MediatR request runs inside a DB transaction (commit on success, rollback + rethrow on exception).
 - **Domain event dispatch**: `Bookings.Sql/Interceptors/DomainEventPublisherInterceptor` is a `SaveChangesInterceptor` — domain events are published when the DbContext saves. Wired via `options.AddInterceptors(...)` in `AddInfrastructureServices`.
-- **Payment flow**: Bookings' `MakeBooking` publishes `PaymentRequested` (placeholder price: $50/ticket,
-  USD — `Bookings.Application/Services/PaymentPricing`) and every booking cancellation publishes
+- **Payment flow**: Bookings' `MakeBooking` publishes `PaymentRequested` (the booked tickets' prices summed,
+  paid to the event's organizer — each ticket's `TicketPricing` is copied from `EventCreated`/`EventRelocated`;
+  an unpriced ticket is not on sale) and every booking cancellation publishes
   `BookingCancelled`; PaymentSystem answers with `BookingPaid` or `BookingPaymentFailed` (PSP cancel,
   15-minute checkout expiry, or the booking being cancelled). Both services publish through an
   `IIntegrationEventPublisher` that stages into Wolverine's `DbContextOutbox` on the open transaction and

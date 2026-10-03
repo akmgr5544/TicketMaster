@@ -164,9 +164,10 @@ Bookings  BookingCancelled ─► CancelCheckout: fail unsettled orders; a paid 
   `null` token and the order id alone correlates the outcome.
 - **Calling checkout twice** asks the PSP again with the same nonce (the client token is never stored);
   the same reference returns the token and writes nothing, a different one is 409 `psp_session_mismatch`.
-- **Price and seller are placeholders set by Bookings** (`Bookings.Application/Services/PaymentPricing`:
-  $50 per ticket in USD, seller derived from the event id). Payments treats the request's amount as
-  authoritative, so it is correct the moment real pricing exists upstream.
+- **Price and seller come from the event.** Events stores one ticket price and an `OrganizerId` (whoever
+  created the event); Bookings copies them onto each ticket and sends the booked tickets' prices summed, with
+  the organizer as seller. Payments treats the request's amount as authoritative. An organizer buying a ticket
+  to their own event is refused here, since the seller is the buyer.
 
 ## Messaging and the outbox
 

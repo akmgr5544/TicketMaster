@@ -1,7 +1,6 @@
 using Bookings.Application.Dtos;
 using Bookings.Application.Exceptions;
 using Bookings.Application.Extensions;
-using Bookings.Application.Services;
 using Bookings.Application.Services.Interfaces;
 using Bookings.Domain.Abstractions;
 using Bookings.Domain.Entities;
@@ -38,10 +37,12 @@ internal sealed class MakeBookingCommandHandler : IRequestHandler<MakeBookingCom
 
     public async Task<long> Handle(MakeBookingCommand request, CancellationToken cancellationToken)
     {
-        var ticketIds = await GetValidTicketIdsAsync(request.Tickets,
+        var tickets = await GetValidTicketsAsync(request.Tickets,
             request.EventId,
             request.UserId,
             cancellationToken);
+        var ticketIds = tickets.Select(ticket => ticket.Id).ToArray();
+        var (sellerId, amount, currency) = PriceOf(tickets);
 
         var booking = Booking.Create(request.UserId, BookingStatus.Booked, ticketIds);
 
@@ -52,9 +53,9 @@ internal sealed class MakeBookingCommandHandler : IRequestHandler<MakeBookingCom
         // domain event is raised before it exists.
         await _integrationEvents.PublishAsync(new PaymentRequestedIntegrationEvent(booking.Id,
                 request.UserId,
-                PaymentPricing.SellerFor(request.EventId),
-                PaymentPricing.AmountFor(ticketIds.Length),
-                PaymentPricing.Currency),
+                sellerId,
+                amount,
+                currency),
             cancellationToken);
 
         var reservationKeys = ticketIds.Select(ReservationKeys.Reservation).ToArray();
@@ -64,7 +65,19 @@ internal sealed class MakeBookingCommandHandler : IRequestHandler<MakeBookingCom
         return booking.Id;
     }
 
-    private async Task<long[]> GetValidTicketIdsAsync(long[] ticketIds,
+    // One payment has one seller and one currency. Tickets for one event share both, so a mix means the
+    // replica is inconsistent, and charging it as one payment would pay somebody the wrong money.
+    private static (Guid SellerId, decimal Amount, string Currency) PriceOf(Ticket[] tickets)
+    {
+        var pricings = tickets.Select(ticket => ticket.Pricing!).ToArray();
+
+        if (pricings.Select(p => (p.SellerId, p.Currency)).Distinct().Count() > 1)
+            throw new BookingsApplicationException("The selected tickets are sold by different sellers or in different currencies");
+
+        return (pricings[0].SellerId, pricings.Sum(p => p.Price), pricings[0].Currency);
+    }
+
+    private async Task<Ticket[]> GetValidTicketsAsync(long[] ticketIds,
         string eventId,
         Guid userId,
         CancellationToken cancellationToken)
@@ -104,6 +117,6 @@ internal sealed class MakeBookingCommandHandler : IRequestHandler<MakeBookingCom
             throw new BookingsApplicationException("Some of the tickets are no longer available");
         }
 
-        return tickets.Select(ticket => ticket.Id).ToArray();
+        return tickets;
     }
 }

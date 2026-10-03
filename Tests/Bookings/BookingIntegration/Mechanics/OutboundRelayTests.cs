@@ -42,8 +42,9 @@ public sealed class OutboundRelayTests
         var request = await _fixture.Received.WaitForAsync<PaymentRequestedIntegrationEvent>(
             m => m.BookingId == bookingId, Relay);
         Assert.Equal(TestUsers.Owner, request.BuyerId);
-        Assert.Equal(100m, request.Amount);
-        Assert.Equal("USD", request.Currency);
+        Assert.Equal(Seed.Seller, request.SellerId);
+        Assert.Equal(2 * Seed.Pricing.Price, request.Amount);
+        Assert.Equal(Seed.Pricing.Currency, request.Currency);
     }
 
     [Fact]
@@ -126,7 +127,7 @@ public sealed class OutboundRelayTests
     {
         context.ChangeTracker.Clear();
         await using var next = await context.Database.BeginTransactionAsync();
-        context.Tickets.Add(new Ticket("Z9", "venue-unrelated", eventId, Seed.Soon));
+        context.Tickets.Add(new Ticket("Z9", "venue-unrelated", eventId, Seed.Soon, pricing: Seed.Pricing));
         await context.SaveChangesAsync();
         await next.CommitAsync();
     }

@@ -18,6 +18,15 @@ message GetEventRequest {
 message GetEventReply {
   string id = 1;
   Venue venue = 2;
+  // Absent for an event stored before pricing existed.
+  Pricing pricing = 3;
+}
+
+message Pricing {
+  // A decimal in invariant culture ("49.99"): proto3 has no decimal type, and a double would round money.
+  string ticket_price = 1;
+  string currency = 2;
+  string organizer_id = 3;
 }
 
 message Venue {

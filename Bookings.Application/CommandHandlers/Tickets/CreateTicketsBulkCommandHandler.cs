@@ -25,7 +25,8 @@ internal sealed class CreateTicketsBulkCommandHandler : IRequestHandler<CreateTi
                 request.VenueId,
                 request.EventId,
                 request.EventDate,
-                request.Version);
+                request.Version,
+                request.Pricing);
             tickets.Add(ticket);
         }
         

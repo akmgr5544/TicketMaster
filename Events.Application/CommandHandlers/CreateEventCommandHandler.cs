@@ -4,6 +4,7 @@ using Events.Application.IntegrationEvents;
 using Events.Domain.Entities;
 using Events.Domain.Exceptions;
 using Events.Domain.Repositories;
+using Events.Domain.ValueObjects;
 using MediatR;
 using Event = Events.Domain.Entities.Event;
 
@@ -49,7 +50,11 @@ internal sealed class CreateEventCommandHandler : IRequestHandler<CreateEventCom
 
         // The start-date rule lives in the Event constructor, not here — it is an invariant of the
         // aggregate rather than a check this particular caller happens to perform.
-        var @event = new Event(request.StartDate, venue, performers);
+        var @event = new Event(request.StartDate,
+            venue,
+            performers,
+            new TicketPrice(request.TicketPrice, request.Currency),
+            request.OrganizerId);
 
         await _eventRepository.AddEventAsync(@event, cancellationToken);
 

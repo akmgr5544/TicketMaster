@@ -18,6 +18,7 @@ public class EventsController : ControllerBase
 {
     private const int DefaultPageSize = 25;
     private const int MaxPageSize = 100;
+    private const string IdentityUserIdHeader = "X-Identity-UserId";
 
     private readonly ISender _sender;
 
@@ -55,10 +56,17 @@ public class EventsController : ControllerBase
     [HttpPost]
     [ProducesResponseType(StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> CreateEventAsync([FromBody] CreateEventCommand command,
+        [FromHeader(Name = IdentityUserIdHeader)] string? userId,
         CancellationToken cancellationToken)
     {
-        var id = await _sender.Send(command, cancellationToken);
+        // The creator becomes the organizer, the seller every payment for this event goes to. Read from the
+        // header the gateway sets, so a caller cannot name somebody else as the payee.
+        if (!Guid.TryParse(userId, out var organizerId))
+            return Unauthorized();
+
+        var id = await _sender.Send(command with { OrganizerId = organizerId }, cancellationToken);
 
         return CreatedAtAction(nameof(GetEventAsync), new { id }, new { id });
     }
