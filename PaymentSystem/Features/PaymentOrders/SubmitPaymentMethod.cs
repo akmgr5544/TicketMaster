@@ -15,8 +15,10 @@ public static class SubmitPaymentMethod
 {
     public sealed record Body(string PaymentMethod);
 
+    // Deliberately not transactional — the one Command that is not (see TransactionTest). The charge is a call
+    // to another system that can take seconds, so it runs with no transaction open; only RecordOutcome writes.
     public sealed record Command(Guid CallerId, Guid PaymentOrderId, string PaymentMethod)
-        : IRequest<Result<Response>>, ITransactionalRequest;
+        : IRequest<Result<Response>>;
 
     // Pending: the provider takes the payment method from the client directly and reports by webhook
     // (Stripe). Otherwise the charge already ran; a Failed ProviderStatus leaves the order open for another
@@ -28,7 +30,7 @@ public static class SubmitPaymentMethod
         string? FailureReason,
         string OrderStatus);
 
-    internal sealed class Handler(PaymentDbContext context, IPaymentGatewayFactory gateways, ILogger<Handler> logger)
+    internal sealed class Handler(PaymentDbContext context, IPaymentGatewayFactory gateways, ISender sender)
         : IRequestHandler<Command, Result<Response>>
     {
         public async Task<Result<Response>> Handle(Command request, CancellationToken cancellationToken)
@@ -53,7 +55,7 @@ public static class SubmitPaymentMethod
             PaymentResult? payment;
             try
             {
-                payment = await gateways.Default.SubmitPaymentMethodAsync(
+                payment = await ProviderOutcome.GatewayFor(gateways, order).SubmitPaymentMethodAsync(
                     new SubmitPaymentMethodRequest(order.PaymentOrderId, order.Amount, order.Currency, request.PaymentMethod),
                     cancellationToken);
             }
@@ -65,7 +67,9 @@ public static class SubmitPaymentMethod
             if (payment is null)
                 return new Response(order.PaymentOrderId, true, null, null, order.Status.ToString());
 
-            var applied = await ProviderOutcome.ApplyAsync(context, logger, order.PaymentOrderId, payment.Status,
+            // A webhook may have settled the order while the charge was in flight; the copy read above is stale.
+            context.ChangeTracker.Clear();
+            var applied = await sender.Send(new RecordOutcome.Command(order.PaymentOrderId, payment.Status),
                 cancellationToken);
 
             // The charge has already happened in both cases, so the buyer must not simply pay again; the order

@@ -14,8 +14,8 @@ public sealed class GetCheckoutTests(PaymentsFixture fixture) : QueryTest(fixtur
         var merchantA = Guid.NewGuid();
         var merchantB = Guid.NewGuid();
         var checkout = await SeedCheckoutForAsync(buyer,
-            new PaymentOrderLine(merchantA, 10.25m, "USD"),
-            new PaymentOrderLine(merchantB, 99.99m, "EUR"));
+            new OrderLine(merchantA, 10.25m, "USD"),
+            new OrderLine(merchantB, 99.99m, "EUR"));
         await SettleAsync(checkout, checkout.OrderId(0));
 
         var result = await SendAsync(new GetCheckout.Query(buyer, checkout.BookingId));
@@ -75,7 +75,7 @@ public sealed class GetCheckoutTests(PaymentsFixture fixture) : QueryTest(fixtur
     {
         // A checkout is the buyer's view of a purchase; sellers see their own order, not the checkout.
         var merchant = Guid.NewGuid();
-        var checkout = await SeedCheckoutForAsync(Guid.NewGuid(), new PaymentOrderLine(merchant, 5m, "USD"));
+        var checkout = await SeedCheckoutForAsync(Guid.NewGuid(), new OrderLine(merchant, 5m, "USD"));
 
         var result = await SendAsync(new GetCheckout.Query(merchant, checkout.BookingId));
 

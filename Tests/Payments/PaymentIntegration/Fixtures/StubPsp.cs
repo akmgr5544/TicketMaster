@@ -52,6 +52,10 @@ public sealed class StubGateway(PaymentProviderKind kind) : IPaymentGateway
 
     public Func<SubmitPaymentMethodRequest, Task<PaymentResult?>> OnSubmit { get; set; } = null!;
 
+    public ConcurrentQueue<PaymentLookupRequest> Lookups { get; } = new();
+
+    public Func<PaymentLookupRequest, PaymentResult?> OnLookup { get; set; } = null!;
+
     // Distinct per call, so a test can tell a replayed client token from the first.
     public static string ClientTokenFor(Guid paymentOrderId, int call) => $"client_secret_{paymentOrderId:N}_{call}";
 
@@ -62,6 +66,9 @@ public sealed class StubGateway(PaymentProviderKind kind) : IPaymentGateway
     {
         Checkouts.Clear();
         Submissions.Clear();
+        Lookups.Clear();
+        // The provider has no payment for the order until a test says otherwise.
+        OnLookup = _ => null;
         OnCheckout = request => new CheckoutSession(
             kind == PaymentProviderKind.Braintree ? null : ReferenceFor(request.PaymentOrderId),
             ClientTokenFor(request.PaymentOrderId, Checkouts.Count));
@@ -83,8 +90,11 @@ public sealed class StubGateway(PaymentProviderKind kind) : IPaymentGateway
         return OnSubmit(request);
     }
 
-    public Task<PaymentResult?> LookupAsync(PaymentLookupRequest request, CancellationToken cancellationToken = default) =>
-        throw new NotSupportedException();
+    public Task<PaymentResult?> LookupAsync(PaymentLookupRequest request, CancellationToken cancellationToken = default)
+    {
+        Lookups.Enqueue(request);
+        return Task.FromResult(OnLookup(request));
+    }
 
     // Signed by a header, as the real ones are: anything but the valid signature is refused before the body is read.
     public WebhookEvent? ParseWebhook(WebhookRequest request)

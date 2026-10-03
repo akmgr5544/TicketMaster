@@ -30,6 +30,7 @@ dotnet test Tests/Events/EventsApi/EventsApi.csproj                  # exception
 dotnet test Tests/Events/EventsCosmos/EventsCosmos.csproj            # Cosmos document serialization
 dotnet test Tests/Events/EventsIntegration/EventsIntegration.csproj  # repositories + 412 + delete guards (Cosmos emulator); outbox relay host fixture (+ RabbitMQ). Needs Docker
 dotnet test Tests/Users/UsersApi/UsersApi.csproj                 # Error-to-status mapping
+dotnet test Tests/Users/UsersIntegration/UsersIntegration.csproj  # first-user-Admin + PUT role, real host + JWTs over HTTP (Postgres). Needs Docker
 dotnet test Tests/Users/UsersArchitecture/UsersArchitecture.csproj
 dotnet test Tests/Payments/PaymentArchitecture/PaymentArchitecture.csproj  # slice isolation, domain purity, visibility, layout
 dotnet test Tests/Payments/PaymentDomain/PaymentDomain.csproj          # checkout/order/wallet/ledger rules

@@ -24,24 +24,129 @@ listed honestly under [Known gaps](#-known-gaps) rather than left for you to dis
 
 ## 🏗️ Architecture
 
+### System
+
+Every request enters through the gateway. Services own their stores outright: none reads another's
+database, and they talk only through RabbitMQ messages and one gRPC call.
+
+```mermaid
+flowchart TB
+    client(["Client"])
+    psp(["Stripe / Braintree"])
+
+    subgraph edge["Edge"]
+        gateway["<b>TicketMaster.ApiGateway</b><br/>YARP reverse proxy · :8080<br/>edge auth → X-Identity-UserId / UserName / Role"]
+    end
+
+    subgraph services["Services"]
+        users["<b>Users.Api</b><br/>vertical slices<br/>JWT issuer · roles"]
+        events["<b>Events.Api</b><br/>Clean Architecture<br/>catalogue: events, venues, performers"]
+        bookings["<b>Bookings.Api</b><br/>Clean Architecture + DDD<br/>tickets, reservations, bookings"]
+        payments["<b>PaymentSystem</b><br/>vertical slices on a DDD domain<br/>checkouts, wallets, ledger · pay-in only"]
+    end
+
+    subgraph data["Stores and broker"]
+        postgres[("<b>PostgreSQL</b><br/>users_db · bookings_db · payments_db<br/>+ Wolverine outbox tables")]
+        redis[("<b>Redis</b><br/>seat reservations, 5-min TTL<br/>per-seat distributed locks")]
+        cosmos[("<b>Cosmos DB</b><br/>events · venues · performers<br/>+ wolverine outbox container")]
+        broker{{"<b>RabbitMQ</b><br/>Wolverine, durable inbox/outbox"}}
+    end
+
+    client -- "HTTPS · Bearer JWT" --> gateway
+    gateway -- "/users-service/** · ungated" --> users
+    gateway -. "GET api/users/auth<br/>introspection, cached 30 s" .-> users
+    gateway -- "/events-service/** · GatewayAuthPolicy" --> events
+    gateway -- "/bookings-service/** · GatewayAuthPolicy" --> bookings
+    gateway -- "/payments-service/** · GatewayAuthPolicy<br/>webhooks route ungated" --> payments
+    psp -- "signed webhooks" --> gateway
+    payments -- "hosted page, charge<br/>(PaymentProvider · IPaymentGateway)" --> psp
+    bookings -- "gRPC · EventsLookup.GetEvent" --> events
+
+    users --> postgres
+    bookings --> postgres
+    bookings --> redis
+    payments --> postgres
+    events --> cosmos
+    events <--> broker
+    bookings <--> broker
+    payments <--> broker
 ```
-                       ┌────────────────────────────┐
-  client ── HTTP ──►   │  TicketMaster.ApiGateway   │  (YARP reverse proxy)
-                       └─────────────┬──────────────┘
-                                     │  /users-service/**     /bookings-service/**
-                                     │  /events-service/**    /payments-service/**
-              ┌──────────────────────┼──────────────────────┬─────────────────────┐
-              ▼                      ▼                      ▼                     ▼
-        Users.Api            Bookings.Api             Events.Api            PaymentSystem
-        (Postgres + EF,     (Postgres + EF,           (Cosmos DB,          (Postgres + EF,
-         JWT issuer)         Redis cache + locks)      NoSQL API)           Stripe / Braintree)
-                                     ▲  │                   │                     ▲  │
-                                     │  │ PaymentRequested  │ EventCreated        │  │ BookingPaid
-                                     │  │ BookingCancelled  │ EventRescheduled    │  │ BookingPaymentFailed
-                                     │  ▼                   ▼ EventRelocated      │  ▼
-                                     └────────────── RabbitMQ (Wolverine) ────────┘
-                                                                EventCancelled
+
+### Messages
+
+Every cross-service message is a contract in `TicketMaster.Common/IntegrationEvents`, staged in the
+publisher's outbox in the same transaction as the write it announces, and handled idempotently on the other
+side.
+
+```mermaid
+flowchart LR
+    events["<b>Events</b>"]
+    bookings["<b>Bookings</b>"]
+    payments["<b>Payments</b>"]
+
+    events -- "EventCreated<br/>EventRescheduled<br/>EventRelocated<br/>EventCancelled" --> bookings
+    bookings -- "PaymentRequested<br/>BookingCancelled" --> payments
+    payments -- "BookingPaid<br/>BookingPaymentFailed" --> bookings
 ```
+
+| Message | From → To | What the consumer does |
+|---|---|---|
+| `EventCreated` | Events → Bookings | Creates one ticket per seat of the event's venue |
+| `EventRescheduled` | Events → Bookings | Moves every ticket's event date; ignored if not newer than the ticket's `EventVersion` |
+| `EventRelocated` | Events → Bookings | Reconciles tickets to the seats the event *now* has; a booking that loses a seat is cancelled, or flagged `RefundPending` if paid |
+| `EventCancelled` | Events → Bookings | Cancels the event's tickets |
+| `PaymentRequested` | Bookings → Payments | Opens a checkout (one payment order per seller) and schedules its 15-minute expiry |
+| `BookingCancelled` | Bookings → Payments | Fails the checkout's unsettled orders; a paid one is left and logged for refund. With no checkout yet, claims the booking as cancelled so a late `PaymentRequested` is refused |
+| `BookingPaid` | Payments → Bookings | Confirms the booking |
+| `BookingPaymentFailed` | Payments → Bookings | Cancels the unpaid booking and releases its seats |
+
+### A booking, end to end
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Buyer
+    participant GW as Gateway
+    participant BK as Bookings
+    participant RD as Redis
+    participant MQ as RabbitMQ
+    participant PY as Payments
+    participant PSP as Stripe
+
+    Buyer->>GW: POST /bookings-service/api/tickets/reserve
+    GW->>BK: proxied with X-Identity-UserId
+    BK->>RD: lock each seat (ascending id), write reservation, 5-min TTL
+    BK-->>Buyer: 200
+
+    Buyer->>GW: POST /bookings-service/api/bookings
+    GW->>BK: proxied
+    BK->>BK: tickets Booked + booking saved, PaymentRequested staged (one transaction)
+    BK->>RD: delete the reservation, after commit
+    BK-->>Buyer: 201 { id }
+    BK-)MQ: PaymentRequested
+    MQ-)PY: PaymentRequested
+    PY->>PY: claim booking, create checkout + its order,<br/>schedule CheckoutExpiryDue (+15 min) (one transaction)
+
+    Buyer->>GW: GET /payments-service/api/payments/checkouts/{bookingId}
+    GW->>PY: proxied
+    PY-->>Buyer: checkout and its payment orders
+    Buyer->>GW: POST /payments-service/api/payments/orders/{id}/checkout
+    GW->>PY: proxied
+    PY->>PSP: create session, idempotency key = payment order id
+    PSP-->>PY: session reference + client token
+    PY-->>Buyer: client token
+    Buyer->>PSP: pays on the provider's hosted page
+
+    PSP->>GW: POST /payments-service/api/payments/webhooks/stripe (ungated)
+    GW->>PY: proxied
+    PY->>PY: verify signature, succeed order, credit seller wallet,<br/>write ledger pair, stage BookingPaid (one transaction)
+    PY-)MQ: BookingPaid
+    MQ-)BK: BookingPaid
+    BK->>BK: booking marked paid
+```
+
+If nobody pays, the expiry fails the checkout after 15 minutes and `BookingPaymentFailed` releases the
+seats. A cancelled booking sends `BookingCancelled` the other way.
 
 The gateway requires an authenticated caller on `/bookings-service/**`, `/events-service/**` and
 `/payments-service/**` (except PSP webhooks), checked by calling Users.Api's `GET api/users/auth`;
@@ -196,6 +301,18 @@ unordered, at-least-once delivery — a late failure cannot void a paid booking,
 cannot claim seats already back on sale. Applying the same outcome twice announces the release once,
 so seats are never released a second time after somebody else has taken them.
 
+**A lost outcome is asked about again (Payments).** A charge whose result failed to record, or a webhook
+that never arrived, leaves an order `Executing`. `ReconcileOrdersJob` runs every minute, asks the provider
+that started each order idle for over two minutes, and records a final answer through the same
+transactional `RecordOutcome` the synchronous charge uses — well inside the 15-minute window after which the
+expiry would fail the order over money already taken.
+
+**A cancellation may overtake its payment request (Payments).** The two messages travel separately, so a
+`BookingCancelled` can arrive before its `PaymentRequested`. With no checkout to cancel, Payments records the
+booking as cancelled, and the late request is refused rather than opening a checkout the buyer could still
+pay. Both handlers insert a claim keyed by the booking id, so when the two arrive together the primary key
+makes the second wait for the first and then read what it decided. No lock is taken.
+
 **Domain event dispatch, two ways.** Bookings (and Payments) use a `SaveChangesInterceptor`, so persistence and
 event emission cannot diverge. Dispatch runs *after* the write, so a handler that changes something
 must save that change itself — the surrounding transaction is what keeps its save atomic with the
@@ -252,7 +369,9 @@ way to change its `PaymentOrder`s, so the checkout-wide rule — done once every
 be bypassed. Repeating an outcome is a no-op and the opposite outcome is refused, which is what makes
 redelivered webhooks and messages safe. The domain refuses any amount `numeric(18,2)` cannot hold exactly,
 because Postgres would otherwise round it and the PSP would charge a different amount than the ledger
-records.
+records. A checkout is created empty and given its orders with `AddOrder` — none once payment has begun.
+Since nothing then forces an order in code, an empty checkout is never paid, and the database refuses to
+store one (`CHECK ("OrderCount" > 0)`).
 
 **A version the database checks, set at save time (Payments).** Two orders of one checkout settling at
 once would each see the other unfinished; `PaymentEvent.Version` makes the second save fail and reload. An
@@ -277,7 +396,7 @@ Tests/
 ├── Gateway/    GatewayTests
 ├── Payments/   PaymentArchitecture, PaymentDomain, PaymentIntegration, PaymentAdapters
 ├── Rpc/        GrpcSeam
-└── Users/      UsersArchitecture, UsersApi
+└── Users/      UsersArchitecture, UsersApi, UsersIntegration
 ```
 
 **Architecture tests** (ArchUnitNET) assert layer dependencies, naming, visibility and — in Bookings and
@@ -335,7 +454,8 @@ the real host on Postgres and RabbitMQ with a stand-in Bookings host (request �
 outbox rollback). `PaymentDomain` covers every aggregate rule, `PaymentAdapters` the PSP adapters, and
 `PaymentArchitecture` the slice rules — the domain depends on nothing but itself, `PaymentSystem.Enums`, the BCL and MediatR, no feature area
 reaches into another, `PaymentProvider` never references `PaymentSystem`, handlers are internal and sealed,
-and every writing command is transactional.
+and every writing command is transactional — except `SubmitPaymentMethod.Command`, which only calls the PSP
+and hands the write to its transactional `RecordOutcome.Command`.
 
 **Needs a running Docker daemon** — every test in `BookingIntegration`, `EventsIntegration` and `PaymentIntegration` starts
 containers; with the daemon down the whole project fails at fixture initialisation. `Bookings.Sql` and
@@ -343,6 +463,13 @@ containers; with the daemon down the whole project fails at fixture initialisati
 internal context, repositories and handlers; `Bookings.Application` and `Events.Api` also expose internals
 to `GrpcSeam`, and `PaymentSystem` to `PaymentIntegration`. `EventsIntegration` needs no such entry — it
 reaches everything through public interfaces (`ISender`, the repository contracts).
+
+Users.Api has `Tests/Users/UsersIntegration`: the real host on a Postgres container, driving registration,
+login and `PUT /api/users/{id}/role` over HTTP with tokens from the real endpoints. It covers the
+first-account-becomes-Admin bootstrap (including the race between two first registrations) and the admin-only
+role change. It is what found that every register, login and refresh had been answering 500 — the handlers'
+`IOptions<AuthOptions>` could not be constructed from a positional record — and that a numeric or
+comma-joined role string was accepted.
 
 `Tests/Gateway/GatewayTests` boots the real gateway in-process through `WebApplicationFactory<Program>`,
 stubbing only the Users introspection client and YARP's forwarder, and covers edge auth, identity-header
@@ -367,6 +494,7 @@ dotnet test Tests/Bookings/BookingApi/BookingApi.csproj
 dotnet test Tests/Bookings/BookingArchitecture/BookingArchitecture.csproj
 dotnet test Tests/Users/UsersArchitecture/UsersArchitecture.csproj
 dotnet test Tests/Users/UsersApi/UsersApi.csproj
+dotnet test Tests/Users/UsersIntegration/UsersIntegration.csproj   # needs Docker
 dotnet test Tests/Payments/PaymentArchitecture/PaymentArchitecture.csproj
 dotnet test Tests/Payments/PaymentDomain/PaymentDomain.csproj
 dotnet test Tests/Payments/PaymentIntegration/PaymentIntegration.csproj   # needs Docker
@@ -401,9 +529,8 @@ cp .env.example .env      # then set USERS_AUTH_TOKEN (e.g. openssl rand -hex 64
 docker compose up --build
 ```
 
-The first account you register becomes the admin; everyone after is a customer. On Apple Silicon the
-Cosmos emulator image compose uses has no arm64 build, so Events' store will not start — see
-[Known gaps](#-known-gaps).
+The first account you register becomes the admin; everyone after is a customer. Compose runs the
+`vnext-latest` Cosmos emulator, which has a native arm64 build, so this works on Apple Silicon too.
 
 Or run the services directly:
 
@@ -438,9 +565,9 @@ currently carries a development key; override it with user-secrets:
 dotnet user-secrets set "AuthConfigs:Token" "$(openssl rand -hex 64)" --project Users.Api
 ```
 
-Events expects the Cosmos emulator on `https://localhost:8081` — the emulator's well-known account key
-is already in `appsettings.Development.json` and is not a secret. The emulator's certificate is
-self-signed, so trust it on the host before Events can connect. Bring up just the backing stores with
+Events expects the Cosmos emulator on `http://localhost:8081`, in Gateway mode — both set in
+`appsettings.Development.json`, along with the emulator's well-known account key, which is not a secret.
+The vnext emulator serves plain http, so there is no certificate to trust. Bring up just the backing stores with
 `POSTGRES_PASSWORD=password docker compose up postgres redis rabbitmq cosmos` — the checked-in connection
 strings use the password `password`.
 
@@ -450,8 +577,7 @@ Central package management is enabled: add package versions to `Directory.Packag
 ## 🗺️ Known gaps
 
 Split two ways: not built, and deliberate. Every entry names what the code does today rather than what
-it should do — the fix is a decision, not a gap. (The "built but unproven" middle category is gone —
-everything that was in it now has a test.)
+it should do — the fix is a decision, not a gap.
 
 ### Not built
 
@@ -459,17 +585,26 @@ everything that was in it now has a test.)
   sends `$50 × tickets` in USD and a seller derived from the event id (`PaymentPricing`). Payments treats the
   request's amount as authoritative, so it is correct the moment real pricing exists upstream.
 - **No refunds.** Payments is pay-in only. A booking cancelled after its payment succeeded is logged as
-  needing a refund, and a `RefundPending` booking in Bookings is still never refunded.
-- **No reconciliation job** against PSP settlement files, so a charge the service failed to record stays
-  `Executing` until someone looks.
+  needing a refund, a PSP success that lands after the cancellation is logged as needing reconciling, and a
+  `RefundPending` booking in Bookings is still never refunded. In every case the money stays taken.
+- **No settlement-file reconciliation.** `ReconcileOrdersJob` asks the provider about any order left
+  `Executing` for over two minutes and records a final answer, but nothing compares the PSP's settlement
+  reports with the ledger, and an order already failed by expiry or cancellation whose payment the provider
+  then took is only logged as needing reconciling.
+- **A role change takes effect at the next login.** `AdminOnly` reads the role claim baked into the token,
+  never the store, so a demoted admin keeps admin access until their token expires (1 day) and a promoted
+  user must log in again. Nothing stops an admin demoting the last admin, themselves included.
 
 ### Accepted limitations
 
 Deliberate, and recorded so nobody "fixes" one without knowing what it carries.
 
-- **Compose runs the classic Cosmos emulator.** `compose.yaml` uses `azure-cosmos-emulator:latest`, which
-  is amd64-only, so on Apple Silicon Events' store does not start under `docker compose`. The test suite uses
-  `vnext-latest` (native arm64, Gateway mode over http) instead.
+- **The gateway trusts an introspection for 30 seconds.** A successful check is cached by a hash of the
+  token (`IntrospectionCache`), so a token revoked or a role changed in Users.Api keeps working at the edge
+  for up to that long. Refusals and outages are never cached.
+- **Two first registrations at once both become Admin.** The empty-table check and the insert are separate
+  statements with no guard between them — acceptable for a one-time bootstrap, and pinned by a test that
+  will turn red if a guard is ever added.
 - **The Events outbox is durable but not atomic.** `WolverineFx.CosmosDb` stores envelopes in a
   separate `wolverine` container by per-item upsert, so the message survives a crash but is not written
   in the same batch as the `events` document — a small window where the write lands and the envelope
@@ -485,17 +620,27 @@ Deliberate, and recorded so nobody "fixes" one without knowing what it carries.
 - **Reservation correctness rests entirely on the distributed locks.** The check and the write both
   happen with every seat's lock held, but the write is not conditional, so a lock lost mid-operation is
   a real double-reservation window rather than a wasted attempt.
-- **A cancellation that reaches Payments before its `PaymentRequested`** is a no-op; the checkout is then
-  created, and only the 15-minute expiry fails it — a buyer who pays inside that window pays for a cancelled
-  booking.
 - **After-commit work is dropped when a command is sent from a message handler.** `TransactionBehavior`
   does not own that transaction, so it logs a warning rather than running the queued work — the same way
   a failure on the owned path is treated. Only `MakeBookingCommand` queues any, and only over HTTP, so
   nothing hits this today.
+- **A synchronous charge can succeed and fail to be recorded.** `SubmitPaymentMethod` charges with no
+  transaction open and records the outcome in a transaction of its own (`RecordOutcome`), so a slow PSP
+  holds nothing. If that recording then loses twice to concurrent writers (`409
+  payment_outcome_not_recorded`) or the database fails (a 500), the order stays `Executing` until a webhook
+  or the reconciliation job, within about three minutes, settles it. The same 409 also answers a charge
+  that lands after the order already settled the other way — expired, say — and that one is only logged as
+  needing reconciling, since no job looks at a settled order.
+- **Concurrent settlements for one seller contend on its wallet.** The wallet row carries an `xmin`
+  concurrency token, so two orders crediting the same seller's wallet at once make one of them lose with a
+  409; a webhook is then redelivered by the PSP and settles, and the synchronous Braintree path falls into
+  the case above. (Two settlements creating a seller's *first* wallet do not conflict: the one that loses on
+  the unique index credits the winner's wallet in the same transaction.) With the placeholder seller
+  derived from the event id, every payment for one event shares a wallet.
 
 ## 🗺️ Roadmap
 
 - Real ticket pricing and sellers in Events, replacing Bookings' `PaymentPricing` placeholder
 - Refunds and notifications — for a `RefundPending` booking and for a booking cancelled after payment
-- Reconciliation against PSP settlement files, using `IPaymentGateway.LookupAsync`
+- Reconciliation against PSP settlement files, beyond the per-order lookup `ReconcileOrdersJob` does
 - Saga / process-manager work for the full booking flow in Wolverine

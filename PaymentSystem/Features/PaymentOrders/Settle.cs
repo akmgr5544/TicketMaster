@@ -1,5 +1,6 @@
 using MediatR;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using PaymentSystem.Data;
 using PaymentSystem.Domain;
 using PaymentSystem.Domain.Events;
@@ -37,14 +38,13 @@ public static class Settle
                     await entry.ReloadAsync(cancellationToken);
             }
 
+            Wallet? created = null;
             if (!order.WalletUpdated)
             {
-                var wallet = await context.Wallets
-                    .SingleOrDefaultAsync(w => w.OwnerId == order.MerchantId && w.Currency == order.Currency,
-                        cancellationToken);
+                var wallet = await FindWalletAsync(order, cancellationToken);
                 if (wallet is null)
                 {
-                    wallet = Wallet.Create(order.MerchantId, order.Currency);
+                    wallet = created = Wallet.Create(order.MerchantId, order.Currency);
                     context.Wallets.Add(wallet);
                 }
 
@@ -58,7 +58,22 @@ public static class Settle
                 checkout.MarkLedgerUpdated(order.PaymentOrderId);
             }
 
-            await context.SaveChangesAsync(cancellationToken);
+            try
+            {
+                await context.SaveChangesAsync(cancellationToken);
+            }
+            // Another settlement for this seller created the wallet between the lookup and this insert. Postgres
+            // held the insert until that one committed, so its wallet is there to credit instead — and EF saved
+            // inside a savepoint, so the transaction is still usable for the retry.
+            catch (DbUpdateException exception) when (created is not null && IsWalletIndexViolation(exception))
+            {
+                context.Entry(created).State = EntityState.Detached;
+                var winners = await FindWalletAsync(order, cancellationToken)
+                              ?? throw new InvalidOperationException(
+                                  $"The wallet for {order.MerchantId} in {order.Currency} was taken but cannot be found.");
+                winners.Credit(order.Amount, order.Currency);
+                await context.SaveChangesAsync(cancellationToken);
+            }
 
             // Gated on every order being settled, not only on IsPaymentDone: when several orders succeed in
             // one save each gets its own event, and all of them would see the checkout done. Only the
@@ -66,5 +81,16 @@ public static class Settle
             if (checkout.IsPaymentDone && checkout.PaymentOrders.All(o => o is { WalletUpdated: true, LedgerUpdated: true }))
                 await publisher.PublishAsync(new BookingPaidIntegrationEvent(checkout.BookingId), cancellationToken);
         }
+
+        private Task<Wallet?> FindWalletAsync(PaymentOrder order, CancellationToken cancellationToken) =>
+            context.Wallets.SingleOrDefaultAsync(w => w.OwnerId == order.MerchantId && w.Currency == order.Currency,
+                cancellationToken);
+
+        // Read from the model rather than spelled out, so renaming the index cannot silently turn the race back
+        // into a 500. Any other unique violation — a second ledger pair above all — is a real fault and is rethrown.
+        private bool IsWalletIndexViolation(DbUpdateException exception) =>
+            exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation } postgres
+            && postgres.ConstraintName == context.Model.FindEntityType(typeof(Wallet))!.GetIndexes()
+                .Single(index => index.IsUnique).GetDatabaseName();
     }
 }

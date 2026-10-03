@@ -44,6 +44,9 @@ public sealed class BookingsHostFixture : IAsyncLifetime
 
     public ReceivedMessages Received { get; } = new();
 
+    public HttpClient CreateClient() =>
+        (_factory ?? throw new InvalidOperationException("The host was not started.")).CreateClient();
+
     public async Task InitializeAsync()
     {
         await Task.WhenAll(_postgres.StartAsync(), _redis.StartAsync(), _rabbit.StartAsync());

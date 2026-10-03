@@ -36,7 +36,7 @@ public class PaymentOrderTests
         {
             // A different token than the one used to reach Executing, so a start from any later state is a
             // genuine second start, not a redelivery of the first.
-            case Operation.StartExecuting: paymentEvent.StartExecuting(id, "other-token"); break;
+            case Operation.StartExecuting: paymentEvent.StartExecuting(id, Provider, "other-token"); break;
             case Operation.Succeed: paymentEvent.SucceedOrder(id); break;
             case Operation.Fail: paymentEvent.FailOrder(id); break;
             case Operation.MarkWalletUpdated: paymentEvent.MarkWalletUpdated(id); break;
@@ -155,7 +155,7 @@ public class PaymentOrderTests
         var checkoutId = Guid.NewGuid();
         var buyerId = Guid.NewGuid();
 
-        var order = PaymentEvent.Create(checkoutId, Random.Shared.NextInt64(1, long.MaxValue), buyerId, [line]).Only();
+        var order = NewCheckout(checkoutId, buyerId).WithOrders(line).Only();
 
         Assert.Equal(PaymentOrderStatus.NotStarted, order.Status);
         Assert.NotEqual(Guid.Empty, order.PaymentOrderId);
@@ -172,7 +172,7 @@ public class PaymentOrderTests
     [Fact]
     public void Refuses_an_empty_merchant()
     {
-        var thrown = Record.Exception(() => WithLines(new PaymentOrderLine(Guid.Empty, 10m, "USD")));
+        var thrown = Record.Exception(() => WithLines(new OrderLine(Guid.Empty, 10m, "USD")));
 
         Assert.IsType<PaymentDomainException>(thrown);
     }
@@ -183,7 +183,7 @@ public class PaymentOrderTests
     {
         var party = Guid.NewGuid();
 
-        var thrown = Record.Exception(() => PaymentEvent.Create(Guid.NewGuid(), Random.Shared.NextInt64(1, long.MaxValue), party, [new PaymentOrderLine(party, 10m, "USD")]));
+        var thrown = Record.Exception(() => NewCheckout(buyerId: party).WithOrders(new OrderLine(party, 10m, "USD")));
 
         Assert.IsType<PaymentDomainException>(thrown);
     }
@@ -279,7 +279,7 @@ public class PaymentOrderTests
         var paymentEvent = SingleOrder();
         var id = paymentEvent.OnlyId();
 
-        paymentEvent.StartExecuting(id, Token);
+        paymentEvent.StartExecuting(id, Provider, Token);
         Assert.Equal(id, paymentEvent.OnlyId());
         paymentEvent.SucceedOrder(id);
         Assert.Equal(id, paymentEvent.OnlyId());
@@ -327,7 +327,7 @@ public class PaymentOrderTests
         var paymentEvent = SingleOrder();
         var before = Capture(paymentEvent);
 
-        var thrown = Record.Exception(() => paymentEvent.StartExecuting(paymentEvent.OnlyId(), token));
+        var thrown = Record.Exception(() => paymentEvent.StartExecuting(paymentEvent.OnlyId(), Provider, token));
 
         Assert.IsType<PaymentDomainException>(thrown);
         Assert.Equal(before, Capture(paymentEvent));
@@ -339,7 +339,7 @@ public class PaymentOrderTests
     {
         var paymentEvent = SingleOrder();
 
-        paymentEvent.StartExecuting(paymentEvent.OnlyId(), null);
+        paymentEvent.StartExecuting(paymentEvent.OnlyId(), Provider, null);
 
         Assert.Equal(PaymentOrderStatus.Executing, paymentEvent.Only().Status);
         Assert.Null(paymentEvent.Only().PspToken);
@@ -351,7 +351,7 @@ public class PaymentOrderTests
         var paymentEvent = SingleOrder();
         var token = new string('t', 200);
 
-        paymentEvent.StartExecuting(paymentEvent.OnlyId(), token);
+        paymentEvent.StartExecuting(paymentEvent.OnlyId(), Provider, token);
 
         Assert.Equal(token, paymentEvent.Only().PspToken);
     }
@@ -363,7 +363,7 @@ public class PaymentOrderTests
         var paymentEvent = SingleOrder();
         var before = Capture(paymentEvent);
 
-        var thrown = Record.Exception(() => paymentEvent.StartExecuting(paymentEvent.OnlyId(), new string('t', 201)));
+        var thrown = Record.Exception(() => paymentEvent.StartExecuting(paymentEvent.OnlyId(), Provider, new string('t', 201)));
 
         Assert.IsType<PaymentDomainException>(thrown);
         Assert.Equal(before, Capture(paymentEvent));
@@ -375,7 +375,7 @@ public class PaymentOrderTests
         var paymentEvent = SingleOrderIn(PaymentOrderStatus.Executing);
         var before = Capture(paymentEvent);
 
-        Assert.Throws<PaymentDomainException>(() => paymentEvent.StartExecuting(paymentEvent.OnlyId(), " "));
+        Assert.Throws<PaymentDomainException>(() => paymentEvent.StartExecuting(paymentEvent.OnlyId(), Provider, " "));
         Assert.Equal(before, Capture(paymentEvent));
     }
 
@@ -386,7 +386,7 @@ public class PaymentOrderTests
         var paymentEvent = SingleOrderIn(PaymentOrderStatus.Executing);
         var before = Capture(paymentEvent);
 
-        var thrown = Record.Exception(() => paymentEvent.StartExecuting(paymentEvent.OnlyId(), Token));
+        var thrown = Record.Exception(() => paymentEvent.StartExecuting(paymentEvent.OnlyId(), Provider, Token));
 
         Assert.Null(thrown);
         Assert.Equal(before, Capture(paymentEvent));
@@ -397,10 +397,10 @@ public class PaymentOrderTests
     public void Starting_again_without_a_token_after_starting_without_one_is_a_no_op()
     {
         var paymentEvent = SingleOrder();
-        paymentEvent.StartExecuting(paymentEvent.OnlyId(), null);
+        paymentEvent.StartExecuting(paymentEvent.OnlyId(), Provider, null);
         var before = Capture(paymentEvent);
 
-        var thrown = Record.Exception(() => paymentEvent.StartExecuting(paymentEvent.OnlyId(), null));
+        var thrown = Record.Exception(() => paymentEvent.StartExecuting(paymentEvent.OnlyId(), Provider, null));
 
         Assert.Null(thrown);
         Assert.Equal(before, Capture(paymentEvent));
@@ -412,10 +412,10 @@ public class PaymentOrderTests
     public void Starting_again_with_a_token_where_there_was_none_or_the_reverse_is_refused(string? first, string? second)
     {
         var paymentEvent = SingleOrder();
-        paymentEvent.StartExecuting(paymentEvent.OnlyId(), first);
+        paymentEvent.StartExecuting(paymentEvent.OnlyId(), Provider, first);
         var before = Capture(paymentEvent);
 
-        Assert.Throws<PaymentDomainException>(() => paymentEvent.StartExecuting(paymentEvent.OnlyId(), second));
+        Assert.Throws<PaymentDomainException>(() => paymentEvent.StartExecuting(paymentEvent.OnlyId(), Provider, second));
         Assert.Equal(before, Capture(paymentEvent));
     }
 
@@ -425,7 +425,7 @@ public class PaymentOrderTests
         var paymentEvent = SingleOrderIn(PaymentOrderStatus.Executing);
         var before = Capture(paymentEvent);
 
-        Assert.Throws<PaymentDomainException>(() => paymentEvent.StartExecuting(paymentEvent.OnlyId(), "another"));
+        Assert.Throws<PaymentDomainException>(() => paymentEvent.StartExecuting(paymentEvent.OnlyId(), Provider, "another"));
         Assert.Equal(before, Capture(paymentEvent));
     }
 
@@ -436,8 +436,57 @@ public class PaymentOrderTests
     {
         var paymentEvent = SingleOrderIn(status);
 
-        Assert.Throws<PaymentDomainException>(() => paymentEvent.StartExecuting(paymentEvent.OnlyId(), "another"));
+        Assert.Throws<PaymentDomainException>(() => paymentEvent.StartExecuting(paymentEvent.OnlyId(), Provider, "another"));
         Assert.Equal(Token, paymentEvent.Only().PspToken);
+    }
+
+    // --- Provider ---
+
+    [Fact]
+    public void Starting_records_the_provider()
+    {
+        var order = SingleOrderIn(PaymentOrderStatus.Executing).Only();
+
+        Assert.Equal(Provider, order.Provider);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    public void Refuses_a_blank_provider_and_changes_nothing(string provider)
+    {
+        var paymentEvent = SingleOrder();
+        var before = Capture(paymentEvent);
+
+        var thrown = Record.Exception(() => paymentEvent.StartExecuting(paymentEvent.OnlyId(), provider, Token));
+
+        Assert.IsType<PaymentDomainException>(thrown);
+        Assert.Equal(before, Capture(paymentEvent));
+    }
+
+    // Provider is varchar(20): a longer name would pass the domain and fail the save after the PSP session exists.
+    [Fact]
+    public void Refuses_a_provider_longer_than_the_column_and_changes_nothing()
+    {
+        var paymentEvent = SingleOrder();
+        var before = Capture(paymentEvent);
+
+        var thrown = Record.Exception(() =>
+            paymentEvent.StartExecuting(paymentEvent.OnlyId(), new string('p', PaymentOrder.ProviderMaxLength + 1), Token));
+
+        Assert.IsType<PaymentDomainException>(thrown);
+        Assert.Equal(before, Capture(paymentEvent));
+    }
+
+    // The same reference at a second provider is still a second payment session.
+    [Fact]
+    public void Starting_again_with_the_same_token_at_another_provider_is_refused_and_keeps_the_original()
+    {
+        var paymentEvent = SingleOrderIn(PaymentOrderStatus.Executing);
+        var before = Capture(paymentEvent);
+
+        Assert.Throws<PaymentDomainException>(() => paymentEvent.StartExecuting(paymentEvent.OnlyId(), "Braintree", Token));
+        Assert.Equal(before, Capture(paymentEvent));
     }
 
     // --- Settlement and domain events ---

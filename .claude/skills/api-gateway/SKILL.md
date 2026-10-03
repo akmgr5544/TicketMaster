@@ -206,7 +206,10 @@ what exists.
   `new ClaimsIdentity(claims)` with **no authentication type**, so `IsAuthenticated` was false and
   `GatewayAuthPolicy` 403'd every valid token — the gateway was non-functional for all protected
   routes. Fixed to `new ClaimsIdentity(claims, Scheme.Name)`.
-- No caching of introspection results: every proxied request costs an extra call to Users.Api.
+- Introspection results are cached for 30 seconds (`Handlers/IntrospectionCache`, keyed by a SHA-256 of
+  the token, its own size-limited `MemoryCache`, expiry read from `TimeProvider`). Only successes are
+  stored. The accepted cost: a revoked token or changed role survives at the edge for up to 30 seconds.
+  Covered by `GatewayTests/IntrospectionCacheTests`.
 
 ## Who enforces authentication, per cluster
 

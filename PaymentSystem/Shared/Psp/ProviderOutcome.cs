@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using PaymentProvider.Abstractions;
 using PaymentProvider.Exceptions;
 using PaymentProvider.Models;
 using PaymentSystem.Data;
@@ -10,7 +11,7 @@ namespace PaymentSystem.Shared.Psp;
 
 // Shared by the slices that talk to the PSP: StartCheckout, SubmitPaymentMethod and HandleWebhook. A
 // synchronous charge result and a webhook are the same news from the provider, so they go through one
-// mapping and cannot drift apart.
+// mapping and cannot drift apart; which provider an order talks to is decided here for the same reason.
 internal static class ProviderOutcome
 {
     public enum Kind
@@ -42,6 +43,17 @@ internal static class ProviderOutcome
 
     public static PaymentOrder OrderIn(PaymentEvent checkout, Guid paymentOrderId) =>
         checkout.PaymentOrders.Single(o => o.PaymentOrderId == paymentOrderId);
+
+    // The provider that started the order, never simply the current default: its session exists nowhere else.
+    // An order with none recorded is either not started yet or started before the provider was stored, and
+    // both go to the default, as every order did then.
+    public static IPaymentGateway GatewayFor(IPaymentGatewayFactory gateways, PaymentOrder order) =>
+        GatewayFor(gateways, order.Provider);
+
+    public static IPaymentGateway GatewayFor(IPaymentGatewayFactory gateways, string? provider) =>
+        provider is not null
+            ? gateways.Get(Enum.Parse<PaymentProviderKind>(provider))
+            : gateways.Default;
 
     // Only Succeeded and Canceled move the order; every other status leaves it Executing. Retries a lost
     // concurrency race once, from a cleared change tracker: reloading only the root would keep the sibling

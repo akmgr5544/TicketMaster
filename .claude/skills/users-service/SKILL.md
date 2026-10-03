@@ -164,9 +164,17 @@ Implemented:
   `Microsoft.IdentityModel.JsonWebTokens` is the current one and does not rewrite claim types into
   long URIs. Migrating means rebuilding token creation around `SecurityTokenDescriptor`, so it is
   deferred rather than done as a drop-in.
-- The role-touching paths (first-user-is-admin in Register, the `SetRole` endpoint) have no automated
-  test — Users has no DB test harness, and this repo avoids in-memory EF providers. A Users
-  integration project is the right home for them.
+- Role paths are covered by `Tests/Users/UsersIntegration` (real host, real JWTs over HTTP, Postgres). The
+  bootstrap race is pinned by `Two_first_registrations_that_both_see_an_empty_table_both_become_Admin`;
+  a guard would turn it red, and it should then be flipped to assert exactly one Admin.
+- `AdminOnly` reads the token's role claim, never the store, so a demotion takes effect only when the token
+  expires (1 day), a promotion needs a fresh login, and an admin can demote the last admin.
+- **`AuthOptions` is a positional record, so never `Configure<AuthOptions>`** — the options factory needs a
+  parameterless constructor and every `IOptions<AuthOptions>` consumer (register, login, refresh) then
+  fails to construct, a 500. `Program.cs` registers `Options.Create(authOptions)` instead;
+  `Mechanics/AuthOptionsTests` guards it.
+- Roles are parsed **by name only** in `SetRole`: `Enum.TryParse` also accepts `"7"` and
+  `"Admin,Customer"`.
 
 ## Common mistakes
 

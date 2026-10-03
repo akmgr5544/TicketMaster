@@ -20,7 +20,7 @@ public sealed class VersionTests(PaymentsFixture fixture) : IntegrationTest(fixt
         var id = saved.OrderId(0);
         var steps = new Action<PaymentSystem.Domain.PaymentEvent>[]
         {
-            c => c.StartExecuting(id, "tok"),
+            c => c.StartExecuting(id, CheckoutSeed.Provider, "tok"),
             // The success event would run the real Settle handler, whose own save is two more changes; the
             // wallet and ledger flags are driven as separate steps instead, so each save is one change.
             c =>
@@ -63,7 +63,7 @@ public sealed class VersionTests(PaymentsFixture fixture) : IntegrationTest(fixt
 
         var checkout = await LoadCheckoutAsync(saved.CheckoutId);
         Assert.Throws<PaymentSystem.Domain.Exceptions.PaymentDomainException>(() => checkout.FailOrder(saved.OrderId(0)));
-        Assert.Throws<PaymentSystem.Domain.Exceptions.PaymentDomainException>(() => checkout.StartExecuting(saved.OrderId(0), "tok"));
+        Assert.Throws<PaymentSystem.Domain.Exceptions.PaymentDomainException>(() => checkout.StartExecuting(saved.OrderId(0), CheckoutSeed.Provider, "tok"));
         Assert.Throws<PaymentSystem.Domain.Exceptions.PaymentDomainException>(() => checkout.SucceedOrder(Guid.NewGuid()));
 
         Assert.Equal(0, await Context.SaveChangesAsync());

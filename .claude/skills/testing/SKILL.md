@@ -20,8 +20,14 @@ Bookings is the reference for this split. Events now also has a container-backed
 `EventsIntegration`, against the **Cosmos emulator** — see [Events integration](#events-integration).
 Its fake-backed `EventsApplication` handler tests still stand and are **not** a regression to remove:
 the emulator cannot honour everything (see that section's limits), so the two are complementary, not a
-migration in progress. Users is still layered with fakes and no containers; do not "fix" it to match
-this document.
+migration in progress. Users has a container-backed host suite, `UsersIntegration`: one collection, serial,
+reset by Respawn before every test, because first-user-becomes-Admin needs an empty `Users` table. Under
+`WebApplicationFactory`, Users' own startup `ApplyMigrationsAsync` runs, so the fixture does not migrate.
+
+To force a check-then-insert race deterministically (the first-Admin race is the example), hold a
+`SHARE ROW EXCLUSIVE` table lock from a side connection — it lets the reads through and blocks the
+inserts — and poll `pg_stat_activity` from a *third* connection: a poll inside the lock's own transaction
+sees a snapshot frozen at its first read.
 
 ## Layout
 
@@ -51,6 +57,10 @@ Tests/Payments/ PaymentArchitecture  PaymentDomain  PaymentAdapters
   PaymentIntegration/     Postgres fixture (schema via MigrateAsync) + Mechanics/ real host on RabbitMQ;
                            Features/<Aggregate>/ per slice — see the `payments-service` skill
 Tests/Users/    UsersApi  UsersArchitecture
+  UsersIntegration/       one host fixture (WebApplicationFactory<Program> + Postgres), Respawn per test
+    Fixtures/             UsersHostFixture, UsersTest base (register/login/PUT-role helpers, fresh-scope reads)
+    Features/<Slice>/     Register/FirstAdminTests, SetRole/SetRoleTests
+    Mechanics/            AuthOptionsTests
 Tests/Rpc/      GrpcSeam — the one cross-service test: the Bookings↔Events gRPC error round-trip,
                 in-process (TestServer), no containers. See the `rpc` skill.
 Tests/Gateway/  GatewayTests — routing, edge auth and identity headers via WebApplicationFactory with
@@ -360,10 +370,12 @@ a paid booking refuses cancellation.
 - **Wolverine `Consume` handlers** — they need a broker, and each is a two-line delegation to a
   command that is covered. Testing them would prove Wolverine works.
 - **The HTTP layer** — `BookingApi` covers exception-to-status mapping. `Microsoft.AspNetCore.Mvc.Testing`
-  *is* referenced and used — `BookingsHostFixture` boots the host through `WebApplicationFactory<Program>`
-  — but only to prove startup and durability, not to send requests: there is no HTTP request/response
-  test suite exercising controllers over the wire.
-- **`IdentifiedCommandHandler`** — inert; `IRequestManager` has no implementation.
+  *is* referenced and used — `BookingsHostFixture` and `EventsHostFixture` boot the hosts through
+  `WebApplicationFactory<Program>` — but the only requests sent over the wire are the creates
+  (`Mechanics/MakeBookingEndpointTests`, `HostFixtures/CreateEndpointTests`), which guard
+  `CreatedAtAction` resolving its `Location`. There is no broader controller suite.
+- **`IdentifiedCommandHandler`** — kept as an example only; nothing sends an `IdentifiedCommand` and
+  `IRequestManager` has no implementation (see the `bookings-service` skill).
 
 ## Known gaps
 

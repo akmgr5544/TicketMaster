@@ -36,6 +36,9 @@ public sealed class EventsHostFixture : IAsyncLifetime
 
     public MessageSink Sink { get; } = new();
 
+    public HttpClient CreateClient() =>
+        (_factory ?? throw new InvalidOperationException("The host was not started.")).CreateClient();
+
     public async Task InitializeAsync()
     {
         await Task.WhenAll(_cosmos.StartAsync(), _rabbit.StartAsync());

@@ -8,9 +8,6 @@
 #   docker compose up --build          # build images and start everything
 #   http://localhost:8080/...          # the gateway is the only entry point
 #
-# Caveats (see the README's "Known gaps"): the Cosmos emulator image has no arm64 build, so Events'
-# store will not start on Apple Silicon; and the emulator serves a self-signed cert, so a real run
-# needs the SDK configured to trust it.
 
 services:
   postgres:
@@ -53,21 +50,17 @@ services:
       start_period: 30s
 
   # Backing store for Events. The account key below is Microsoft's well-known emulator key,
-  # identical on every machine and not a secret. No arm64 build exists — see the caveat above.
+  # identical on every machine and not a secret. vnext is the emulator line with a native arm64 build,
+  # the same one the EventsIntegration suite runs; it serves cleartext http and accepts only Gateway
+  # mode, which is why events-api sets CosmosConfigs__ConnectionMode.
   cosmos:
-    image: mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator:latest
+    image: mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator:vnext-latest
     container_name: ticketmaster-cosmos
-    tty: true
-    mem_limit: 3g
-    cpu_count: 2
-    environment:
-      AZURE_COSMOS_EMULATOR_PARTITION_COUNT: 3
-      AZURE_COSMOS_EMULATOR_ENABLE_DATA_PERSISTENCE: "true"
     ports:
       - "8081:8081"
-      - "10250-10255:10250-10255"
+      - "1234:1234"     # Data Explorer UI
     volumes:
-      - cosmos-data:/tmp/cosmos/appdata
+      - cosmos-data:/data
 
   users-api:
     image: users-api
@@ -98,8 +91,9 @@ services:
       Kestrel__Endpoints__Rest__Url: "http://+:8080"
       Kestrel__Endpoints__Grpc__Url: "http://+:8081"
       Kestrel__Endpoints__Grpc__Protocols: "Http2"
-      CosmosConfigs__ConnectionString: "AccountEndpoint=https://cosmos:8081/;AccountKey=C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw=="
+      CosmosConfigs__ConnectionString: "AccountEndpoint=http://cosmos:8081/;AccountKey=C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw=="
       CosmosConfigs__Database: "events_db"
+      CosmosConfigs__ConnectionMode: "Gateway"
       ConnectionStrings__RabbitMQ: "amqp://guest:guest@rabbitmq:5672"
     ports:
       - "5158:8080"

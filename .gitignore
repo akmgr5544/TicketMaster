@@ -227,3 +227,6 @@ AppPackages/
 
 # Local secrets for docker compose (never commit real values); see .env.example
 .env
+
+# Graphify knowledge-graph output (regenerate with `graphify update .`)
+graphify-out/

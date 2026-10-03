@@ -7,6 +7,8 @@ EXPOSE 8081
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 ARG BUILD_CONFIGURATION=Release
 WORKDIR /src
+# Central package management: restore cannot resolve a single version without the props files.
+COPY ["global.json", "Directory.Build.props", "Directory.Packages.props", "./"]
 COPY ["Users.Api/Users.Api.csproj", "Users.Api/"]
 RUN dotnet restore "Users.Api/Users.Api.csproj"
 COPY . .

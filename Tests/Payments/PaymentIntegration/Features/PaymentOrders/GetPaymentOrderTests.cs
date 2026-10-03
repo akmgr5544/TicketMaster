@@ -12,7 +12,7 @@ public sealed class GetPaymentOrderTests(PaymentsFixture fixture) : QueryTest(fi
     {
         var buyer = Guid.NewGuid();
         var merchant = Guid.NewGuid();
-        var checkout = await SeedCheckoutForAsync(buyer, new PaymentOrderLine(merchant, 42.10m, "GBP"));
+        var checkout = await SeedCheckoutForAsync(buyer, new OrderLine(merchant, 42.10m, "GBP"));
         await SettleAsync(checkout, checkout.OrderId(0));
 
         var result = await SendAsync(new GetPaymentOrder.Query(buyer, checkout.OrderId(0)));
@@ -35,7 +35,7 @@ public sealed class GetPaymentOrderTests(PaymentsFixture fixture) : QueryTest(fi
     public async Task Merchant_SeesTheirOrder_AsMerchant()
     {
         var merchant = Guid.NewGuid();
-        var checkout = await SeedCheckoutForAsync(Guid.NewGuid(), new PaymentOrderLine(merchant, 7m, "USD"));
+        var checkout = await SeedCheckoutForAsync(Guid.NewGuid(), new OrderLine(merchant, 7m, "USD"));
 
         var result = await SendAsync(new GetPaymentOrder.Query(merchant, checkout.OrderId(0)));
 
@@ -51,8 +51,8 @@ public sealed class GetPaymentOrderTests(PaymentsFixture fixture) : QueryTest(fi
         var merchantA = Guid.NewGuid();
         var merchantB = Guid.NewGuid();
         var checkout = await SeedCheckoutForAsync(Guid.NewGuid(),
-            new PaymentOrderLine(merchantA, 1m, "USD"),
-            new PaymentOrderLine(merchantB, 2m, "USD"));
+            new OrderLine(merchantA, 1m, "USD"),
+            new OrderLine(merchantB, 2m, "USD"));
         var orderOfA = checkout.PaymentOrders.Single(o => o.MerchantId == merchantA).PaymentOrderId;
 
         var result = await SendAsync(new GetPaymentOrder.Query(merchantB, orderOfA));

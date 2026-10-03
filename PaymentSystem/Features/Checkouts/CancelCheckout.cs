@@ -1,6 +1,8 @@
 using MediatR;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using PaymentSystem.Data;
+using PaymentSystem.Domain;
 using PaymentSystem.Enums;
 using PaymentSystem.Shared.Pipelines;
 using PaymentSystem.Shared.Results;
@@ -14,7 +16,7 @@ public static class CancelCheckout
     public sealed record Command(long BookingId) : IRequest<Result<Response>>, ITransactionalRequest;
 
     // Found false: no checkout for the booking — it was never sent for payment, or the cancellation overtook
-    // the PaymentRequested message.
+    // the PaymentRequested message. The cancellation is recorded, so that request is refused when it lands.
     public sealed record Response(bool Found, int OrdersFailed, int OrdersAlreadyPaid);
 
     internal sealed class Handler(PaymentDbContext context, ILogger<Handler> logger)
@@ -22,15 +24,15 @@ public static class CancelCheckout
     {
         public async Task<Result<Response>> Handle(Command request, CancellationToken cancellationToken)
         {
+            // The checkout is looked for before the claim: one created before claims existed has none.
+            if (!await context.PaymentEvents.AnyAsync(e => e.BookingId == request.BookingId, cancellationToken)
+                && await ClaimCancellationAsync(request.BookingId, cancellationToken))
+                return new Response(false, 0, 0);
+
             for (var attempt = 0;; attempt++)
             {
                 var checkout = await context.PaymentEvents
-                    .SingleOrDefaultAsync(e => e.BookingId == request.BookingId, cancellationToken);
-                if (checkout is null)
-                {
-                    logger.LogInformation("Booking {BookingId} was cancelled with no checkout to cancel.", request.BookingId);
-                    return new Response(false, 0, 0);
-                }
+                    .SingleAsync(e => e.BookingId == request.BookingId, cancellationToken);
 
                 var failed = checkout.Cancel();
                 var paid = checkout.PaymentOrders.Count(o => o.Status == PaymentOrderStatus.Success);
@@ -56,6 +58,39 @@ public static class CancelCheckout
                 }
             }
         }
+
+        // False when a request claimed the booking first: its checkout is committed by now, and is cancelled instead.
+        private async Task<bool> ClaimCancellationAsync(long bookingId, CancellationToken cancellationToken)
+        {
+            var status = await ClaimStatusAsync(bookingId, cancellationToken);
+            if (status is null)
+            {
+                context.BookingClaims.Add(BookingClaim.Cancelled(bookingId));
+                try
+                {
+                    await context.SaveChangesAsync(cancellationToken);
+                    logger.LogInformation("Booking {BookingId} was cancelled before its payment was requested; a later request will be refused.",
+                        bookingId);
+                    return true;
+                }
+                // A request claimed the booking after the check above; this insert waited for it to commit. EF
+                // saved inside a savepoint, so the transaction is still usable.
+                catch (DbUpdateException exception)
+                    when (exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
+                {
+                    context.ChangeTracker.Clear();
+                    status = await ClaimStatusAsync(bookingId, cancellationToken);
+                }
+            }
+
+            return status == BookingClaimStatus.Cancelled;
+        }
+
+        private Task<BookingClaimStatus?> ClaimStatusAsync(long bookingId, CancellationToken cancellationToken) =>
+            context.BookingClaims
+                .Where(c => c.BookingId == bookingId)
+                .Select(c => (BookingClaimStatus?)c.Status)
+                .SingleOrDefaultAsync(cancellationToken);
     }
 }
 

@@ -16,7 +16,9 @@ builder.Services.AddOpenApi();
 builder.Services.AddInfrastructureServices(builder.Configuration);
 builder.Services.AddApplicationServices();
 
-builder.Services.AddControllers();
+// The creates name their GET action as nameof(Get…Async); MVC strips the suffix by default, and then
+// CreatedAtAction finds no route and answers 500 after the document is already written.
+builder.Services.AddControllers(options => options.SuppressAsyncSuffixInActionNames = false);
 
 // Needs an HTTP/2 endpoint. Run the https profile, where ALPN lets these calls share a port with the
 // controllers. The plain http profile is HTTP/1.1 only and cannot serve them.

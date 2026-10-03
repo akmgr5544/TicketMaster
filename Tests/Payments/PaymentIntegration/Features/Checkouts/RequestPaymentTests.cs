@@ -26,6 +26,66 @@ public sealed class RequestPaymentTests(PaymentsFixture fixture) : MessagingTest
         await consumer.Consume(message, CancellationToken.None);
     }
 
+    private async Task CancelAsync(long bookingId)
+    {
+        await using var scope = NewScope();
+        await new BookingCancelledConsumer(scope.ServiceProvider.GetRequiredService<ISender>())
+            .Consume(new BookingCancelledIntegrationEvent(bookingId), CancellationToken.None);
+    }
+
+    // The cancellation overtook this request. Bookings has already released the seats, so it needs no
+    // BookingPaymentFailed — and there must be no checkout a buyer could still pay.
+    [Fact]
+    public async Task ARequestForABookingAlreadyCancelled_OpensNoCheckout_AndPublishesNothing()
+    {
+        var message = Request();
+        await CancelAsync(message.BookingId);
+
+        await ConsumeAsync(message);
+
+        Assert.Equal(0, await ReadAsync(c => c.PaymentEvents.CountAsync()));
+        Assert.Empty(Outbox.Published);
+        Assert.Empty(Outbox.Scheduled);
+    }
+
+    [Fact]
+    public async Task ARequestForABookingAlreadyCancelled_IsAnExpectedFailure_NamedForTheCancellation()
+    {
+        var message = Request();
+        await CancelAsync(message.BookingId);
+
+        var result = await SendAsync(new RequestPayment.Command(message.BookingId, message.BuyerId, message.SellerId,
+            message.Amount, message.Currency));
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(RequestPayment.BookingCancelledCode, result.Error!.Code);
+    }
+
+    // Both handlers claim the booking's key. The cancellation's claim is uncommitted, so the request's check
+    // sees nothing; its own claim insert must wait on the key rather than open a checkout beside it.
+    [Fact]
+    public async Task ARequestRacingACancellation_WaitsOnTheClaim_AndOpensNoCheckout()
+    {
+        var message = Request();
+        await using var cancelScope = NewScope();
+        var cancelContext = cancelScope.ServiceProvider.GetRequiredService<PaymentDbContext>();
+        await using var cancelTransaction = await cancelContext.Database.BeginTransactionAsync();
+        cancelContext.BookingClaims.Add(BookingClaim.Cancelled(message.BookingId));
+        await cancelContext.SaveChangesAsync();
+
+        var request = SendAsync(new RequestPayment.Command(message.BookingId, message.BuyerId, message.SellerId,
+            message.Amount, message.Currency));
+        await Task.Delay(TimeSpan.FromMilliseconds(500));
+        Assert.False(request.IsCompleted, "The request should wait on the cancellation's uncommitted claim.");
+        await cancelTransaction.CommitAsync();
+        var result = await request;
+
+        Assert.Equal(RequestPayment.BookingCancelledCode, result.Error!.Code);
+        Assert.Equal(0, await ReadAsync(c => c.PaymentEvents.CountAsync()));
+        Assert.Empty(Outbox.Published);
+        Assert.Empty(Outbox.Scheduled);
+    }
+
     [Fact]
     public async Task Consume_CreatesACheckoutWithOneUnstartedOrderForTheSeller()
     {
@@ -105,17 +165,18 @@ public sealed class RequestPaymentTests(PaymentsFixture fixture) : MessagingTest
     }
 
     [Fact]
-    public async Task ConcurrentDelivery_LosesOnTheUniqueIndex_AndSucceedsWithTheWinnersCheckout()
+    public async Task ConcurrentDelivery_LosesOnTheClaim_AndSucceedsWithTheWinnersCheckout()
     {
         var message = Request();
-        var winner = PaymentEvent.Create(Guid.CreateVersion7(), message.BookingId, message.BuyerId,
-            [new PaymentOrderLine(message.SellerId, message.Amount, message.Currency)]);
+        var winner = CheckoutSeed.Create(Guid.CreateVersion7(), message.BookingId, message.BuyerId,
+            [new OrderLine(message.SellerId, message.Amount, message.Currency)]);
 
         // The winner inserts first but holds its transaction open, so the loser's pre-check sees nothing and
-        // its insert waits on the unique index until the winner commits.
+        // its insert waits on the booking's key until the winner commits.
         await using var winnerScope = NewScope();
         var winnerContext = winnerScope.ServiceProvider.GetRequiredService<PaymentDbContext>();
         await using var winnerTransaction = await winnerContext.Database.BeginTransactionAsync();
+        winnerContext.BookingClaims.Add(BookingClaim.Requested(message.BookingId));
         winnerContext.PaymentEvents.Add(winner);
         await winnerContext.SaveChangesAsync();
 

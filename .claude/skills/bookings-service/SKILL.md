@@ -375,8 +375,11 @@ non-durable. Fixed: `ServiceCollectionExtension` now calls all three —
   behavior does not own that transaction, so it logs a warning and drops the work — it does **not**
   throw (`TransactionBehavior.DeferToTheOwnerAsync`), which is what rule 17 above says. Only
   `MakeBookingCommand` queues any, and only over HTTP, so nothing hits this today.
-- `IRequestManager` has no implementation, so `IdentifiedCommandHandler` fails on first use — the
-  idempotency mechanism is inert.
+- `IdentifiedCommand` / `IdentifiedCommandHandler` / `IRequestManager` are kept deliberately as an example
+  of request-id idempotency; nothing sends an `IdentifiedCommand` and `IRequestManager` has no
+  implementation. Do not delete them, and do not list them as a gap: idempotency is achieved per flow
+  instead (`Ticket.EventVersion` for messages; checkout-per-booking, PSP idempotency keys and settlement
+  flags in Payments).
 - `EventsService.GetEventByIdAsync` is a real gRPC call now, so `CreateTicketCommand` needs Events
   reachable. It is deliberately not `ITransactionalRequest` — see the `rpc` skill.
 - `Booking.CreatedAt` is stamped in the constructor `Create` uses, never in the parameterless one —
@@ -385,11 +388,10 @@ non-durable. Fixed: `ServiceCollectionExtension` now calls all three —
   and so already in creation order, and which walks the primary key index backwards instead of
   sorting an unindexed column. Ordering by `CreatedAt` would need an index on
   `(UserId, CreatedAt DESC)` to break even, and would buy nothing the key does not already give.
-- The list endpoint returns a bare array, so a caller infers "there may be more" from receiving a full
-  page. No total count and no cursor.
-- The gateway sets `X-Identity-UserId` correctly now — the transform replaces rather than appends,
-  `api/users/auth` exists, and the cluster addresses are filled in — but nothing tests any of it.
-  Calling Bookings directly still means supplying the header by hand.
+- The list endpoint pages by `page`/`pageSize` and returns `PagedResult` (`items`, `page`, `pageSize`,
+  `total`, `hasMore`), so the total costs a `COUNT` per request. No cursor.
+- The gateway's identity headers are covered by `Tests/Gateway/GatewayTests`. Calling Bookings directly
+  still means supplying the header by hand.
 - Repositories use `AddAsync`/`AddRangeAsync` (`efcore` rule 1) and each expose their own
   `SaveChangesAsync`, so `IUnitOfWork` is implemented twice over one context.
 - `CacheService` uses Newtonsoft.Json while the rest of the stack is on System.Text.Json.

@@ -21,7 +21,7 @@ public class PaymentEventTests
         var checkoutId = Guid.NewGuid();
         var buyerId = Guid.NewGuid();
 
-        var paymentEvent = PaymentEvent.Create(checkoutId, Random.Shared.NextInt64(1, long.MaxValue), buyerId, [Line()]);
+        var paymentEvent = NewCheckout(checkoutId, buyerId).WithOrders(Line());
 
         Assert.Equal(checkoutId, paymentEvent.CheckoutId);
         Assert.Equal(buyerId, paymentEvent.BuyerId);
@@ -32,53 +32,73 @@ public class PaymentEventTests
     [Fact]
     public void Refuses_an_empty_checkout_or_buyer()
     {
-        Assert.Throws<PaymentDomainException>(() => PaymentEvent.Create(Guid.Empty, Random.Shared.NextInt64(1, long.MaxValue), Guid.NewGuid(), [Line()]));
-        Assert.Throws<PaymentDomainException>(() => PaymentEvent.Create(Guid.NewGuid(), Random.Shared.NextInt64(1, long.MaxValue), Guid.Empty, [Line()]));
-        Assert.Throws<PaymentDomainException>(() => PaymentEvent.Create(Guid.Empty, Random.Shared.NextInt64(1, long.MaxValue), Guid.Empty, [Line()]));
+        Assert.Throws<PaymentDomainException>(() => PaymentEvent.Create(Guid.Empty, Random.Shared.NextInt64(1, long.MaxValue), Guid.NewGuid()));
+        Assert.Throws<PaymentDomainException>(() => PaymentEvent.Create(Guid.NewGuid(), Random.Shared.NextInt64(1, long.MaxValue), Guid.Empty));
+        Assert.Throws<PaymentDomainException>(() => PaymentEvent.Create(Guid.Empty, Random.Shared.NextInt64(1, long.MaxValue), Guid.Empty));
     }
 
     [Fact]
-    public void Refuses_a_checkout_with_no_lines() =>
-        Assert.Throws<PaymentDomainException>(() => PaymentEvent.Create(Guid.NewGuid(), Random.Shared.NextInt64(1, long.MaxValue), Guid.NewGuid(), []));
+    public void Refuses_a_checkout_for_no_booking() =>
+        Assert.Throws<PaymentDomainException>(() => PaymentEvent.Create(Guid.NewGuid(), 0, Guid.NewGuid()));
 
+    // TrueForAll holds over an empty list; a checkout with nothing in it must never read as paid.
     [Fact]
-    public void Refuses_missing_lines_as_an_argument_or_domain_error_not_a_null_dereference()
+    public void A_checkout_with_no_orders_yet_is_not_paid()
     {
-        var thrown = Record.Exception(() => PaymentEvent.Create(Guid.NewGuid(), Random.Shared.NextInt64(1, long.MaxValue), Guid.NewGuid(), null!));
+        var paymentEvent = NewCheckout();
 
-        Assert.True(thrown is ArgumentNullException or PaymentDomainException, $"Got {thrown?.GetType().Name ?? "no exception"}.");
+        Assert.Empty(paymentEvent.PaymentOrders);
+        Assert.Equal(0, paymentEvent.OrderCount);
+        Assert.False(paymentEvent.IsPaymentDone);
     }
 
     [Fact]
-    public void Refuses_a_null_line_as_an_argument_or_domain_error_not_a_null_dereference()
+    public void Adding_an_order_counts_it()
     {
-        var thrown = Record.Exception(() => PaymentEvent.Create(Guid.NewGuid(), Random.Shared.NextInt64(1, long.MaxValue), Guid.NewGuid(), [Line(), null!]));
+        var paymentEvent = NewCheckout().WithOrders(Line(), Line());
 
-        Assert.True(thrown is ArgumentNullException or PaymentDomainException, $"Got {thrown?.GetType().Name ?? "no exception"}.");
+        Assert.Equal(2, paymentEvent.OrderCount);
     }
 
-    public static TheoryData<PaymentOrderLine> BadLines => new()
+    [Theory]
+    [InlineData(PaymentOrderStatus.Executing)]
+    [InlineData(PaymentOrderStatus.Success)]
+    [InlineData(PaymentOrderStatus.Failed)]
+    public void Refuses_a_new_order_once_payment_has_begun(PaymentOrderStatus status)
     {
-        new PaymentOrderLine(Guid.Empty, 10m, "USD"),
-        new PaymentOrderLine(Guid.NewGuid(), 0m, "USD"),
-        new PaymentOrderLine(Guid.NewGuid(), -1m, "USD"),
-        new PaymentOrderLine(Guid.NewGuid(), 0.001m, "USD"),
-        new PaymentOrderLine(Guid.NewGuid(), 10_000_000_000_000_000m, "USD"),
-        new PaymentOrderLine(Guid.NewGuid(), 10m, "usd"),
-        new PaymentOrderLine(Guid.NewGuid(), 10m, null!),
+        var paymentEvent = SingleOrderIn(status);
+        var before = Capture(paymentEvent);
+
+        var thrown = Record.Exception(() => paymentEvent.WithOrders(Line()));
+
+        Assert.IsType<PaymentDomainException>(thrown);
+        Assert.Equal(before, Capture(paymentEvent));
+    }
+
+    public static TheoryData<OrderLine> BadLines => new()
+    {
+        new OrderLine(Guid.Empty, 10m, "USD"),
+        new OrderLine(Guid.NewGuid(), 0m, "USD"),
+        new OrderLine(Guid.NewGuid(), -1m, "USD"),
+        new OrderLine(Guid.NewGuid(), 0.001m, "USD"),
+        new OrderLine(Guid.NewGuid(), 10_000_000_000_000_000m, "USD"),
+        new OrderLine(Guid.NewGuid(), 10m, "usd"),
+        new OrderLine(Guid.NewGuid(), 10m, null!),
     };
 
-    // One bad line anywhere must sink the whole checkout; a partly-built checkout would charge some sellers only.
+    // A refused order must leave nothing behind, or the checkout would count an order it never got.
     [Theory]
     [MemberData(nameof(BadLines))]
-    public void A_bad_line_anywhere_refuses_the_whole_checkout(PaymentOrderLine bad)
+    public void A_bad_order_is_refused_and_leaves_the_checkout_as_it_was(OrderLine bad)
     {
-        foreach (var lines in new[] { new[] { bad, Line() }, new[] { Line(), bad }, new[] { Line(), bad, Line() } })
-        {
-            var thrown = Record.Exception(() => WithLines(lines));
+        var paymentEvent = WithLines(Line());
+        var before = Capture(paymentEvent);
 
-            Assert.IsType<PaymentDomainException>(thrown);
-        }
+        var thrown = Record.Exception(() => paymentEvent.WithOrders(bad));
+
+        Assert.IsType<PaymentDomainException>(thrown);
+        Assert.Equal(before, Capture(paymentEvent));
+        Assert.Equal(1, paymentEvent.OrderCount);
     }
 
     [Fact]
@@ -86,9 +106,9 @@ public class PaymentEventTests
     {
         var checkoutId = Guid.NewGuid();
         var buyerId = Guid.NewGuid();
-        PaymentOrderLine[] lines = [Line(10m), Line(20.25m, "EUR"), Line(0.01m, "GBP")];
+        OrderLine[] lines = [Line(10m), Line(20.25m, "EUR"), Line(0.01m, "GBP")];
 
-        var paymentEvent = PaymentEvent.Create(checkoutId, Random.Shared.NextInt64(1, long.MaxValue), buyerId, lines);
+        var paymentEvent = NewCheckout(checkoutId, buyerId).WithOrders(lines);
 
         Assert.Equal(lines.Length, paymentEvent.PaymentOrders.Count);
         foreach (var line in lines)
@@ -120,7 +140,7 @@ public class PaymentEventTests
     {
         var merchantId = Guid.NewGuid();
 
-        var thrown = Record.Exception(() => WithLines(new PaymentOrderLine(merchantId, 10m, "USD"), new PaymentOrderLine(merchantId, 5m, "USD")));
+        var thrown = Record.Exception(() => WithLines(new OrderLine(merchantId, 10m, "USD"), new OrderLine(merchantId, 5m, "USD")));
 
         Assert.IsType<PaymentDomainException>(thrown);
     }
@@ -130,7 +150,7 @@ public class PaymentEventTests
     {
         var merchantId = Guid.NewGuid();
 
-        var thrown = Record.Exception(() => WithLines(Line(), new PaymentOrderLine(merchantId, 1m, "USD"), Line(), new PaymentOrderLine(merchantId, 2m, "EUR")));
+        var thrown = Record.Exception(() => WithLines(Line(), new OrderLine(merchantId, 1m, "USD"), Line(), new OrderLine(merchantId, 2m, "EUR")));
 
         Assert.IsType<PaymentDomainException>(thrown);
     }
@@ -140,21 +160,9 @@ public class PaymentEventTests
     {
         var buyerId = Guid.NewGuid();
 
-        var thrown = Record.Exception(() => PaymentEvent.Create(Guid.NewGuid(), 1, buyerId, [Line(), new PaymentOrderLine(buyerId, 1m, "USD")]));
+        var thrown = Record.Exception(() => NewCheckout(buyerId: buyerId).WithOrders(Line(), new OrderLine(buyerId, 1m, "USD")));
 
         Assert.IsType<PaymentDomainException>(thrown);
-    }
-
-    [Fact]
-    public void Changing_the_callers_line_list_afterwards_does_not_change_the_checkout()
-    {
-        var lines = new List<PaymentOrderLine> { Line() };
-        var paymentEvent = PaymentEvent.Create(Guid.NewGuid(), Random.Shared.NextInt64(1, long.MaxValue), Guid.NewGuid(), lines);
-
-        lines.Add(Line());
-        lines.Clear();
-
-        Assert.Single(paymentEvent.PaymentOrders);
     }
 
     [Fact]
@@ -162,8 +170,8 @@ public class PaymentEventTests
     {
         var checkoutId = Guid.NewGuid();
 
-        var first = PaymentEvent.Create(checkoutId, Random.Shared.NextInt64(1, long.MaxValue), Guid.NewGuid(), [Line()]);
-        var second = PaymentEvent.Create(checkoutId, Random.Shared.NextInt64(1, long.MaxValue), Guid.NewGuid(), [Line()]);
+        var first = NewCheckout(checkoutId).WithOrders(Line());
+        var second = NewCheckout(checkoutId).WithOrders(Line());
 
         Assert.Equal(checkoutId, first.CheckoutId);
         Assert.Equal(checkoutId, second.CheckoutId);
@@ -211,7 +219,7 @@ public class PaymentEventTests
     {
         switch (operation)
         {
-            case "start": paymentEvent.StartExecuting(id, Token); break;
+            case "start": paymentEvent.StartExecuting(id, Provider, Token); break;
             case "succeed": paymentEvent.SucceedOrder(id); break;
             case "fail": paymentEvent.FailOrder(id); break;
             case "wallet": paymentEvent.MarkWalletUpdated(id); break;
@@ -339,7 +347,7 @@ public class PaymentEventTests
         var paymentEvent = ThreeSellers();
         var ids = paymentEvent.Ids();
         foreach (var id in ids)
-            paymentEvent.StartExecuting(id, Token);
+            paymentEvent.StartExecuting(id, Provider, Token);
 
         for (var i = 0; i < sequence.Length; i++)
         {
@@ -356,7 +364,7 @@ public class PaymentEventTests
         var paymentEvent = WithLines(Line(), Line());
         var ids = paymentEvent.Ids();
         paymentEvent.Drive(ids[0], PaymentOrderStatus.Success);
-        paymentEvent.StartExecuting(ids[1], Token);
+        paymentEvent.StartExecuting(ids[1], Provider, Token);
 
         paymentEvent.SucceedOrder(ids[0]);
         paymentEvent.SucceedOrder(ids[0]);
@@ -376,7 +384,7 @@ public class PaymentEventTests
         foreach (var id in ids)
         {
             Record.Exception(() => paymentEvent.FailOrder(id));
-            Record.Exception(() => paymentEvent.StartExecuting(id, "another"));
+            Record.Exception(() => paymentEvent.StartExecuting(id, Provider, "another"));
             paymentEvent.SucceedOrder(id);
             paymentEvent.MarkWalletUpdated(id);
             paymentEvent.MarkLedgerUpdated(id);
@@ -477,7 +485,7 @@ public class PaymentEventTests
         var before = Capture(paymentEvent);
 
         Assert.Throws<PaymentDomainException>(() => paymentEvent.SucceedOrder(paymentEvent.OnlyId()));
-        Assert.Throws<PaymentDomainException>(() => paymentEvent.StartExecuting(paymentEvent.OnlyId(), Token));
+        Assert.Throws<PaymentDomainException>(() => paymentEvent.StartExecuting(paymentEvent.OnlyId(), Provider, Token));
         Assert.Equal(before, Capture(paymentEvent));
     }
 
@@ -531,7 +539,7 @@ public class PaymentEventTests
         var paymentEvent = SingleOrderIn(PaymentOrderStatus.Executing);
         ForgetDone(paymentEvent, true);
 
-        paymentEvent.StartExecuting(paymentEvent.OnlyId(), Token);
+        paymentEvent.StartExecuting(paymentEvent.OnlyId(), Provider, Token);
 
         Assert.False(paymentEvent.IsPaymentDone);
     }
@@ -559,11 +567,11 @@ public class PaymentEventTests
         var ids = paymentEvent.Ids();
         var steps = new Action[]
         {
-            () => paymentEvent.StartExecuting(ids[0], Token),
+            () => paymentEvent.StartExecuting(ids[0], Provider, Token),
             () => paymentEvent.SucceedOrder(ids[0]),
             () => paymentEvent.MarkWalletUpdated(ids[0]),
             () => paymentEvent.MarkLedgerUpdated(ids[0]),
-            () => paymentEvent.StartExecuting(ids[1], Token),
+            () => paymentEvent.StartExecuting(ids[1], Provider, Token),
             () => paymentEvent.FailOrder(ids[1]),
         };
 
@@ -604,15 +612,15 @@ public class PaymentEventTests
         var version = paymentEvent.Version;
         var refused = new Action[]
         {
-            () => paymentEvent.StartExecuting(ids[0], "another"),
-            () => paymentEvent.StartExecuting(ids[1], " "),
-            () => paymentEvent.StartExecuting(ids[1], new string('t', 201)),
+            () => paymentEvent.StartExecuting(ids[0], Provider, "another"),
+            () => paymentEvent.StartExecuting(ids[1], Provider, " "),
+            () => paymentEvent.StartExecuting(ids[1], Provider, new string('t', 201)),
             () => paymentEvent.FailOrder(ids[0]),
             () => paymentEvent.SucceedOrder(ids[1]),
             () => paymentEvent.MarkWalletUpdated(ids[1]),
             () => paymentEvent.MarkLedgerUpdated(ids[1]),
             () => paymentEvent.SucceedOrder(Guid.Empty),
-            () => paymentEvent.StartExecuting(Guid.NewGuid(), Token),
+            () => paymentEvent.StartExecuting(Guid.NewGuid(), Provider, Token),
         };
 
         foreach (var call in refused)
