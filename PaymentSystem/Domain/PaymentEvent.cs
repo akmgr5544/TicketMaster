@@ -75,10 +75,10 @@ public class PaymentEvent : Entity
         RefreshIsPaymentDone();
     }
 
-    // True only when this call refunded the order; a repeat returns false so the caller reverses the money once.
-    public bool RefundOrder(Guid paymentOrderId, string refundReference)
+    // True only when this call made the refund; a repeat returns false so the caller reverses the money once.
+    public bool RefundOrder(Guid paymentOrderId, Guid refundId, decimal amount, string refundReference)
     {
-        var refunded = OrderById(paymentOrderId).Refund(refundReference);
+        var refunded = OrderById(paymentOrderId).Refund(refundId, amount, refundReference);
         RefreshIsPaymentDone();
         return refunded;
     }

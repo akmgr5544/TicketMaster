@@ -15,6 +15,7 @@ public class PaymentDbContext(DbContextOptions<PaymentDbContext> options) : DbCo
     {
         modelBuilder.ApplyConfiguration(new PaymentEventConfiguration());
         modelBuilder.ApplyConfiguration(new PaymentOrderConfiguration());
+        modelBuilder.ApplyConfiguration(new OrderRefundConfiguration());
         modelBuilder.ApplyConfiguration(new WalletConfiguration());
         modelBuilder.ApplyConfiguration(new LedgerEntryConfiguration());
         modelBuilder.ApplyConfiguration(new BookingClaimConfiguration());

@@ -9,6 +9,7 @@ namespace PaymentAdapters.Fixtures;
 public static class StripeWire
 {
     public const string OrderIdKey = "payment_order_id";
+    public const string RefundIdKey = "refund_id";
 
     private static readonly IReadOnlyDictionary<string, string> NoRetry =
         new Dictionary<string, string> { ["Stripe-Should-Retry"] = "false" };
@@ -46,7 +47,7 @@ public static class StripeWire
     }
 
     public static string Refund(string id = "re_1", string status = "succeeded", long created = 1_700_000_100,
-        string? failureReason = null) =>
+        string? failureReason = null, Guid? refundId = null) =>
         JsonSerializer.Serialize(new Dictionary<string, object?>
         {
             ["id"] = id,
@@ -57,6 +58,9 @@ public static class StripeWire
             ["status"] = status,
             ["created"] = created,
             ["failure_reason"] = failureReason,
+            ["metadata"] = refundId is { } value
+                ? new Dictionary<string, string> { [RefundIdKey] = value.ToString() }
+                : new Dictionary<string, string>(),
         });
 
     public static string List(params string[] items) =>

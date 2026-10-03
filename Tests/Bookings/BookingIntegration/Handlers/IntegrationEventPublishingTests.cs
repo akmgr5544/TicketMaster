@@ -169,7 +169,12 @@ public sealed class IntegrationEventPublishingTests : IntegrationTest
         await Sender.Send(new ReconcileEventVenueCommand(EventId, 2, "venue-2", Seed.Soon, ["A3"]));
 
         var published = Assert.Single(Log.Published);
-        Assert.Equal(new RefundRequestedIntegrationEvent(booking.Id), published.Event);
+        var requested = Assert.IsType<RefundRequestedIntegrationEvent>(published.Event);
+        // The whole booking: no amount, so PaymentSystem refunds whatever is still paid. Named, so the answer says
+        // which refund landed.
+        Assert.Equal(booking.Id, requested.BookingId);
+        Assert.NotNull(requested.RefundId);
+        Assert.Null(requested.Amount);
         Assert.NotNull(published.TransactionId);
     }
 

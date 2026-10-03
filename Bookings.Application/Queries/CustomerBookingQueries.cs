@@ -8,4 +8,5 @@ public record GetBookingQuery(long BookingId, Guid UserId) : IRequest<BookingDto
 
 public record ListBookingsQuery(Guid UserId, int Page, int PageSize) : IRequest<PagedResult<BookingDto>>;
 
-public record CancelBookingCommand(long BookingId, Guid UserId) : IRequest, ITransactionalRequest;
+// No ticket ids: the whole booking. Some: only those seats, which only a paid booking allows.
+public record CancelBookingCommand(long BookingId, Guid UserId, long[]? TicketIds = null) : IRequest, ITransactionalRequest;

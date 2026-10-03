@@ -1,10 +1,14 @@
 using Bookings.Application.Commands.Payments;
+using Bookings.Application.Dtos;
 using Bookings.Application.Exceptions;
 using Bookings.Application.Queries;
+using Bookings.Domain.Entities;
 using Bookings.Domain.Enums;
 using Bookings.Domain.Exceptions;
 using BookingIntegration.Fixtures;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using TicketMaster.Common.IntegrationEvents;
 
 namespace BookingIntegration.Handlers;
 
@@ -228,22 +232,118 @@ public sealed class CustomerBookingTests : IntegrationTest
             Sender.Send(new CancelBookingCommand(long.MaxValue, Owner)));
     }
 
-    /// <summary>
-    /// Cancelling a paid booking would be a refund, which this service does not do. Paid state is
-    /// arranged through <c>ConfirmBookingCommand</c>, not by mutating the entity, so the aggregate's own
-    /// refusal is what is under test.
-    /// </summary>
+    // An unpaid booking's checkout is open for its whole amount, so it is cancelled whole or not at all.
     [Fact]
-    public async Task Refuses_to_cancel_a_booking_that_has_been_paid_for()
+    public async Task Refuses_to_cancel_some_seats_of_an_unpaid_booking()
     {
-        var tickets = await Seed.TicketsAsync("evt-1", "A1");
+        var tickets = await Seed.TicketsAsync("evt-1", "A1", "A2");
+        var booking = await Seed.BookingAsync(Owner, tickets[0].Id, tickets[1].Id);
+
+        await Assert.ThrowsAsync<BookingsDomainException>(() =>
+            Sender.Send(new CancelBookingCommand(booking.Id, Owner, [tickets[0].Id])));
+
+        var stored = await ReadAsync(context => context.Bookings.SingleAsync(b => b.Id == booking.Id));
+        Assert.Equal(BookingStatus.Booked, stored.Status);
+    }
+
+    [Fact]
+    public async Task Naming_every_seat_of_an_unpaid_booking_cancels_it()
+    {
+        var tickets = await Seed.TicketsAsync("evt-1", "A1", "A2");
+        var booking = await Seed.BookingAsync(Owner, tickets[0].Id, tickets[1].Id);
+
+        await Sender.Send(new CancelBookingCommand(booking.Id, Owner, [tickets[1].Id, tickets[0].Id]));
+
+        var stored = await ReadAsync(context => context.Bookings.SingleAsync(b => b.Id == booking.Id));
+        Assert.Equal(BookingStatus.Cancelled, stored.Status);
+    }
+
+    // --- Cancelling seats of a paid booking: a refund ---
+
+    // Paid state is arranged through ConfirmBookingCommand, as the payment service's answer would arrive.
+    [Fact]
+    public async Task Cancelling_some_seats_of_a_paid_booking_asks_for_their_money_and_keeps_them_held()
+    {
+        var (booking, tickets) = await APaidBookingAsync("A1", "A2");
+
+        await Sender.Send(new CancelBookingCommand(booking.Id, Owner, [tickets[0].Id]));
+
+        var stored = await ReadAsync(context => context.Bookings.SingleAsync(b => b.Id == booking.Id));
+        Assert.Equal(BookingStatus.Payed, stored.Status);
+        var refund = Assert.Single(stored.Refunds);
+        Assert.Equal(new RefundRequestedIntegrationEvent(booking.Id, refund.Id, Seed.Pricing.Price, Seed.Pricing.Currency),
+            Assert.Single(Log.Published).Event);
+        Assert.All(await ReadTicketsAsync(tickets), ticket => Assert.Equal(TicketStatus.Booked, ticket.Status));
+    }
+
+    [Fact]
+    public async Task Cancelling_a_paid_booking_whole_asks_for_every_seat()
+    {
+        var (booking, _) = await APaidBookingAsync("A1", "A2");
+
+        await Sender.Send(new CancelBookingCommand(booking.Id, Owner));
+
+        var requested = Assert.IsType<RefundRequestedIntegrationEvent>(Assert.Single(Log.Published).Event);
+        Assert.Equal(2 * Seed.Pricing.Price, requested.Amount);
+    }
+
+    [Fact]
+    public async Task The_refund_landing_puts_back_only_its_seats_and_shows_on_the_booking()
+    {
+        var (booking, tickets) = await APaidBookingAsync("A1", "A2");
+        await Sender.Send(new CancelBookingCommand(booking.Id, Owner, [tickets[0].Id]));
+        var refundId = Assert.IsType<RefundRequestedIntegrationEvent>(Assert.Single(Log.Published).Event).RefundId;
+
+        await Sender.Send(new CompleteRefundCommand(booking.Id, refundId));
+
+        var stored = await ReadTicketsAsync(tickets);
+        Assert.Equal(TicketStatus.None, stored.Single(t => t.Id == tickets[0].Id).Status);
+        Assert.Equal(TicketStatus.Booked, stored.Single(t => t.Id == tickets[1].Id).Status);
+        var dto = await Sender.Send(new GetBookingQuery(booking.Id, Owner));
+        Assert.Equal(nameof(BookingStatus.Payed), dto.Status);
+        Assert.Equal(new BookingRefundDto(refundId!.Value, nameof(BookingRefundStatus.Completed), Seed.Pricing.Price,
+            Seed.Pricing.Currency, [tickets[0].Id]), Assert.Single(dto.Refunds), BookingRefundDtoComparer.Instance);
+    }
+
+    [Fact]
+    public async Task A_paid_seat_cannot_be_cancelled_once_its_event_has_started()
+    {
+        var tickets = await Seed.TicketsAsync("evt-1", DateTime.UtcNow.AddHours(-1), eventVersion: 0, "A1");
         var booking = await Seed.BookingAsync(Owner, tickets[0].Id);
         await Sender.Send(new ConfirmBookingCommand(booking.Id));
 
         await Assert.ThrowsAsync<BookingsDomainException>(() =>
             Sender.Send(new CancelBookingCommand(booking.Id, Owner)));
 
-        var stored = await ReadAsync(context => context.Bookings.SingleAsync(b => b.Id == booking.Id));
-        Assert.Equal(BookingStatus.Payed, stored.Status);
+        Assert.Empty(Log.Published);
+    }
+
+    private IntegrationEventLog Log => Act.GetRequiredService<IntegrationEventLog>();
+
+    private async Task<(Booking Booking, Ticket[] Tickets)> APaidBookingAsync(params string[] seats)
+    {
+        var tickets = await Seed.TicketsAsync("evt-1", seats);
+        var booking = await Seed.BookingAsync(Owner, tickets.Select(t => t.Id).ToArray());
+        await Sender.Send(new ConfirmBookingCommand(booking.Id));
+        return (booking, tickets);
+    }
+
+    private Task<Ticket[]> ReadTicketsAsync(Ticket[] tickets)
+    {
+        var ids = tickets.Select(t => t.Id).ToArray();
+        return ReadAsync(context => context.Tickets.Where(t => ids.Contains(t.Id)).ToArrayAsync());
+    }
+
+    // Records compare arrays by reference; this compares the ticket ids by value.
+    private sealed class BookingRefundDtoComparer : IEqualityComparer<BookingRefundDto>
+    {
+        public static readonly BookingRefundDtoComparer Instance = new();
+
+        public bool Equals(BookingRefundDto? x, BookingRefundDto? y) =>
+            x is not null && y is not null
+            && (x.Id, x.Status, x.Amount, x.Currency) == (y.Id, y.Status, y.Amount, y.Currency)
+            && x.TicketIds.SequenceEqual(y.TicketIds);
+
+        public int GetHashCode(BookingRefundDto obj) => obj.Id.GetHashCode();
     }
 }

@@ -8,7 +8,8 @@ public class PaymentOrder
 {
     public const int PspTokenMaxLength = 200;
     public const int ProviderMaxLength = 20;
-    public const int RefundReferenceMaxLength = 200;
+
+    private readonly List<OrderRefund> _refunds = [];
 
     public Guid PaymentOrderId { get; private set; }
     public Guid CheckoutId { get; private set; }
@@ -21,7 +22,8 @@ public class PaymentOrder
     public string? PspToken { get; private set; }
     public bool WalletUpdated { get; private set; }
     public bool LedgerUpdated { get; private set; }
-    public string? RefundReference { get; private set; }
+    public decimal RefundedAmount { get; private set; }
+    public IReadOnlyCollection<OrderRefund> Refunds => _refunds.AsReadOnly();
     public DateTime CreatedAt { get; private set; }
     public DateTime UpdatedAt { get; private set; }
 
@@ -102,22 +104,35 @@ public class PaymentOrder
         return true;
     }
 
+    // What is still the seller's to give back. Nothing on an order that never took money or has given it all back.
+    public decimal RefundableAmount => Status == PaymentOrderStatus.Success ? Amount - RefundedAmount : 0m;
+
+    internal OrderRefund RefundById(Guid refundId) =>
+        _refunds.Find(refund => refund.RefundId == refundId)
+        ?? throw new PaymentDomainException($"Payment order {PaymentOrderId} has no refund {refundId}.");
+
     // Only a settled success is refunded: its wallet credit and ledger pair exist, so the refund has something to
-    // reverse. A repeat is a no-op, so a redelivered refund cannot reverse the money twice.
-    internal bool Refund(string refundReference)
+    // reverse. A repeated refund id is a no-op, so a redelivered refund cannot reverse the money twice. The order
+    // stays Success while part of it is still the seller's, and is Refunded once the parts add up to all of it.
+    internal bool Refund(Guid refundId, decimal amount, string refundReference)
     {
-        if (string.IsNullOrWhiteSpace(refundReference))
-            throw new PaymentDomainException("A refund needs the provider's reference for it.");
-        if (refundReference.Length > RefundReferenceMaxLength)
-            throw new PaymentDomainException($"A refund reference cannot be longer than {RefundReferenceMaxLength} characters.");
-        if (Status == PaymentOrderStatus.Refunded)
+        var refund = OrderRefund.Create(PaymentOrderId, refundId, amount, refundReference);
+        if (_refunds.Exists(existing => existing.RefundId == refundId))
             return false;
+        if (Status == PaymentOrderStatus.Refunded)
+            throw new PaymentDomainException($"Payment order {PaymentOrderId} has been refunded in full; nothing is left for refund {refundId}.");
         EnsureSucceeded();
         if (!WalletUpdated || !LedgerUpdated)
             throw new PaymentDomainException("A payment order is refunded only once its settlement is recorded.");
+        MoneyAmount.EnsurePositiveAndStorable(amount, "A refund amount");
+        if (amount > RefundableAmount)
+            throw new PaymentDomainException(
+                $"Refund {refundId} of {amount} {Currency} is more than the {RefundableAmount} {Currency} left on payment order {PaymentOrderId}.");
 
-        Status = PaymentOrderStatus.Refunded;
-        RefundReference = refundReference;
+        _refunds.Add(refund);
+        RefundedAmount += amount;
+        if (RefundedAmount == Amount)
+            Status = PaymentOrderStatus.Refunded;
         return true;
     }
 

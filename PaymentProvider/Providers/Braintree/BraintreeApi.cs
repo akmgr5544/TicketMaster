@@ -72,8 +72,9 @@ internal sealed class BraintreeApi(IOptions<BraintreeOptions> options) : IBraint
         return latest is null ? null : ToContract(latest);
     }
 
-    public async Task<BraintreeTransaction> RefundAsync(string transactionId, decimal amount) =>
-        ToContract(Outcome(await CallAsync(() => _gateway.Transaction.RefundAsync(transactionId, amount))));
+    public async Task<BraintreeTransaction> RefundAsync(string transactionId, decimal amount, string orderId) =>
+        ToContract(Outcome(await CallAsync(() => _gateway.Transaction.RefundAsync(transactionId,
+            new TransactionRefundRequest { Amount = amount, OrderId = orderId }))));
 
     public async Task<BraintreeTransaction> VoidAsync(string transactionId) =>
         ToContract(Outcome(await CallAsync(() => _gateway.Transaction.VoidAsync(transactionId))));

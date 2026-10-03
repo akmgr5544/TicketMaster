@@ -21,7 +21,7 @@ internal sealed class CompleteRefundCommandHandler : IRequestHandler<CompleteRef
         if (booking is null)
             throw new NotFoundException("Booking", request.BookingId.ToString());
 
-        booking.MarkRefunded();
+        booking.MarkRefunded(request.RefundId);
         await _bookings.SaveChangesAsync(cancellationToken);
     }
 }

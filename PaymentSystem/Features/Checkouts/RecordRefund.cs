@@ -13,7 +13,16 @@ namespace PaymentSystem.Features.Checkouts;
 // and BookingRefunded commit together, so a refund is never recorded in part.
 public static class RecordRefund
 {
-    public sealed record Command(Guid PaymentOrderId, string RefundReference) : IRequest<Result<Response>>, ITransactionalRequest;
+    // RefundId names this part of the order; BookingRefundId is the id Bookings asked under, echoed back to it.
+    // WholeCheckout: the booking is reported refunded only once every paid order is; a partial refund is reported as
+    // soon as its one part is recorded.
+    public sealed record Command(
+        Guid PaymentOrderId,
+        Guid RefundId,
+        decimal Amount,
+        string RefundReference,
+        Guid? BookingRefundId,
+        bool WholeCheckout) : IRequest<Result<Response>>, ITransactionalRequest;
 
     // Recorded false: the order was refunded already — a redelivery, which reverses nothing a second time.
     public sealed record Response(bool Recorded, bool BookingRefunded);
@@ -31,7 +40,7 @@ public static class RecordRefund
                 if (checkout is null)
                     return Error.NotFound("payment_order_not_found", $"No payment order {request.PaymentOrderId}.");
 
-                if (!checkout.RefundOrder(request.PaymentOrderId, request.RefundReference))
+                if (!checkout.RefundOrder(request.PaymentOrderId, request.RefundId, request.Amount, request.RefundReference))
                     return new Response(false, false);
 
                 var order = checkout.Order(request.PaymentOrderId);
@@ -39,8 +48,8 @@ public static class RecordRefund
                 // credited, so it is there.
                 var wallet = await context.Wallets.SingleAsync(
                     w => w.OwnerId == order.MerchantId && w.Currency == order.Currency, cancellationToken);
-                wallet.Debit(order.Amount, order.Currency);
-                context.LedgerEntries.AddRange(LedgerEntry.RecordRefund(order));
+                wallet.Debit(request.Amount, order.Currency);
+                context.LedgerEntries.AddRange(LedgerEntry.RecordRefund(order, request.RefundId));
 
                 try
                 {
@@ -55,10 +64,12 @@ public static class RecordRefund
                 }
 
                 // Staged after the save, as Settle does, so a lost race cannot leave a copy behind in the outbox.
-                // Only the refund of the last paid order finds the checkout fully refunded, so it goes out once.
-                var bookingRefunded = checkout.IsFullyRefunded;
+                // Only the refund of the last paid order finds the checkout fully refunded, so a whole-checkout refund
+                // goes out once; a partial one has a single part, so it does too.
+                var bookingRefunded = !request.WholeCheckout || checkout.IsFullyRefunded;
                 if (bookingRefunded)
-                    await publisher.PublishAsync(new BookingRefundedIntegrationEvent(checkout.BookingId), cancellationToken);
+                    await publisher.PublishAsync(
+                        new BookingRefundedIntegrationEvent(checkout.BookingId, request.BookingRefundId), cancellationToken);
 
                 return new Response(true, bookingRefunded);
             }

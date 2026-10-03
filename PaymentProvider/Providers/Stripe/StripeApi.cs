@@ -13,6 +13,7 @@ namespace PaymentProvider.Providers.Stripe;
 internal sealed class StripeApi(IOptions<StripeOptions> options) : IStripeApi
 {
     private const string PaymentOrderIdKey = "payment_order_id";
+    private const string RefundIdKey = "refund_id";
 
     private readonly StripeClient _client = new(options.Value.SecretKey, apiBase: options.Value.ApiBase);
     private readonly string _webhookSecret = options.Value.WebhookSecret;
@@ -69,7 +70,11 @@ internal sealed class StripeApi(IOptions<StripeOptions> options) : IStripeApi
         {
             PaymentIntent = request.PaymentIntentId,
             Amount = request.Amount,
-            Metadata = new Dictionary<string, string> { [PaymentOrderIdKey] = request.PaymentOrderId },
+            Metadata = new Dictionary<string, string>
+            {
+                [PaymentOrderIdKey] = request.PaymentOrderId,
+                [RefundIdKey] = request.RefundId,
+            },
         };
         var requestOptions = new RequestOptions { IdempotencyKey = request.IdempotencyKey };
 
@@ -80,8 +85,8 @@ internal sealed class StripeApi(IOptions<StripeOptions> options) : IStripeApi
                 cancellationToken);
             return ToContract(refund);
         }
-        // The idempotency key only lasts 24 hours. Past that, a second request for the same intent is refused as
-        // already refunded, and the refund that did that is the answer.
+        // The idempotency key only lasts 24 hours. Past that, a repeat that would take the intent past its amount is
+        // refused as already refunded; if this refund is among those made, it is the answer.
         catch (PaymentProviderException exception)
             when (exception.InnerException is StripeException { StripeError.Code: "charge_already_refunded" })
         {
@@ -89,10 +94,11 @@ internal sealed class StripeApi(IOptions<StripeOptions> options) : IStripeApi
                 () => _client.V1.Refunds.ListAsync(
                     new RefundListOptions { PaymentIntent = request.PaymentIntentId }, cancellationToken: cancellationToken),
                 cancellationToken);
-            var latest = refunds.Data.MaxBy(refund => refund.Created)
-                         ?? throw new PaymentProviderException(PaymentProviderKind.Stripe, PaymentProviderErrorKind.Unknown,
-                             $"Payment intent {request.PaymentIntentId} is refunded but lists no refund.", exception);
-            return ToContract(latest);
+            var existing = refunds.Data.Find(refund => refund.Metadata?.GetValueOrDefault(RefundIdKey) == request.RefundId)
+                           ?? throw new PaymentProviderException(PaymentProviderKind.Stripe, PaymentProviderErrorKind.InvalidRequest,
+                               $"Payment intent {request.PaymentIntentId} has been refunded by other refunds; nothing is left for refund {request.RefundId}.",
+                               exception);
+            return ToContract(existing);
         }
     }
 

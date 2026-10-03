@@ -15,6 +15,6 @@ public class BookingRefundedIntegrationEventHandler
 
     public async Task Consume(BookingRefundedIntegrationEvent request, CancellationToken cancellationToken)
     {
-        await _mediator.Send(new CompleteRefundCommand(request.BookingId), cancellationToken);
+        await _mediator.Send(new CompleteRefundCommand(request.BookingId, request.RefundId), cancellationToken);
     }
 }

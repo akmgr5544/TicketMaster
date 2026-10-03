@@ -63,8 +63,8 @@ public sealed class StubGateway(PaymentProviderKind kind) : IPaymentGateway
 
     public Func<RefundRequest, RefundResult> OnRefund { get; set; } = null!;
 
-    // Stable per order, the way the real adapters answer a repeated refund with the first.
-    public static string RefundReferenceFor(Guid paymentOrderId) => $"re_{paymentOrderId:N}";
+    // Stable per order and refund, the way the real adapters answer a repeated refund with the first.
+    public static string RefundReferenceFor(Guid paymentOrderId, Guid refundId) => $"re_{paymentOrderId:N}_{refundId:N}";
 
     // Distinct per call, so a test can tell a replayed client token from the first.
     public static string ClientTokenFor(Guid paymentOrderId, int call) => $"client_secret_{paymentOrderId:N}_{call}";
@@ -80,7 +80,8 @@ public sealed class StubGateway(PaymentProviderKind kind) : IPaymentGateway
         Refunds.Clear();
         // The provider has no payment for the order until a test says otherwise.
         OnLookup = _ => null;
-        OnRefund = request => new RefundResult(RefundReferenceFor(request.PaymentOrderId), RefundStatus.Succeeded);
+        OnRefund = request => new RefundResult(RefundReferenceFor(request.PaymentOrderId, request.RefundId),
+            RefundStatus.Succeeded);
         OnCheckout = request => new CheckoutSession(
             kind == PaymentProviderKind.Braintree ? null : ReferenceFor(request.PaymentOrderId),
             ClientTokenFor(request.PaymentOrderId, Checkouts.Count));

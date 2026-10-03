@@ -118,7 +118,7 @@ public sealed class HydrationTests(PaymentsFixture fixture) : IntegrationTest(fi
     }
 
     [Fact]
-    public void Model_MapsExactlyTheFiveTypes_AndNoDomainEventsMember()
+    public void Model_MapsExactlyTheSixTypes_AndNoDomainEventsMember()
     {
         foreach (var entityType in Context.Model.GetEntityTypes())
         {
@@ -127,7 +127,7 @@ public sealed class HydrationTests(PaymentsFixture fixture) : IntegrationTest(fi
         }
 
         Assert.Equal(
-            [nameof(BookingClaim), nameof(LedgerEntry), nameof(PaymentEvent), nameof(PaymentOrder), nameof(Wallet)],
+            [nameof(BookingClaim), nameof(LedgerEntry), nameof(OrderRefund), nameof(PaymentEvent), nameof(PaymentOrder), nameof(Wallet)],
             Context.Model.GetEntityTypes().Select(t => t.ClrType.Name).Order());
     }
 

@@ -71,11 +71,16 @@ internal sealed class BraintreePaymentGateway(IBraintreeApi api, IOptions<Braint
         if (sale is null)
             throw RequestGuard.Invalid(Kind, $"Payment order {request.PaymentOrderId} has no payment to refund.");
 
-        // Braintree has no idempotency key, so a repeated request is answered from what the sale already shows.
+        // Braintree has no idempotency key, so a repeated request is answered from what the sale already shows:
+        // each refund carries its refund id as its order id, and an earlier part of the order is not this one.
+        var refundId = request.RefundId.ToString();
         if (sale.Status == BraintreeTransactionStatus.Voided)
             return new RefundResult(sale.Id, RefundStatus.Succeeded);
-        if (sale.RefundIds is [.., var latestRefundId] && await api.FindAsync(latestRefundId) is { } issued)
-            return ToRefundResult(issued);
+        foreach (var issuedId in sale.RefundIds ?? [])
+        {
+            if (await api.FindAsync(issuedId) is { } issued && issued.OrderId == refundId)
+                return ToRefundResult(issued);
+        }
 
         // An unsettled sale cannot be refunded, only voided — which returns all of it, so only a full refund
         // may take that path.
@@ -95,7 +100,7 @@ internal sealed class BraintreePaymentGateway(IBraintreeApi api, IOptions<Braint
             case BraintreeTransactionStatus.Settling
                 or BraintreeTransactionStatus.SettlementConfirmed
                 or BraintreeTransactionStatus.Settled:
-                return ToRefundResult(await api.RefundAsync(sale.Id, request.Amount));
+                return ToRefundResult(await api.RefundAsync(sale.Id, request.Amount, refundId));
 
             default:
                 throw RequestGuard.Invalid(Kind,

@@ -98,8 +98,8 @@ Each project has a marker interface (`IApiAssemblyMarker`, `IApplicationAssembly
 checkout is the aggregate root owning one `PaymentOrder` per seller; `Wallet`; double-entry `LedgerEntry`),
 `Data/`, `Shared/{Endpoints,Pipelines,Results,Messaging}`, and `Features/<Aggregate>/<Feature>.cs` — one
 file per feature, **no per-feature folder** (`Checkouts/`, `PaymentOrders/`, `Webhooks/`, `Wallets/`).
-Handlers return `Result<T>` like Users. It takes pay-ins and gives them back in full as refunds; there is no
-pay-out to sellers. `PaymentProvider` is the PSP anti-corruption library (Stripe, Braintree). See the
+Handlers return `Result<T>` like Users. It takes pay-ins and gives them back as refunds, whole or in part;
+there is no pay-out to sellers. `PaymentProvider` is the PSP anti-corruption library (Stripe, Braintree). See the
 `payments-service` skill for the rules, the flow and the known gaps.
 
 ### Cross-cutting patterns
@@ -112,8 +112,10 @@ pay-out to sellers. `PaymentProvider` is the PSP anti-corruption library (Stripe
   an unpriced ticket is not on sale) and every booking cancellation publishes
   `BookingCancelled`; PaymentSystem answers with `BookingPaid` or `BookingPaymentFailed` (PSP cancel,
   15-minute checkout expiry, or the booking being cancelled). A paid booking a relocation voids publishes
-  `RefundRequested`; PaymentSystem refunds every paid order in full — as it does for a booking cancelled after it
-  was paid — and answers `BookingRefunded`, which releases the seats the booking still held. Both services publish through an
+  `RefundRequested` with no amount, and PaymentSystem refunds whatever is still paid — as it does for a booking
+  cancelled after it was paid. A customer cancelling seats of a paid booking (until the event starts) publishes
+  it with those seats' amount, and PaymentSystem refunds that much. Every refund carries a `RefundId`;
+  `BookingRefunded` echoes it and releases the seats that refund covered — they stay held until then. Both services publish through an
   `IIntegrationEventPublisher` that stages into Wolverine's `DbContextOutbox` on the open transaction and
   sends after commit — never `SaveChangesAndFlushMessagesAsync`, which commits the transaction itself.
 - **Outbox / messaging**: `Bookings.Application.Extensions.ConfigureRabbitMq` sets up **WolverineFx** with RabbitMQ transport, Postgres-backed outbox (`PersistMessagesWithPostgresql`), EF Core transactions, and all three durability policies — `UseDurableLocalQueues`, `UseDurableInboxOnAllListeners` and `UseDurableOutboxOnAllSendingEndpoints`. Uses conventional routing and auto-provisioning.

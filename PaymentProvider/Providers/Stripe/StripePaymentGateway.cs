@@ -53,13 +53,16 @@ internal sealed class StripePaymentGateway(IStripeApi api) : IPaymentGateway
             throw RequestGuard.Invalid(Kind, $"Payment order {request.PaymentOrderId} has no successful payment to refund.");
 
         var paymentOrderId = request.PaymentOrderId.ToString();
+        var refundId = request.RefundId.ToString();
         var refund = await api.CreateRefundAsync(
             new StripeCreateRefund(
                 intent.Id,
                 StripeAmount.ToMinorUnits(request.Amount, currency),
                 paymentOrderId,
-                // Keyed on the order, as checkout is, so a redelivered refund replays the first instead of a second.
-                IdempotencyKey: $"refund:{paymentOrderId}"),
+                refundId,
+                // Keyed on the refund as well as the order: an order refunded in parts takes one refund per part, a
+                // whole-checkout refund shares its id across orders, and a redelivered part replays its first answer.
+                IdempotencyKey: $"refund:{paymentOrderId}:{refundId}"),
             cancellationToken);
 
         return new RefundResult(refund.Id, ToStatus(refund), refund.FailureReason);

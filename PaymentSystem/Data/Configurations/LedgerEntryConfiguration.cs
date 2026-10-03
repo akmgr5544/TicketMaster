@@ -14,9 +14,10 @@ internal sealed class LedgerEntryConfiguration : IEntityTypeConfiguration<Ledger
         builder.Property<Guid>("Id").ValueGeneratedOnAdd();
         builder.HasKey("Id");
 
-        // One debit and one credit per order and reason: a redelivered settlement or refund that tries to record
-        // its pair again fails here instead of doubling the ledger.
-        builder.HasIndex(entry => new { entry.PaymentOrderId, entry.Reason, entry.Type }).IsUnique();
+        builder.HasIndex(entry => new { entry.PaymentOrderId, entry.Reason, entry.Type, entry.RefundId })
+            .IsUnique()
+            .AreNullsDistinct(false);
+        
         builder.HasOne<PaymentOrder>()
             .WithMany()
             .HasForeignKey(entry => entry.PaymentOrderId)

@@ -98,10 +98,10 @@ flowchart LR
 | `EventCancelled` | Events → Bookings | Cancels the event's tickets |
 | `PaymentRequested` | Bookings → Payments | Opens a checkout (one payment order per seller) and schedules its 15-minute expiry |
 | `BookingCancelled` | Bookings → Payments | Fails the checkout's unsettled orders and refunds any that were already paid. With no checkout yet, claims the booking as cancelled so a late `PaymentRequested` is refused |
-| `RefundRequested` | Bookings → Payments | Refunds every paid order of the booking's checkout in full, at its provider, and reverses the wallet credit and ledger pair |
+| `RefundRequested` | Bookings → Payments | With no amount (a relocation), refunds whatever is still paid on every order; with one (a customer cancelling seats), refunds that much. At the provider, then reverses that much of the wallet credit with its own ledger pair |
 | `BookingPaid` | Payments → Bookings | Confirms the booking |
 | `BookingPaymentFailed` | Payments → Bookings | Cancels the unpaid booking and releases its seats |
-| `BookingRefunded` | Payments → Bookings | Marks a `RefundPending` booking `Refunded` and releases the seats it still held |
+| `BookingRefunded` | Payments → Bookings | Names the refund that landed; releases the seats it covered, and marks the booking `Refunded` once every seat's refund has |
 
 ### A booking, end to end
 
@@ -218,7 +218,8 @@ POST   /api/bookings                    # 201 + { id }
 GET    /api/bookings/{id}               # the caller's own; somebody else's is a 404
                                         # responses carry createdAt
 GET    /api/bookings?page=&pageSize=    # the caller's own, newest first
-POST   /api/bookings/{id}/cancel        # 204; a paid booking is refused with 400
+POST   /api/bookings/{id}/cancel        # 204; optional { ticketIds }. Unpaid: cancelled whole. Paid: those
+                                        # seats (or all) refunded until the event starts; held until the money lands
 ```
 
 Payments exposes the checkout's payment side, also scoped to the caller; PSP webhooks are the one
@@ -230,7 +231,7 @@ POST   /api/payments/orders/{id}/payment-method  # synchronous charge (Braintree
 POST   /api/payments/webhooks/{provider}         # PSP callback — signature-verified, no user token
 GET    /api/payments/checkouts/{bookingId}       # the buyer's checkout and its orders
 GET    /api/payments/orders/{id}                 # visible to the order's buyer or its seller
-GET    /api/payments/orders/{id}/ledger          # the order's pay-in pair, and its refund pair if refunded (sums to zero)
+GET    /api/payments/orders/{id}/ledger          # the order's pay-in pair and a refund pair per refund (zero once wholly refunded)
 GET    /api/wallets/me                           # the caller's wallets, one per currency
 ```
 
@@ -271,8 +272,8 @@ PaymentSystem keeps each command, query and handler together in its feature file
 and nothing else, so a checkout abandoned before booking lapses on its own and needs no compensating
 action. Booking replaces that with a durable hold: the reservation is deleted and the ticket's own
 status carries it. The trade is explicit — after booking, the TTL no longer applies to those seats, so
-only a cancellation of the booking can put them back: a `BookingPaymentFailed`, the owner cancelling, or a
-relocation that removes one of its seats. The unpaid case has a timeout, and it lives in PaymentSystem: a
+only a cancellation or a refund can put them back: a `BookingPaymentFailed`, the owner cancelling (a paid
+seat comes back once its refund lands), or a relocation that removes one of its seats. The unpaid case has a timeout, and it lives in PaymentSystem: a
 checkout nobody pays for fails after 15 minutes.
 
 **Reservation checks the database before holding anything.** `Ticket.IsAvailableFor` is the rule —
@@ -598,10 +599,10 @@ each lives in the owning service's skill under `.claude/skills/`.
 - **A charge or settlement can lose a concurrency race** (409); a webhook or `ReconcileOrdersJob` settles it within minutes.
 - **A refund can take a seller's wallet below zero**, because the provider has already returned the money.
 - **A refund the provider refuses is logged for a person**, and one accepted as pending that fails later goes unnoticed.
+- **A Braintree sale that has not settled cannot be refunded in part**, only voided whole, so cancelling one seat right after paying needs a person.
 
 ## 🗺️ Roadmap
 
 - Notifications to the customer when a booking is refunded or cancelled
-- Customer-initiated cancellation of a paid booking, and partial refunds
 - Reconciliation against PSP settlement files
 - Saga / process-manager work for the full booking flow in Wolverine

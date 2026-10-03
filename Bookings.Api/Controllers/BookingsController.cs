@@ -5,6 +5,7 @@ using Bookings.Application.Dtos;
 using Bookings.Application.Queries;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Bookings.Application.Commands.Bookings;
 
 namespace Bookings.Api.Controllers;
@@ -70,17 +71,23 @@ public class BookingsController : BaseController
         return Ok(bookings);
     }
 
+    /// <summary>
+    /// An unpaid booking is cancelled whole. A paid one has its seats — all, or the ones named — refunded until the
+    /// event starts; they stay held until the money is back.
+    /// </summary>
     [HttpPost("{id:long}/cancel")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> CancelBookingAsync(long id, CancellationToken cancellationToken)
+    public async Task<IActionResult> CancelBookingAsync(long id,
+        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] CancelBookingRequest? request,
+        CancellationToken cancellationToken)
     {
         if (!TryGetUserId(out var userId))
             return Unauthorized();
 
-        await _sender.Send(new CancelBookingCommand(id, userId), cancellationToken);
+        await _sender.Send(new CancelBookingCommand(id, userId, request?.TicketIds), cancellationToken);
         return NoContent();
     }
 }

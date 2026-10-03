@@ -55,6 +55,10 @@ public sealed class Ticket : Entity, IAggregateRoot
         && EventId == eventId
         && EventDate > SaleWindowStart(utcNow);
 
+    // A paid seat can be given back until the event begins. Stricter than the sale window on purpose: a seat still
+    // sells for SaleGracePeriod after the start, but one that has been used cannot be handed back for its money.
+    public bool IsRefundableAt(DateTime utcNow) => EventDate > utcNow;
+
     public bool IsStale(long eventVersion) => eventVersion <= EventVersion;
 
     // Each of these guards itself rather than trusting the caller to check IsStale first, so a new

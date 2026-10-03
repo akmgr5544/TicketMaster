@@ -9,7 +9,9 @@ internal sealed class PaymentOrderConfiguration : IEntityTypeConfiguration<Payme
 {
     public void Configure(EntityTypeBuilder<PaymentOrder> builder)
     {
-        builder.ToTable("PaymentOrders");
+        // The refunded amount can never pass what was paid; the domain refuses it, and this refuses any other writer.
+        builder.ToTable("PaymentOrders", table => table.HasCheckConstraint(
+            "CK_PaymentOrders_RefundedAmount", "\"RefundedAmount\" >= 0 AND \"RefundedAmount\" <= \"Amount\""));
         builder.HasKey(order => order.PaymentOrderId);
         builder.Property(order => order.PaymentOrderId).ValueGeneratedNever();
 
@@ -23,10 +25,20 @@ internal sealed class PaymentOrderConfiguration : IEntityTypeConfiguration<Payme
         builder.Property(order => order.Status).HasConversion<string>().HasMaxLength(20).IsRequired();
         builder.Property(order => order.Provider).HasMaxLength(PaymentOrder.ProviderMaxLength);
         builder.Property(order => order.PspToken).HasMaxLength(PaymentOrder.PspTokenMaxLength);
-        builder.Property(order => order.RefundReference).HasMaxLength(PaymentOrder.RefundReferenceMaxLength);
+        builder.Property(order => order.RefundedAmount).HasPrecision(MoneyAmount.Precision, MoneyAmount.Scale).IsRequired();
         builder.Property(order => order.WalletUpdated).IsRequired();
         builder.Property(order => order.LedgerUpdated).IsRequired();
         builder.Property(order => order.CreatedAt).IsRequired();
         builder.Property(order => order.UpdatedAt).IsRequired();
+        builder.HasMany(order => order.Refunds)
+            .WithOne()
+            .HasForeignKey(refund => refund.PaymentOrderId)
+            .OnDelete(DeleteBehavior.Restrict);
+        // Loaded with the order, as the orders are with the checkout: a repeated refund id is recognised only if the
+        // order's earlier parts are there to compare against.
+        builder.Navigation(order => order.Refunds)
+            .HasField("_refunds")
+            .UsePropertyAccessMode(PropertyAccessMode.Field)
+            .AutoInclude();
     }
 }

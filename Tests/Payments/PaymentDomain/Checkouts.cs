@@ -71,7 +71,8 @@ internal static class Checkouts
         }.Concat(paymentEvent.PaymentOrders.Select(order =>
             $"order={order.PaymentOrderId} checkout={order.CheckoutId} buyer={order.BuyerId} merchant={order.MerchantId} " +
             $"amount={order.Amount} currency={order.Currency} status={order.Status} provider={order.Provider ?? "<null>"} token={order.PspToken ?? "<null>"} " +
-            $"wallet={order.WalletUpdated} ledger={order.LedgerUpdated}")));
+            $"wallet={order.WalletUpdated} ledger={order.LedgerUpdated} refunded={order.RefundedAmount} " +
+            "refunds=" + string.Join(",", order.Refunds.Select(refund => $"{refund.RefundId}:{refund.Amount}:{refund.ProviderReference}")))));
 }
 
 // One seller's order as a test describes it; expanded into PaymentEvent.AddOrder calls.

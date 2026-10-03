@@ -6,8 +6,8 @@ description: Use when working on PaymentSystem or PaymentProvider — the pay-in
 # Payments Service
 
 PaymentSystem takes a booking's payment from "requested" to "settled or failed" and tells Bookings which, and
-gives a settled payment back in full when the booking it paid for is voided. Money moves buyer to seller and,
-on a refund, back. Pay-out to a seller's bank, partial refunds and FX are out of scope. The design follows the Pragmatic Engineer "Designing a payment system" article (Alex Xu): a payment
+gives a settled payment back — whole when the booking it paid for is voided, in part when the customer cancels
+some seats. Money moves buyer to seller and, on a refund, back. Pay-out to a seller's bank and FX are out of scope. The design follows the Pragmatic Engineer "Designing a payment system" article (Alex Xu): a payment
 event (checkout) with one payment order per seller, a PSP-hosted payment page with the order id as the
 PSP's idempotency nonce, a wallet per seller, and a double-entry ledger.
 
@@ -27,7 +27,8 @@ Users-style anaemic entity applies here.
 
 ```
 PaymentSystem/
-  Domain/            PaymentEvent (root), PaymentOrder (child), Wallet, LedgerEntry, BookingClaim,
+  Domain/            PaymentEvent (root), PaymentOrder (child), OrderRefund (the order's child), Wallet,
+                     LedgerEntry, BookingClaim,
                      Events/ (domain events), Exceptions/, Shared/ (MoneyAmount, CurrencyCode), Abstractions/
   Enums/             PaymentOrderStatus, EntryType, EntryReason (used by the domain)
   Data/              PaymentDbContext, Configurations/, Interceptors/, Migrations/
@@ -74,10 +75,15 @@ seller) and is the only way to change them: `StartExecuting`, `SucceedOrder`, `F
    `BookingId` is unique in the store — that index is what makes a redelivered request a no-op.
 2. **State machine per order:** `NotStarted → Executing → Success | Failed`, then `Success → Refunded`.
    `Expire`/`Cancel` fail every order still `NotStarted` or `Executing`; they never touch `Success`, `Failed`
-   or `Refunded`. **Only a settled success is refunded** — `RefundOrder` refuses one whose `WalletUpdated` and
-   `LedgerUpdated` are not both set, since there is nothing yet to reverse — and a repeat returns `false`,
-   which is what keeps the money from being reversed twice. `IsFullyRefunded` is true once nothing is left
-   `Success` and something is `Refunded`; a `Failed` order took no money and does not hold it back.
+   or `Refunded`. **Only a settled success is refunded** — `RefundOrder(id, refundId, amount, reference)`
+   refuses one whose `WalletUpdated` and `LedgerUpdated` are not both set, since there is nothing yet to
+   reverse. **A refund may be partial:** each is an `OrderRefund` (keyed `(PaymentOrderId, RefundId)`,
+   auto-included with the order), `RefundedAmount` adds them up, and the order stays `Success` until they reach
+   its whole `Amount` — then it is `Refunded`. `RefundableAmount` is what is left; a refund past it is refused,
+   and check constraint `CK_PaymentOrders_RefundedAmount` keeps `0 ≤ RefundedAmount ≤ Amount`. **A repeated
+   refund id returns `false`**, which is what keeps the money from being reversed twice. `IsFullyRefunded` is
+   true once nothing is left `Success` and something is `Refunded`; a `Failed` order took no money and does not
+   hold it back.
    **Every slice that refuses a settled order must list `Refunded` too** — `StartCheckout` and
    `SubmitPaymentMethod` would otherwise charge a refunded order again.
 3. **At-least-once safe.** Repeating the outcome already reached is a no-op and raises nothing; the opposite
@@ -96,13 +102,15 @@ seller) and is the only way to change them: `StartExecuting`, `SucceedOrder`, `F
    hold exactly, because Postgres would round it and the PSP would charge a different amount than the ledger
    records. The configurations read `MoneyAmount.Precision`/`Scale`, so rule and column cannot drift.
 7. **Ledger** entries only exist as balanced pairs: `LedgerEntry.RecordPayIn(order)` (debit the buyer,
-   credit the seller) for a successful order, and `RecordRefund(order)` (debit the seller, credit the buyer)
-   for a refunded one, each tagged with its `EntryReason`. The refund pair is written beside the pay-in,
-   never in its place, so an order's ledger keeps its history and still sums to zero. Unique
-   `(PaymentOrderId, Reason, Type)`.
+   credit the seller) for a successful order, and `RecordRefund(order, refundId)` (debit the seller, credit the
+   buyer) for each refund, for that refund's amount, each tagged with its `EntryReason` and — a refund pair —
+   its `RefundId`. Refund pairs are written beside the pay-in, never in its place, so an order refunded in
+   parts keeps its history and, once wholly refunded, sums to zero. Unique
+   `(PaymentOrderId, Reason, Type, RefundId)` with `NULLS NOT DISTINCT`, so the pay-in pair (no refund id) stays
+   one per order.
 8. **Wallet** — one per seller per currency (unique `(OwnerId, Currency)`); `Credit` refuses another
    currency and a balance past the storable maximum. `Credit` itself is not idempotent:
-   `PaymentOrder.WalletUpdated`, saved in the same transaction, is. `Debit` (a refund) **may go below
+   `PaymentOrder.WalletUpdated`, saved in the same transaction, is. `Debit` (a refund, for its own amount) **may go below
    zero** on purpose — the provider has already returned the money — and is made idempotent by
    `RefundOrder`'s return value, in the same transaction.
 9. **`AddDomainEvent` is protected** — only an aggregate raises its own events.
@@ -154,8 +162,11 @@ Bookings  BookingCancelled ─► CancelCheckout: fail unsettled orders; a paid 
           is staged on a local queue                                                       [same transaction]
           no checkout yet ─► claim the booking Cancelled; a later PaymentRequested is refused (booking_cancelled)
 Bookings  RefundRequested ─► RefundCheckout ─┐
-Local     CheckoutRefundDue ─► RefundCheckout ┴► per Success order: RefundAsync at its provider (no transaction)
-          ─► RecordRefund: order Refunded + wallet debit + refund ledger pair; BookingRefunded once all refunded
+Local     CheckoutRefundDue ─► RefundCheckout ┴► no amount: per Success order, what is left on it
+                                                 amount:    that much off the single paid order
+          ─► RefundAsync at its provider (no transaction)
+          ─► RecordRefund: OrderRefund + wallet debit + refund ledger pair, order Refunded once all of it is back;
+             BookingRefunded(BookingId, RefundId) — a partial one at once, a whole one once every order is refunded
 ```
 
 ## Refunds
@@ -166,12 +177,22 @@ Local     CheckoutRefundDue ─► RefundCheckout ┴► per Success order: Refu
   transaction, and never let `CancelCheckout` call it directly — it runs inside one, which is why it stages
   `CheckoutRefundDue` (pinned `[MessageIdentity("checkout-refund-due")]`, durable local queue `checkout-refund`)
   instead.
-- **Idempotent end to end.** The adapters answer a repeated refund with the first one (Stripe: idempotency key
-  `refund:{PaymentOrderId}`, then the existing refund once the key has expired; Braintree, which has no key:
-  the sale's `RefundIds`, or a sale already `Voided`). `RecordRefund` reverses the money only when
-  `RefundOrder` returns true, and a second `RefundCheckout` finds no `Success` order left to refund.
+- **Every refund has an id, and the id is the idempotency.** `RefundRequested` carries the `RefundId` Bookings
+  named it by. A partial refund is recorded under it; a whole-checkout refund records each order's part under
+  it, or — when Bookings named none (`CheckoutRefundDue`, an old message) — under the order's own id, which is
+  also what the `AddPartialRefunds` migration gave every refund made before parts existed. `RefundRequest`
+  passes the id to the provider. Stripe: idempotency key `refund:{PaymentOrderId}:{RefundId}` and `refund_id`
+  metadata; past the key's 24 hours an "already refunded" answer is matched to the refund carrying this id, and
+  refused if none does. Braintree, which has no key: each refund carries the id as its `order_id`, and a repeat
+  is found among the sale's `RefundIds` by it — an earlier part of the same order is not mistaken for this one.
+  `RecordRefund` reverses the money only when `RefundOrder` returns true.
+- **A partial refund comes off the checkout's single paid order.** Bookings never puts two sellers in one
+  booking; two paid orders, another currency, or more than is left is logged as needing a manual refund without
+  calling the provider. A partial refund that finds nothing paid is a whole refund that got there first and
+  gave its money back too — logged at Warning, not an error.
 - **`BookingRefunded` is published after the save**, as `Settle` publishes `BookingPaid`, so a concurrency
-  retry cannot leave a copy in the outbox. Only the refund of the last paid order finds `IsFullyRefunded`.
+  retry cannot leave a copy in the outbox. It echoes the request's `RefundId`. A partial refund publishes when
+  its one part is recorded; a whole one only when the last paid order's part finds `IsFullyRefunded`.
 - **Pending counts as refunded.** The provider has taken the instruction; no refund webhook is handled, so one
   that fails later is not heard about (known gap).
 - **A refusal is logged for a person, not retried.** `InvalidRequest` from the provider, a `Failed` refund, or a
@@ -280,9 +301,9 @@ from `.env` (`PAYMENTS_STRIPE_SECRET_KEY`, `PAYMENTS_STRIPE_WEBHOOK_SECRET`).
 
 ## Known gaps
 
-- **Refunds are full only**, and triggered only by the system (a relocation voiding a paid booking, or a
-  booking cancelled after it was paid). `RefundRequest` already carries an amount, so partial refunds need no
-  new PSP contract — but the order, ledger and `IsFullyRefunded` all assume the whole amount.
+- **A Braintree sale that has not settled cannot be refunded in part** — only voided, which returns all of it.
+  A customer cancelling one seat soon after paying through Braintree gets "needs a manual refund" until the sale
+  settles; nothing retries it then.
 - **A refund that fails after being accepted as pending is not heard about** — no refund webhook is handled,
   and `ReconcileOrdersJob` does not look at refunded orders. A refused or failed refund is only logged.
 - **No settlement-file reconciliation.** `ReconcileOrdersJob` (`Features/PaymentOrders/ReconcileOrders.cs`)

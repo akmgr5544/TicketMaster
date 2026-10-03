@@ -34,7 +34,7 @@ public class ProviderAnswerTests
     {
         var checkout = Checkouts.SingleOrder();
         checkout.Settle(checkout.OnlyId());
-        checkout.RefundOrder(checkout.OnlyId(), "re_1");
+        checkout.RefundOrder(checkout.OnlyId(), Guid.NewGuid(), checkout.Only().Amount, "re_1");
 
         Assert.Equal(expected, checkout.ApplyProviderAnswer(checkout.OnlyId(), succeeded));
         Assert.Equal(PaymentOrderStatus.Refunded, checkout.Only().Status);

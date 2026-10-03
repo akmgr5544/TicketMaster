@@ -17,13 +17,17 @@ public sealed class BraintreeRefundTests : IDisposable
             ? BraintreeWire.Xml(200, BraintreeWire.Transaction(status: "settled"))
             : BraintreeWire.Xml(201, BraintreeWire.Transaction(id: "tx_refund", status: "submitted_for_settlement", type: "credit")));
 
-        var result = await Refund(10.00m);
+        var refundId = Guid.NewGuid();
+
+        var result = await Refund(10.00m, refundId);
 
         Assert.Equal(new RefundResult("tx_refund", RefundStatus.Succeeded), result);
         var refund = _braintree.Requests[1];
         Assert.Equal("POST", refund.Method);
         Assert.Equal(BraintreeWire.MerchantPath("transactions/tx_1/refund"), refund.Path);
         Assert.Contains("<amount>10.00</amount>", refund.Body);
+        // Braintree has no idempotency key, so the refund carries its id to be recognised by on a repeat.
+        Assert.Contains($"<order-id>{refundId}</order-id>", refund.Body);
     }
 
     // An unsettled sale cannot be refunded, only voided.
@@ -67,16 +71,37 @@ public sealed class BraintreeRefundTests : IDisposable
     }
 
     [Fact]
-    public async Task A_sale_already_refunded_reports_that_refund_instead_of_issuing_another()
+    public async Task A_refund_already_issued_is_reported_instead_of_issuing_another()
     {
+        var refundId = Guid.NewGuid();
         _braintree.Respond(request => request.Path.EndsWith("tx_refund", StringComparison.Ordinal)
-            ? BraintreeWire.Xml(200, BraintreeWire.Transaction(id: "tx_refund", status: "settled", type: "credit"))
+            ? BraintreeWire.Xml(200, BraintreeWire.Transaction(id: "tx_refund", status: "settled",
+                orderId: refundId.ToString(), type: "credit"))
             : BraintreeWire.Xml(200, BraintreeWire.Transaction(status: "settled", refundIds: "tx_refund")));
 
-        var result = await Refund(10.00m);
+        var result = await Refund(10.00m, refundId);
 
         Assert.Equal(new RefundResult("tx_refund", RefundStatus.Succeeded), result);
         Assert.All(_braintree.Requests, request => Assert.Equal("GET", request.Method));
+    }
+
+    // An earlier part of the same order is somebody else's refund, not an answer to this one.
+    [Fact]
+    public async Task An_earlier_refund_of_another_part_does_not_stand_in_for_this_one()
+    {
+        _braintree.Respond(request => (request.Method, request.Path) switch
+        {
+            ("GET", var path) when path.EndsWith("tx_earlier", StringComparison.Ordinal) =>
+                BraintreeWire.Xml(200, BraintreeWire.Transaction(id: "tx_earlier", status: "settled",
+                    orderId: Guid.NewGuid().ToString(), type: "credit")),
+            ("GET", _) => BraintreeWire.Xml(200, BraintreeWire.Transaction(status: "settled", refundIds: "tx_earlier")),
+            _ => BraintreeWire.Xml(201, BraintreeWire.Transaction(id: "tx_refund", status: "submitted_for_settlement", type: "credit")),
+        });
+
+        var result = await Refund(4.00m, Guid.NewGuid());
+
+        Assert.Equal(new RefundResult("tx_refund", RefundStatus.Succeeded), result);
+        Assert.Equal("POST", _braintree.Requests[^1].Method);
     }
 
     [Fact]
@@ -102,6 +127,7 @@ public sealed class BraintreeRefundTests : IDisposable
         Assert.Contains("Refund amount is too large.", exception.Message);
     }
 
-    private Task<RefundResult> Refund(decimal amount) =>
-        Gateways.Braintree(_braintree).RefundAsync(new RefundRequest(Guid.NewGuid(), "tx_1", amount, "EUR"));
+    private Task<RefundResult> Refund(decimal amount, Guid? refundId = null) =>
+        Gateways.Braintree(_braintree).RefundAsync(
+            new RefundRequest(Guid.NewGuid(), "tx_1", amount, "EUR", refundId ?? Guid.NewGuid()));
 }

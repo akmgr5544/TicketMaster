@@ -279,6 +279,156 @@ public class BookingTests
         Assert.Throws<BookingsDomainException>(() => APaidBooking().MarkRefunded());
     }
 
+    // --- A customer cancelling seats of a paid booking ---
+
+    // The seats stay held until the money is back, so a refund that fails has not already sold them to somebody else.
+    [Fact]
+    public void Cancelling_some_seats_of_a_paid_booking_asks_for_their_refund_and_keeps_the_booking_paid()
+    {
+        var booking = APaidBooking();
+
+        var refundId = booking.RequestRefund([7L], 30m, "USD");
+
+        Assert.Equal(BookingStatus.Payed, booking.Status);
+        var requested = Assert.Single(booking.DomainEvents.OfType<BookingRefundRequestedDomainEvent>());
+        Assert.Equal((refundId, (decimal?)30m, "USD"), (requested.RefundId, requested.Amount, requested.Currency));
+        var refund = Assert.Single(booking.Refunds);
+        Assert.Equal((refundId, BookingRefundStatus.Pending), (refund.Id, refund.Status));
+        Assert.Equal([7L], booking.TicketsCoveredBy(refundId));
+        Assert.DoesNotContain(booking.DomainEvents, e => e is BookingRefundedDomainEvent);
+    }
+
+    [Fact]
+    public void Only_seats_the_booking_holds_and_no_refund_covers_can_be_refunded()
+    {
+        var booking = APaidBooking();
+        booking.RequestRefund([7L], 30m, "USD");
+
+        Assert.Throws<BookingsDomainException>(() => booking.RequestRefund([7L], 30m, "USD"));
+        Assert.Throws<BookingsDomainException>(() => booking.RequestRefund([42L], 30m, "USD"));
+        Assert.Throws<BookingsDomainException>(() => booking.RequestRefund([9L, 9L], 30m, "USD"));
+        Assert.Throws<BookingsDomainException>(() => booking.RequestRefund([], 30m, "USD"));
+        Assert.Single(booking.Refunds);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void A_refund_must_give_something_back(decimal amount)
+    {
+        Assert.Throws<BookingsDomainException>(() => APaidBooking().RequestRefund([7L], amount, "USD"));
+    }
+
+    // An unpaid booking took no money; it is cancelled whole instead.
+    [Fact]
+    public void Only_a_paid_booking_is_refunded_seat_by_seat()
+    {
+        Assert.Throws<BookingsDomainException>(() => ABooking().RequestRefund([7L], 30m, "USD"));
+    }
+
+    [Fact]
+    public void A_refund_landing_releases_its_own_seats_and_leaves_the_rest_paid()
+    {
+        var booking = APaidBooking();
+        var refundId = booking.RequestRefund([7L], 30m, "USD");
+        booking.ClearDomainEvents();
+
+        booking.MarkRefunded(refundId);
+
+        Assert.Equal(BookingStatus.Payed, booking.Status);
+        Assert.Equal(BookingRefundStatus.Completed, Assert.Single(booking.Refunds).Status);
+        Assert.Equal([7L], Assert.Single(booking.DomainEvents.OfType<BookingRefundedDomainEvent>()).TicketIds);
+    }
+
+    [Fact]
+    public void A_booking_whose_every_seat_is_refunded_is_refunded()
+    {
+        var booking = APaidBooking();
+        var first = booking.RequestRefund([7L], 30m, "USD");
+        var second = booking.RequestRefund([9L], 30m, "USD");
+
+        booking.MarkRefunded(first);
+        booking.MarkRefunded(second);
+
+        Assert.Equal(BookingStatus.Refunded, booking.Status);
+        Assert.Equal(BookingStatus.Refunded, booking.BookingHistories[^1].BookingStatus);
+    }
+
+    [Fact]
+    public void A_refund_landing_twice_releases_its_seats_once()
+    {
+        var booking = APaidBooking();
+        var refundId = booking.RequestRefund([7L], 30m, "USD");
+        booking.MarkRefunded(refundId);
+        booking.ClearDomainEvents();
+
+        booking.MarkRefunded(refundId);
+
+        Assert.Empty(booking.DomainEvents);
+    }
+
+    [Fact]
+    public void A_refund_the_booking_never_asked_for_is_refused()
+    {
+        Assert.Throws<BookingsDomainException>(() => APaidBooking().MarkRefunded(Guid.NewGuid()));
+    }
+
+    // --- A relocation voiding a booking that already has refunds ---
+
+    [Fact]
+    public void A_relocation_asks_for_whatever_is_left_and_names_the_refund()
+    {
+        var booking = APaidBooking();
+        booking.RequestRefund([7L], 30m, "USD");
+        booking.ClearDomainEvents();
+
+        booking.OnBookedSeatCancelled();
+
+        var requested = Assert.Single(booking.DomainEvents.OfType<BookingRefundRequestedDomainEvent>());
+        Assert.Null(requested.Amount);
+        Assert.Equal([9L], booking.TicketsCoveredBy(requested.RefundId));
+    }
+
+    // The whole-booking refund gives back everything still paid, the pending part's money included, so it settles
+    // that part too: its seats are released and the booking is done.
+    [Fact]
+    public void The_whole_booking_refund_landing_settles_every_refund_still_pending()
+    {
+        var booking = APaidBooking();
+        var part = booking.RequestRefund([7L], 30m, "USD");
+        booking.OnBookedSeatCancelled();
+        var whole = booking.DomainEvents.OfType<BookingRefundRequestedDomainEvent>().Last().RefundId;
+        booking.ClearDomainEvents();
+
+        booking.MarkRefunded(whole);
+
+        Assert.Equal(BookingStatus.Refunded, booking.Status);
+        Assert.All(booking.Refunds, refund => Assert.Equal(BookingRefundStatus.Completed, refund.Status));
+        Assert.Equal(TwoTickets, Assert.Single(booking.DomainEvents.OfType<BookingRefundedDomainEvent>()).TicketIds.Order());
+        booking.ClearDomainEvents();
+
+        booking.MarkRefunded(part);
+
+        Assert.Empty(booking.DomainEvents);
+    }
+
+    // A seat released by an earlier refund may since have been sold to somebody else; releasing it again would
+    // take it from them.
+    [Fact]
+    public void The_whole_booking_refund_does_not_release_seats_an_earlier_refund_gave_back()
+    {
+        var booking = APaidBooking();
+        booking.MarkRefunded(booking.RequestRefund([7L], 30m, "USD"));
+        booking.OnBookedSeatCancelled();
+        var whole = booking.DomainEvents.OfType<BookingRefundRequestedDomainEvent>().Last().RefundId;
+        booking.ClearDomainEvents();
+
+        booking.MarkRefunded(whole);
+
+        Assert.Equal([9L], Assert.Single(booking.DomainEvents.OfType<BookingRefundedDomainEvent>()).TicketIds);
+        Assert.Equal(BookingStatus.Refunded, booking.Status);
+    }
+
     private static Booking APaidBooking()
     {
         var booking = ABooking();

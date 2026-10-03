@@ -7,4 +7,4 @@ public record ConfirmBookingCommand(long BookingId) : IRequest, ITransactionalRe
 
 public record ReleaseUnpaidBookingCommand(long BookingId) : IRequest, ITransactionalRequest;
 
-public record CompleteRefundCommand(long BookingId) : IRequest, ITransactionalRequest;
+public record CompleteRefundCommand(long BookingId, Guid? RefundId = null) : IRequest, ITransactionalRequest;

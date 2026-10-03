@@ -8,3 +8,6 @@ namespace Bookings.Api.Requests;
 public record ReserveTicketsRequest(string EventId, long[] Tickets);
 
 public record MakeBookingRequest(string EventId, long[] Tickets);
+
+// Optional as a whole: no body, or no ticket ids, cancels the whole booking.
+public record CancelBookingRequest(long[]? TicketIds);
