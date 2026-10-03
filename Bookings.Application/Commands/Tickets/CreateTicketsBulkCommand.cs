@@ -1,6 +1,6 @@
 using Bookings.Domain.Abstractions;
-using Bookings.Domain.Entities;
 using MediatR;
+using TicketMaster.Common.IntegrationEvents;
 
 namespace Bookings.Application.Commands.Tickets;
 
@@ -10,4 +10,4 @@ public record CreateTicketsBulkCommand(
     DateTime EventDate,
     string[] Seats,
     long Version,
-    TicketPricing? Pricing = null):IRequest, ITransactionalRequest;
+    EventPricing? Pricing = null):IRequest, ITransactionalRequest;

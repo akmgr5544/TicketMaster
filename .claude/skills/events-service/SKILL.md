@@ -110,17 +110,26 @@ and `Performer` deliberately do not — nothing outside this service reacts to t
 
 ## Pricing and the organizer
 
-An `Event` carries one `TicketPrice` (a value object: positive amount, three-letter currency, upper-cased)
-and an `OrganizerId` — the user who created it, and the seller every payment for it goes to. Both are set at
-creation and nothing changes them yet.
+An `Event` carries a base `TicketPrice` (a value object: positive amount, three-letter currency, upper-cased),
+optional `PriceTiers`, and an `OrganizerId` — the user who created it, and the seller every payment for it
+goes to. The organizer never changes.
+
+- **Tiers live on the event, not the venue.** A `PriceTier` names some of the venue snapshot's seats and their
+  price, in the base currency; a seat in no tier sells at the base price. A seat sits in one tier at most, only a
+  seat the venue has can be priced, and names are unique (case-insensitive) — all checked in the `Event`.
+- **`Reprice` replaces the whole pricing** (`PUT /api/events/{id}/pricing`): base price and every tier at once,
+  validated before anything changes, bumping `Version` and raising `EventRepriced` with the resulting pricing.
+  A cancelled event cannot be repriced. Like every other event mutation it checks no identity.
+- **Relocating narrows the tiers** to the seats the new venue still has; a tier left with none is dropped.
 
 - **The organizer comes from `X-Identity-UserId`, never the body.** `EventsController.CreateEventAsync`
   reads the header and overwrites `CreateEventCommand.OrganizerId`; no header is a 401. This is the one place
   Events reads identity. A body naming somebody else must not make them the payee (pinned in
   `EventsIntegration`'s `CreateEndpointTests`).
-- **`EventCreated` and `EventRelocated` both carry them** as one optional `EventPricing` — relocation
-  too, because Bookings creates tickets for the seats a relocation adds. The gRPC `GetEventReply` carries
-  the same, with the price as an invariant-culture decimal string (proto3 has no decimal).
+- **`EventCreated`, `EventRelocated` and `EventRepriced` carry the pricing** as one `EventPricing` —
+  relocation too, because Bookings creates tickets for the seats a relocation adds. Tiers go out flattened to
+  `SeatPrices` (seat → price, tiered seats only); `EventPricing.PriceFor(seat)` reads it. The gRPC
+  `GetEventReply` carries the same, prices as invariant-culture decimal strings (proto3 has no decimal).
 - **A document written before pricing existed loads with a null `TicketPrice`.** The translator then
   publishes no pricing and Bookings' tickets for it are unsellable. Do not "fix" that by inventing a price.
 

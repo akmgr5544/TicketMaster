@@ -15,12 +15,14 @@ public class Event : Entity
     public static readonly TimeSpan MinimumLeadTime = TimeSpan.FromDays(10);
 
     private readonly List<Performer> _performers;
+    private readonly List<PriceTier> _priceTiers;
 
     public Event(DateTime startDate,
         Venue venue,
         IEnumerable<Performer> performers,
         TicketPrice ticketPrice,
-        Guid organizerId)
+        Guid organizerId,
+        IEnumerable<PriceTier>? priceTiers = null)
     {
         _performers = [..performers];
 
@@ -30,6 +32,8 @@ public class Event : Entity
         if (organizerId == Guid.Empty)
             throw new EventsDomainException("An event must have an organizer");
 
+        _priceTiers = ValidTiers(priceTiers ?? [], venue);
+
         Id = Guid.CreateVersion7().ToString();
         StartDate = FarEnoughOut(startDate);
         Venue = venue;
@@ -38,7 +42,8 @@ public class Event : Entity
         Status = EventStatus.Scheduled;
         Version = 1;
 
-        Raise(new EventCreatedDomainEvent(Id, Version, venue.Id, StartDate, [..venue.Seats], TicketPrice, OrganizerId));
+        Raise(new EventCreatedDomainEvent(Id, Version, venue.Id, StartDate, [..venue.Seats], TicketPrice, OrganizerId,
+            [.._priceTiers]));
     }
 
     /// <summary>
@@ -49,6 +54,7 @@ public class Event : Entity
     private Event()
     {
         _performers = [];
+        _priceTiers = [];
         Id = null!;
         Venue = null!;
         TicketPrice = null!;
@@ -72,13 +78,15 @@ public class Event : Entity
     public Venue Venue { get; private set; }
 
     /// <summary>
-    /// Every seat sells at this price; per-category pricing would replace it. Null only on a document
-    /// written before pricing existed, and such an event's tickets cannot be sold.
+    /// The base price: what a seat in no <see cref="PriceTiers"/> sells for, and the currency of every tier. Null
+    /// only on a document written before pricing existed, and such an event's tickets cannot be sold.
     /// </summary>
     public TicketPrice TicketPrice { get; private set; }
 
     /// <summary>The user who created the event, and the seller every payment for it goes to.</summary>
     public Guid OrganizerId { get; private set; }
+
+    public IReadOnlyList<PriceTier> PriceTiers => _priceTiers;
 
     /// <summary>Snapshots of the performers, on the same terms as <see cref="Venue"/>.</summary>
     public IReadOnlyList<Performer> Performers => _performers;
@@ -95,15 +103,39 @@ public class Event : Entity
     /// <summary>
     /// Moves the event to a different venue, replacing the embedded snapshot. The new venue's seats
     /// are almost certainly a different set, which is why the domain event carries them in full —
-    /// downstream has to reconcile whatever it already holds against them.
+    /// downstream has to reconcile whatever it already holds against them. A tier keeps the seats the new
+    /// venue still has, and goes once it has none.
     /// </summary>
     public void Relocate(Venue venue)
     {
         MustBeScheduled();
 
         Venue = venue;
+        var seats = venue.Seats.ToHashSet();
+        var kept = _priceTiers.Select(tier => tier.NarrowedTo(seats)).OfType<PriceTier>().ToList();
+        _priceTiers.Clear();
+        _priceTiers.AddRange(kept);
 
-        Raise(new EventRelocatedDomainEvent(Id, Bump(), venue.Id, StartDate, [..venue.Seats], TicketPrice, OrganizerId));
+        Raise(new EventRelocatedDomainEvent(Id, Bump(), venue.Id, StartDate, [..venue.Seats], TicketPrice, OrganizerId,
+            [.._priceTiers]));
+    }
+
+    /// <summary>
+    /// Replaces the base price and every tier at once — the pricing is one decision, so a partial change could
+    /// leave a tier priced against a base it was never meant to sit beside. The organizer does not change.
+    /// </summary>
+    public void Reprice(TicketPrice ticketPrice, IEnumerable<PriceTier> priceTiers)
+    {
+        MustBeScheduled();
+
+        // Validated before anything is replaced, so a rejected pricing leaves the current one intact.
+        var tiers = ValidTiers(priceTiers, Venue);
+
+        TicketPrice = ticketPrice;
+        _priceTiers.Clear();
+        _priceTiers.AddRange(tiers);
+
+        Raise(new EventRepricedDomainEvent(Id, Bump(), TicketPrice, OrganizerId, [.._priceTiers]));
     }
 
     public void ChangeLineup(IEnumerable<Performer> performers)
@@ -144,6 +176,28 @@ public class Event : Entity
     }
 
     private long Bump() => ++Version;
+
+    // A seat has one price, so it may sit in one tier at most, and only a seat the venue has can be priced.
+    private static List<PriceTier> ValidTiers(IEnumerable<PriceTier> priceTiers, Venue venue)
+    {
+        var tiers = priceTiers.ToList();
+        var venueSeats = venue.Seats.ToHashSet();
+
+        var duplicateName = tiers.GroupBy(tier => tier.Name, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault(group => group.Count() > 1);
+        if (duplicateName is not null)
+            throw new EventsDomainException($"Two price tiers are named '{duplicateName.Key}'");
+
+        var unknown = tiers.SelectMany(tier => tier.Seats).FirstOrDefault(seat => !venueSeats.Contains(seat));
+        if (unknown is not null)
+            throw new EventsDomainException($"Seat '{unknown}' is not at venue '{venue.Id}'");
+
+        var twice = tiers.SelectMany(tier => tier.Seats).GroupBy(seat => seat).FirstOrDefault(group => group.Count() > 1);
+        if (twice is not null)
+            throw new EventsDomainException($"Seat '{twice.Key}' is in more than one price tier");
+
+        return tiers;
+    }
 
     private static DateTime FarEnoughOut(DateTime startDate) =>
         startDate < DateTime.UtcNow.Add(MinimumLeadTime)

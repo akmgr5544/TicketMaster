@@ -2,8 +2,8 @@ using System.Globalization;
 using Bookings.Application.Dtos.EventsServiceDtos;
 using Bookings.Application.Exceptions;
 using Bookings.Application.Services.Interfaces;
-using Bookings.Domain.Entities;
 using Grpc.Core;
+using TicketMaster.Common.IntegrationEvents;
 using TicketMaster.Common.Protos.Events.V1;
 
 namespace Bookings.Application.Services.Implementations;
@@ -50,11 +50,25 @@ internal sealed class EventsService : IEventsService
         }
     }
 
-    // Absent pricing, or pricing that does not parse, yields an unpriced ticket — unsellable, not a guess.
-    private static TicketPricing? PricingOf(Pricing? pricing) =>
-        pricing is not null
-        && decimal.TryParse(pricing.TicketPrice, NumberStyles.Number, CultureInfo.InvariantCulture, out var price)
-        && Guid.TryParse(pricing.OrganizerId, out var sellerId)
-            ? new TicketPricing(price, pricing.Currency, sellerId)
-            : null;
+    // Absent pricing, or any price that does not parse, yields an unpriced ticket — unsellable, not a guess.
+    private static EventPricing? PricingOf(Pricing? pricing)
+    {
+        if (pricing is null
+            || !TryParsePrice(pricing.TicketPrice, out var basePrice)
+            || !Guid.TryParse(pricing.OrganizerId, out var organizerId))
+            return null;
+
+        var seatPrices = new Dictionary<string, decimal>();
+        foreach (var (seat, text) in pricing.SeatPrices)
+        {
+            if (!TryParsePrice(text, out var seatPrice))
+                return null;
+            seatPrices[seat] = seatPrice;
+        }
+
+        return new EventPricing(basePrice, pricing.Currency, organizerId, seatPrices.Count == 0 ? null : seatPrices);
+    }
+
+    private static bool TryParsePrice(string text, out decimal price) =>
+        decimal.TryParse(text, NumberStyles.Number, CultureInfo.InvariantCulture, out price);
 }

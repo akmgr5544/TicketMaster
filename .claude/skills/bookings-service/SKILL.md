@@ -117,9 +117,14 @@ handlers that translate each contract into one of them.
 | `EventRescheduled` | move `EventDate` on every ticket for the event |
 | `EventCancelled` | set `Status = Cancelled`; never delete — a booking that pointed at them still has to be explicable |
 | `EventRelocated` | reconcile: move surviving seats, cancel seats that no longer exist, create tickets for seats that are new |
+| `EventRepriced` | every ticket not yet booked takes its seat's new price — a reserved one too, which is then booked at it; a booked ticket keeps what it was charged; every ticket moves its version |
+
+Each ticket is priced for its own seat — `EventPricing.PriceFor(seat)` — wherever one is created or repriced.
+The few lines that build a `TicketPricing` from the contract are written in each handler, not shared through a
+helper: `Bookings.Domain` cannot see the contract, and the mapping is one expression.
 
 1. **`Ticket.EventVersion` is how far that ticket has been brought in line.** `IsStale(version)`
-   treats equal-or-lower as stale, and `Reschedule`/`Relocate`/`Cancel` each guard themselves rather
+   treats equal-or-lower as stale, and `Reschedule`/`Relocate`/`Cancel`/`Reprice` each guard themselves rather
    than trusting the caller — a new consumer cannot reintroduce the bug by forgetting to check.
 2. **`ReconcileEventVenueCommandHandler` also rejects stale messages at the message level**, against
    the highest version already applied. It is the only handler that *creates* tickets, and a seat that

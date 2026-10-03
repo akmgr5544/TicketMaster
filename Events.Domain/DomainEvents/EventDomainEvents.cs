@@ -19,14 +19,15 @@ public record EventCreatedDomainEvent(string EventId,
     DateTime StartDate,
     IReadOnlyList<string> Seats,
     TicketPrice? TicketPrice,
-    Guid OrganizerId) : IDomainEvent;
+    Guid OrganizerId,
+    IReadOnlyList<PriceTier> PriceTiers) : IDomainEvent;
 
 public record EventRescheduledDomainEvent(string EventId,
     long Version,
     DateTime StartDate) : IDomainEvent;
 
 /// <summary>
-/// Carries the price and organizer although a relocation changes neither: the consumer creates tickets
+/// Carries the pricing and organizer although a relocation changes neither: the consumer creates tickets
 /// for seats the new venue adds, and a ticket cannot be sold without them.
 /// </summary>
 public record EventRelocatedDomainEvent(string EventId,
@@ -35,7 +36,15 @@ public record EventRelocatedDomainEvent(string EventId,
     DateTime StartDate,
     IReadOnlyList<string> Seats,
     TicketPrice? TicketPrice,
-    Guid OrganizerId) : IDomainEvent;
+    Guid OrganizerId,
+    IReadOnlyList<PriceTier> PriceTiers) : IDomainEvent;
+
+/// <summary>The whole resulting pricing, not what changed, like every event here.</summary>
+public record EventRepricedDomainEvent(string EventId,
+    long Version,
+    TicketPrice TicketPrice,
+    Guid OrganizerId,
+    IReadOnlyList<PriceTier> PriceTiers) : IDomainEvent;
 
 /// <summary>
 /// Raised for completeness of the aggregate's history. It has no integration contract, because

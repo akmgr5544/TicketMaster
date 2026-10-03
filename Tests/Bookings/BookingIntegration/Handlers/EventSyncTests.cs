@@ -341,6 +341,60 @@ public sealed class EventSyncTests : IntegrationTest
         Assert.Equal(new TicketPricing(30m, "EUR", organizer), added.Pricing);
     }
 
+    [Fact]
+    public async Task A_seat_in_a_price_tier_gets_the_tiers_price()
+    {
+        var organizer = Guid.CreateVersion7();
+
+        await new EventCreatedIntegrationEventHandler(Sender).Consume(
+            new EventCreatedIntegrationEvent(EventId, NewVenue, Seed.Soon, ["A1", "B1"], 1,
+                new EventPricing(30m, "EUR", organizer, new Dictionary<string, decimal> { ["A1"] = 90m })),
+            CancellationToken.None);
+
+        var prices = await ReadAsync(context => context.Tickets.Where(t => t.EventId == EventId)
+            .ToDictionaryAsync(t => t.Seat, t => t.Pricing!.Price));
+        Assert.Equal(90m, prices["A1"]);
+        Assert.Equal(30m, prices["B1"]);
+    }
+
+    // --- Repricing ---
+
+    // A booked seat was charged what it cost then; every seat not yet booked takes the new price.
+    [Fact]
+    public async Task Repricing_changes_the_unsold_seats_and_leaves_the_booked_ones()
+    {
+        var tickets = await Seed.TicketsAsync(EventId, Seed.Soon, eventVersion: 1, "A1", "A2");
+        await Seed.BookingAsync(TestUsers.Owner, tickets[0].Id);
+
+        await Reprice(version: 2, basePrice: 40m, seatPrices: new() { ["A2"] = 75m });
+
+        var stored = await ReadAsync(context => context.Tickets.Where(t => t.EventId == EventId)
+            .ToDictionaryAsync(t => t.Seat));
+        Assert.Equal(Seed.Pricing, stored["A1"].Pricing);
+        Assert.Equal(75m, stored["A2"].Pricing!.Price);
+        Assert.All(stored.Values, ticket => Assert.Equal(2, ticket.EventVersion));
+    }
+
+    // Delivery is unordered: the older repricing landing second must not undo the newer one.
+    [Fact]
+    public async Task An_older_repricing_arriving_late_changes_nothing()
+    {
+        await Seed.TicketsAsync(EventId, Seed.Soon, eventVersion: 1, "A1");
+        await Reprice(version: 3, basePrice: 60m);
+
+        await Reprice(version: 2, basePrice: 10m);
+
+        var stored = await ReadAsync(context => context.Tickets.SingleAsync(t => t.EventId == EventId));
+        Assert.Equal(60m, stored.Pricing!.Price);
+        Assert.Equal(3, stored.EventVersion);
+    }
+
+    private Task Reprice(long version, decimal basePrice, Dictionary<string, decimal>? seatPrices = null) =>
+        new EventRepricedIntegrationEventHandler(Sender).Consume(
+            new EventRepricedIntegrationEvent(EventId, version,
+                new EventPricing(basePrice, "USD", Seed.Seller, seatPrices)),
+            CancellationToken.None);
+
     private Task Reconcile(DateTime eventDate, long version, string[] seats) =>
-        Sender.Send(new ReconcileEventVenueCommand(EventId, version, NewVenue, eventDate, seats, Seed.Pricing));
+        Sender.Send(new ReconcileEventVenueCommand(EventId, version, NewVenue, eventDate, seats, Seed.EventPricing));
 }

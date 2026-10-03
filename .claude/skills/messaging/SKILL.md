@@ -13,16 +13,16 @@ only safe if the consumer can process it twice.
 
 Cross-cutting — every TicketMaster service that publishes or consumes across a service boundary.
 
-Events publishes four contracts — `EventCreatedIntegrationEvent`, `EventRescheduledIntegrationEvent`,
-`EventRelocatedIntegrationEvent`, `EventCancelledIntegrationEvent` (shortened to `EventCreated` etc.
-below) — all through `Events.Application/IntegrationEvents/IIntegrationEventPublisher`.
+Events publishes five contracts — `EventCreatedIntegrationEvent`, `EventRescheduledIntegrationEvent`,
+`EventRelocatedIntegrationEvent`, `EventRepricedIntegrationEvent`, `EventCancelledIntegrationEvent`
+(shortened to `EventCreated` etc. below) — all through `Events.Application/IntegrationEvents/IIntegrationEventPublisher`.
 
-Bookings consumes **seven** contracts in `Bookings.Application/IntegrationEventHandlers`, each a thin
+Bookings consumes **eight** contracts in `Bookings.Application/IntegrationEventHandlers`, each a thin
 `Consume` handler translating to a command:
 
 | Consumed contract | Slice |
 |---|---|
-| the four `Event*` contracts above | `EventSync` |
+| the five `Event*` contracts above | `EventSync` |
 | `BookingPaidIntegrationEvent` | `Payments/Confirm` |
 | `BookingPaymentFailedIntegrationEvent` | `Payments/ReleaseUnpaid` |
 | `BookingRefundedIntegrationEvent` | `Payments/CompleteRefund` |

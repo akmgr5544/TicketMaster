@@ -43,6 +43,18 @@ public sealed class IntegrationEventPublishingTests : IntegrationTest
         Assert.NotNull(published.TransactionId);
     }
 
+    // A reservation holds the seat, not its price: repriced before it was booked, it is booked at the new price.
+    [Fact]
+    public async Task A_seat_repriced_while_reserved_is_charged_the_new_price()
+    {
+        var ids = await ReservedTicketsAsync("A1");
+        await Sender.Send(new RepriceEventTicketsCommand(EventId, 1, Seed.EventPricing with { TicketPrice = 33m }));
+
+        await Sender.Send(new MakeBookingCommand(TestUsers.Owner, EventId, ids));
+
+        Assert.Equal(33m, Assert.Single(Log.OfType<PaymentRequestedIntegrationEvent>()).Amount);
+    }
+
     // The amount is the tickets' own prices summed, not a count times a flat rate: two seats at different
     // prices charge exactly their total.
     [Fact]

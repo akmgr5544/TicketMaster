@@ -21,12 +21,15 @@ internal sealed class CreateTicketsBulkCommandHandler : IRequestHandler<CreateTi
         
         foreach (var seat in request.Seats)
         {
+            // The organizer is the seller: Events names who is paid, Bookings only carries it to Payments.
             var ticket = new Ticket(seat,
                 request.VenueId,
                 request.EventId,
                 request.EventDate,
                 request.Version,
-                request.Pricing);
+                request.Pricing is { } pricing
+                    ? new TicketPricing(pricing.PriceFor(seat), pricing.Currency, pricing.OrganizerId)
+                    : null);
             tickets.Add(ticket);
         }
         

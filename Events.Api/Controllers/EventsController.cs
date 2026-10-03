@@ -98,6 +98,19 @@ public class EventsController : ControllerBase
         return NoContent();
     }
 
+    [HttpPut("{id}/pricing")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> RepriceEventAsync(string id,
+        [FromBody] RepriceEventCommand command,
+        CancellationToken cancellationToken)
+    {
+        await _sender.Send(command with { Id = id }, cancellationToken);
+
+        return NoContent();
+    }
+
     [HttpPut("{id}/lineup")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]

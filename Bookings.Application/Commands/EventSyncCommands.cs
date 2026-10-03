@@ -1,6 +1,6 @@
 using Bookings.Domain.Abstractions;
-using Bookings.Domain.Entities;
 using MediatR;
+using TicketMaster.Common.IntegrationEvents;
 
 namespace Bookings.Application.Commands;
 
@@ -14,4 +14,7 @@ public record ReconcileEventVenueCommand(string EventId,
     string VenueId,
     DateTime StartDate,
     string[] Seats,
-    TicketPricing? Pricing = null) : IRequest, ITransactionalRequest;
+    EventPricing? Pricing = null) : IRequest, ITransactionalRequest;
+
+public record RepriceEventTicketsCommand(string EventId, long Version, EventPricing Pricing)
+    : IRequest, ITransactionalRequest;

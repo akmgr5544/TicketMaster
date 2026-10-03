@@ -11,4 +11,5 @@ public record CreateEventCommand(DateTime StartDate,
     List<string> Performers,
     decimal TicketPrice,
     string Currency,
-    Guid OrganizerId = default) : IRequest<string>;
+    Guid OrganizerId = default,
+    List<PriceTierRequest>? PriceTiers = null) : IRequest<string>;

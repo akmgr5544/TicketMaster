@@ -18,7 +18,8 @@ public record EventDto(string Id,
     IReadOnlyList<PerformerDto> Performers,
     decimal? TicketPrice,
     string? Currency,
-    Guid OrganizerId)
+    Guid OrganizerId,
+    IReadOnlyList<PriceTierDto> PriceTiers)
 {
     public static EventDto From(Event @event) => new(@event.Id,
         @event.StartDate,
@@ -29,5 +30,8 @@ public record EventDto(string Id,
         // Null-conditional because an event stored before pricing existed has no price.
         @event.TicketPrice?.Amount,
         @event.TicketPrice?.Currency,
-        @event.OrganizerId);
+        @event.OrganizerId,
+        [..@event.PriceTiers.Select(tier => new PriceTierDto(tier.Name, tier.Amount, tier.Seats))]);
 }
+
+public record PriceTierDto(string Name, decimal Price, IReadOnlyList<string> Seats);

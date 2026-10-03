@@ -372,4 +372,43 @@ public class TicketTests
         Assert.Empty(ticket.DomainEvents.OfType<BookedSeatCancelledDomainEvent>());
         Assert.Equal(TicketStatus.Booked, ticket.Status);
     }
+
+    // --- Repricing ---
+
+    private static readonly TicketPricing ANewPrice = new(40m, "USD", Guid.CreateVersion7());
+
+    [Fact]
+    public void An_unsold_ticket_takes_the_new_price()
+    {
+        var ticket = ATicket(eventVersion: 1);
+
+        ticket.Reprice(ANewPrice, eventVersion: 2);
+
+        Assert.Equal(ANewPrice, ticket.Pricing);
+        Assert.Equal(2, ticket.EventVersion);
+    }
+
+    // It was charged what it cost then. Its version still moves, so an older repricing is refused by every ticket.
+    [Fact]
+    public void A_booked_ticket_keeps_its_price_but_moves_its_version()
+    {
+        var ticket = ATicket(eventVersion: 1);
+        ticket.Book();
+
+        ticket.Reprice(ANewPrice, eventVersion: 2);
+
+        Assert.Equal(APrice, ticket.Pricing);
+        Assert.Equal(2, ticket.EventVersion);
+    }
+
+    [Fact]
+    public void A_stale_repricing_changes_nothing()
+    {
+        var ticket = ATicket(eventVersion: 3);
+
+        ticket.Reprice(ANewPrice, eventVersion: 3);
+
+        Assert.Equal(APrice, ticket.Pricing);
+        Assert.Equal(3, ticket.EventVersion);
+    }
 }

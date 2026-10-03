@@ -5,6 +5,7 @@ using Bookings.Domain.Entities;
 using Bookings.Domain.Enums;
 using Bookings.Sql;
 using Microsoft.Extensions.DependencyInjection;
+using TicketMaster.Common.IntegrationEvents;
 
 namespace BookingIntegration.Fixtures;
 
@@ -27,6 +28,9 @@ public sealed class Seed
     public static readonly Guid Seller = Guid.Parse("0199a000-0000-7000-8000-00000000beef");
 
     public static readonly TicketPricing Pricing = new(25m, "USD", Seller);
+
+    // The same pricing as Events announces it, so a ticket created from a message carries Pricing.
+    public static readonly EventPricing EventPricing = new(Pricing.Price, Pricing.Currency, Seller);
 
     public Task<Ticket[]> TicketsAsync(string eventId, params string[] seats) =>
         TicketsAsync(eventId, Soon, eventVersion: 0, seats);

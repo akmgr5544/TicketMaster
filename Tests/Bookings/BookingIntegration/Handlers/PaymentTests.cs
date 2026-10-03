@@ -254,7 +254,7 @@ public sealed class PaymentTests : IntegrationTest
         var tickets = await Seed.TicketsAsync("evt-1", Seed.Soon, eventVersion: 1, "A1", "A2");
         var booking = await Seed.BookingAsync(TestUsers.Owner, tickets.Select(t => t.Id).ToArray());
         await Sender.Send(new ConfirmBookingCommand(booking.Id));
-        await Sender.Send(new ReconcileEventVenueCommand("evt-1", 2, "venue-2", Seed.Soon, ["A2"], Seed.Pricing));
+        await Sender.Send(new ReconcileEventVenueCommand("evt-1", 2, "venue-2", Seed.Soon, ["A2"], Seed.EventPricing));
         return booking;
     }
 }

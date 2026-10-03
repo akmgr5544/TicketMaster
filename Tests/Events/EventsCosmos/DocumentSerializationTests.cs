@@ -84,6 +84,29 @@ public class DocumentSerializationTests
         Assert.Equal(@event.OrganizerId, loaded.OrganizerId);
     }
 
+    [Fact]
+    public void Price_tiers_survive_a_round_trip()
+    {
+        var @event = new Event(DateTime.UtcNow.AddDays(11), AVenue(), [APerformer()], new TicketPrice(49.99m, "USD"),
+            Guid.CreateVersion7(), [new PriceTier("VIP", 120.50m, ["A1"])]);
+
+        var tier = Assert.Single(RoundTrip(@event).PriceTiers);
+
+        Assert.Equal("VIP", tier.Name);
+        Assert.Equal(120.50m, tier.Amount);
+        Assert.Equal(["A1"], tier.Seats);
+    }
+
+    // Written before tiers existed: no priceTiers at all, so every seat sells at the base price.
+    [Fact]
+    public void Event_written_before_price_tiers_existed_loads_with_none()
+    {
+        var json = JsonNode.Parse(JsonSerializer.Serialize(AnEvent(), Options))!.AsObject();
+        json.Remove("priceTiers");
+
+        Assert.Empty(json.Deserialize<Event>(Options)!.PriceTiers);
+    }
+
     // A document written before pricing existed has no ticketPrice. It must still load — as an unpriced event,
     // whose tickets Bookings will not sell — rather than fail every read of the old catalogue.
     [Fact]

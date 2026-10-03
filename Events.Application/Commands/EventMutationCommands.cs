@@ -14,6 +14,15 @@ public record RelocateEventCommand(string Id, string VenueId) : IRequest;
 public record ChangeEventLineupCommand(string Id, List<string> PerformerIds) : IRequest;
 
 /// <summary>
+/// Replaces the whole pricing: the base price and every tier. A tier left out of the request is removed, so its
+/// seats go back to the base price.
+/// </summary>
+public record RepriceEventCommand(string Id,
+    decimal TicketPrice,
+    string Currency,
+    List<PriceTierRequest>? PriceTiers = null) : IRequest;
+
+/// <summary>
 /// Calls the event off without removing it. Idempotent — cancelling twice succeeds and announces
 /// nothing the second time.
 /// </summary>

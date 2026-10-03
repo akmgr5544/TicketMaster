@@ -25,7 +25,7 @@ public class EventRelocatedIntegrationEventHandler
                 request.VenueId,
                 request.StartDate,
                 request.Seats,
-                request.Pricing.ToTicketPricing()),
+                request.Pricing),
             cancellationToken);
     }
 }

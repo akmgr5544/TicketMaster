@@ -35,7 +35,13 @@ internal sealed class EventsLookupService : EventsLookup.EventsLookupBase
                 {
                     TicketPrice = price.ToString(CultureInfo.InvariantCulture),
                     Currency = currency,
-                    OrganizerId = @event.OrganizerId.ToString()
+                    OrganizerId = @event.OrganizerId.ToString(),
+                    SeatPrices =
+                    {
+                        @event.PriceTiers
+                            .SelectMany(tier => tier.Seats.Select(seat => (seat, tier.Price)))
+                            .ToDictionary(pair => pair.seat, pair => pair.Price.ToString(CultureInfo.InvariantCulture))
+                    }
                 }
                 : null
         };

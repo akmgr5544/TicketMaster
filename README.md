@@ -84,7 +84,7 @@ flowchart LR
     bookings["<b>Bookings</b>"]
     payments["<b>Payments</b>"]
 
-    events -- "EventCreated<br/>EventRescheduled<br/>EventRelocated<br/>EventCancelled" --> bookings
+    events -- "EventCreated<br/>EventRescheduled<br/>EventRelocated<br/>EventRepriced<br/>EventCancelled" --> bookings
     bookings -- "PaymentRequested<br/>BookingCancelled<br/>RefundRequested" --> payments
     payments -- "BookingPaid<br/>BookingPaymentFailed<br/>BookingRefunded" --> bookings
 ```
@@ -94,6 +94,7 @@ flowchart LR
 | `EventCreated` | Events → Bookings | Creates one ticket per seat of the event's venue |
 | `EventRescheduled` | Events → Bookings | Moves every ticket's event date; ignored if not newer than the ticket's `EventVersion` |
 | `EventRelocated` | Events → Bookings | Reconciles tickets to the seats the event *now* has; a booking that loses a seat is cancelled, or flagged `RefundPending` and refunded if paid |
+| `EventRepriced` | Events → Bookings | Gives every unsold ticket its seat's new price; booked tickets keep theirs |
 | `EventCancelled` | Events → Bookings | Cancels the event's tickets |
 | `PaymentRequested` | Bookings → Payments | Opens a checkout (one payment order per seller) and schedules its 15-minute expiry |
 | `BookingCancelled` | Bookings → Payments | Fails the checkout's unsettled orders and refunds any that were already paid. With no checkout yet, claims the booking as cancelled so a late `PaymentRequested` is refused |
@@ -198,9 +199,10 @@ Events deliberately differ:
 ```
 GET    /api/events                    # cursor-paged
 GET    /api/events/{id}
-POST   /api/events                    # 201 + { id }; body carries ticketPrice + currency, caller becomes organizer
+POST   /api/events                    # 201 + { id }; base price, optional price tiers; caller becomes organizer
 PUT    /api/events/{id}/schedule      # reschedule
 PUT    /api/events/{id}/venue         # relocate — reconciles tickets downstream
+PUT    /api/events/{id}/pricing       # replace base price and tiers — reprices every unsold ticket
 PUT    /api/events/{id}/lineup        # change performers
 POST   /api/events/{id}/cancel        # idempotent; no DELETE exists
 ```
@@ -599,6 +601,5 @@ each lives in the owning service's skill under `.claude/skills/`.
 
 - Notifications to the customer when a booking is refunded or cancelled
 - Customer-initiated cancellation of a paid booking, and partial refunds
-- Seat categories and price changes (today one price per event, fixed at creation)
 - Reconciliation against PSP settlement files
 - Saga / process-manager work for the full booking flow in Wolverine

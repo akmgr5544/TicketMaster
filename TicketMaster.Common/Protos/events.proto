@@ -27,6 +27,9 @@ message Pricing {
   string ticket_price = 1;
   string currency = 2;
   string organizer_id = 3;
+  // Seat → price for the seats in a price tier, in the same decimal-string form; a seat absent here sells at
+  // ticket_price.
+  map<string, string> seat_prices = 4;
 }
 
 message Venue {

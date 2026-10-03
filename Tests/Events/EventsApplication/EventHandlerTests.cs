@@ -222,6 +222,57 @@ public class EventHandlerTests
         Assert.Empty(_publisher.Published);
     }
 
+    // --- Pricing ---
+
+    // Bookings prices a seat, not a tier, so the tiers go out flattened to seat → price.
+    [Fact]
+    public async Task Create_with_tiers_announces_each_tiered_seats_price()
+    {
+        var venue = AVenue("A1", "A2", "B1");
+        _venues.Seed(venue);
+        var performer = APerformer();
+        _performers.Seed(performer);
+
+        await new CreateEventCommandHandler(_events, _venues, _performers, _publisher).Handle(
+            new CreateEventCommand(FarEnoughOut, venue.Id, [performer.Id], 50m, "USD", AnOrganizer,
+                [new PriceTierRequest("VIP", 120m, ["A1", "A2"])]),
+            CancellationToken.None);
+
+        var pricing = _publisher.PublishedSingle<EventCreatedIntegrationEvent>().Pricing!;
+        Assert.Equal(120m, pricing.PriceFor("A1"));
+        Assert.Equal(120m, pricing.PriceFor("A2"));
+        Assert.Equal(50m, pricing.PriceFor("B1"));
+    }
+
+    [Fact]
+    public async Task Reprice_writes_the_event_and_announces_the_whole_new_pricing()
+    {
+        var @event = AnEvent();
+
+        await new RepriceEventCommandHandler(_events, _publisher).Handle(
+            new RepriceEventCommand(@event.Id, 75m, "USD", [new PriceTierRequest("Front", 99m, ["A1"])]),
+            CancellationToken.None);
+
+        Assert.Equal(75m, @event.TicketPrice.Amount);
+        Assert.Same(@event, Assert.Single(_events.Updated));
+        var published = _publisher.PublishedSingle<EventRepricedIntegrationEvent>();
+        Assert.Equal(@event.Id, published.EventId);
+        Assert.Equal(2, published.Version);
+        Assert.Equal(AnOrganizer, published.Pricing.OrganizerId);
+        Assert.Equal(99m, published.Pricing.PriceFor("A1"));
+    }
+
+    [Fact]
+    public async Task Reprice_throws_when_the_event_does_not_exist()
+    {
+        var handler = new RepriceEventCommandHandler(_events, _publisher);
+
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            handler.Handle(new RepriceEventCommand("missing", 75m, "USD"), CancellationToken.None));
+
+        Assert.Empty(_publisher.Published);
+    }
+
     // --- Lineup ---
 
     [Fact]

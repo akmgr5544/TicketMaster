@@ -78,6 +78,19 @@ public sealed class Ticket : Entity, IAggregateRoot
         EventVersion = eventVersion;
     }
 
+    // Only a seat nobody has bought takes the new price: a booked ticket was charged what it cost then. Every ticket
+    // still moves its version, so an older repricing redelivered later is refused by all of them alike.
+    public void Reprice(TicketPricing pricing, long eventVersion)
+    {
+        if (IsStale(eventVersion))
+            return;
+
+        if (Status == TicketStatus.None)
+            Pricing = pricing;
+
+        EventVersion = eventVersion;
+    }
+
     public void Book()
     {
         if (Status != TicketStatus.None)

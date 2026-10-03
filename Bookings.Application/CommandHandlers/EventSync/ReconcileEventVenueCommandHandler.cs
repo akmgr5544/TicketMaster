@@ -40,7 +40,9 @@ internal sealed class ReconcileEventVenueCommandHandler : IRequestHandler<Reconc
 
         var missing = wanted.Except(covered)
             .Select(seat => new Ticket(seat, request.VenueId, request.EventId, request.StartDate, request.Version,
-                request.Pricing))
+                request.Pricing is { } pricing
+                    ? new TicketPricing(pricing.PriceFor(seat), pricing.Currency, pricing.OrganizerId)
+                    : null))
             .ToArray();
 
         if (missing.Length > 0)

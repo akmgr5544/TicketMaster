@@ -54,7 +54,8 @@ internal sealed class CreateEventCommandHandler : IRequestHandler<CreateEventCom
             venue,
             performers,
             new TicketPrice(request.TicketPrice, request.Currency),
-            request.OrganizerId);
+            request.OrganizerId,
+            request.PriceTiers?.Select(tier => new PriceTier(tier.Name, tier.Price, tier.Seats)));
 
         await _eventRepository.AddEventAsync(@event, cancellationToken);
 
