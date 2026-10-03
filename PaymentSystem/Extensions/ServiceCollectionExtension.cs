@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using PaymentProvider.Extensions;
 using PaymentSystem.Data;
 using PaymentSystem.Data.Interceptors;
+using PaymentSystem.Features.PaymentOrders;
 using PaymentSystem.Shared.Endpoints;
 using PaymentSystem.Shared.Pipelines;
 
@@ -37,6 +38,7 @@ public static class ServiceCollectionExtension
         });
 
         services.AddPaymentProviders(configuration);
+        services.AddHostedService<ReconcileOrdersJob>();
 
         return services;
     }

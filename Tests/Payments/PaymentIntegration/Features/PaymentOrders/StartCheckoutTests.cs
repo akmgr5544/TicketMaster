@@ -158,6 +158,34 @@ public sealed class StartCheckoutTests(PaymentsFixture fixture) : PspTest(fixtur
         Assert.Equal(PaymentOrderStatus.Executing, (await ReadOrderAsync(id)).Status);
     }
 
+    [Fact]
+    public async Task Starting_records_the_provider_that_opened_the_session()
+    {
+        Psp.DefaultKind = PaymentProviderKind.Braintree;
+        var checkout = await SeedCheckoutAsync(OrderState.NotStarted);
+
+        await SendAsync(new StartCheckout.Command(checkout.BuyerId, checkout.OrderId(0)));
+
+        Assert.Equal("Braintree", (await OrderAsync(checkout, 0)).Provider);
+    }
+
+    // The session lives at the provider that opened it; the new default never heard of this order.
+    [Fact]
+    public async Task A_redelivered_checkout_goes_back_to_its_provider_after_the_default_changes()
+    {
+        var checkout = await SeedCheckoutAsync(OrderState.NotStarted);
+        var id = checkout.OrderId(0);
+        await SendAsync(new StartCheckout.Command(checkout.BuyerId, id));
+        Psp.DefaultKind = PaymentProviderKind.Braintree;
+
+        var again = await SendAsync(new StartCheckout.Command(checkout.BuyerId, id));
+
+        Assert.True(again.IsSuccess);
+        Assert.Equal("Stripe", again.Value!.Provider);
+        Assert.Equal(2, Psp.Stripe.Checkouts.Count);
+        Assert.Empty(Psp.Braintree.Checkouts);
+    }
+
     [Theory]
     [InlineData(PaymentProviderErrorKind.InvalidRequest, ErrorType.BadRequest, "psp_rejected_request")]
     [InlineData(PaymentProviderErrorKind.Transient, ErrorType.Conflict, "psp_unavailable")]

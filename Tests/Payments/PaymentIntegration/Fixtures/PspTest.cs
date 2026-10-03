@@ -26,6 +26,9 @@ public abstract class PspTest : IntegrationTest
 
     protected LogCapture Logs { get; }
 
+    // A seeded order was started where production would have started it: at the default when it was seeded.
+    protected override string SeedProvider => Psp.DefaultKind.ToString();
+
     protected string ConnectionString =>
         _fixture.Services.GetRequiredService<IConfiguration>().GetConnectionString("DefaultConnection")!;
 

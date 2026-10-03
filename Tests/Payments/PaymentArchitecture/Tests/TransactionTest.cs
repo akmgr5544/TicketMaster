@@ -1,5 +1,6 @@
 using ArchUnitNET.xUnit;
 using MediatR;
+using PaymentSystem.Features.PaymentOrders;
 using PaymentSystem.Shared.Pipelines;
 using static ArchUnitNET.Fluent.ArchRuleDefinition;
 
@@ -15,11 +16,14 @@ public class TransactionTest : BaseTest
     private const string CommandName = @"(^|\+)Command$";
     private const string QueryName = @"(^|\+)Query$";
 
+    // The one exception: SubmitPaymentMethod's charge calls the PSP and must not hold a transaction while it
+    // does. It writes nothing itself — RecordOutcome.Command does, and is held to the rule.
     [Fact]
     public void Commands_AreTransactionalRequests()
     {
         Types().That().ImplementInterface(typeof(IRequest<>))
             .And().HaveNameMatching(CommandName)
+            .And().AreNot(typeof(SubmitPaymentMethod.Command))
             .Should().ImplementInterface(typeof(ITransactionalRequest))
             .Check(Architecture);
     }

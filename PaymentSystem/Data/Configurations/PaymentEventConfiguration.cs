@@ -8,7 +8,9 @@ internal sealed class PaymentEventConfiguration : IEntityTypeConfiguration<Payme
 {
     public void Configure(EntityTypeBuilder<PaymentEvent> builder)
     {
-        builder.ToTable("PaymentEvents");
+        // Orders are added after the checkout is created, so nothing in the domain stops one being saved empty.
+        builder.ToTable("PaymentEvents", table =>
+            table.HasCheckConstraint("CK_PaymentEvents_OrderCount", "\"OrderCount\" > 0"));
         builder.HasKey(paymentEvent => paymentEvent.CheckoutId);
         builder.Property(paymentEvent => paymentEvent.CheckoutId).ValueGeneratedNever();
         builder.Ignore(paymentEvent => paymentEvent.DomainEvents);

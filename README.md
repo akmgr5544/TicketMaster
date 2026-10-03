@@ -96,7 +96,7 @@ flowchart LR
 | `EventRelocated` | Events → Bookings | Reconciles tickets to the seats the event *now* has; a booking that loses a seat is cancelled, or flagged `RefundPending` if paid |
 | `EventCancelled` | Events → Bookings | Cancels the event's tickets |
 | `PaymentRequested` | Bookings → Payments | Opens a checkout (one payment order per seller) and schedules its 15-minute expiry |
-| `BookingCancelled` | Bookings → Payments | Fails the checkout's unsettled orders; a paid one is left and logged for refund |
+| `BookingCancelled` | Bookings → Payments | Fails the checkout's unsettled orders; a paid one is left and logged for refund. With no checkout yet, claims the booking as cancelled so a late `PaymentRequested` is refused |
 | `BookingPaid` | Payments → Bookings | Confirms the booking |
 | `BookingPaymentFailed` | Payments → Bookings | Cancels the unpaid booking and releases its seats |
 
@@ -125,7 +125,7 @@ sequenceDiagram
     BK-->>Buyer: 201 { id }
     BK-)MQ: PaymentRequested
     MQ-)PY: PaymentRequested
-    PY->>PY: create checkout + schedule CheckoutExpiryDue (+15 min)
+    PY->>PY: claim booking, create checkout + its order,<br/>schedule CheckoutExpiryDue (+15 min) (one transaction)
 
     Buyer->>GW: GET /payments-service/api/payments/checkouts/{bookingId}
     GW->>PY: proxied
@@ -301,6 +301,18 @@ unordered, at-least-once delivery — a late failure cannot void a paid booking,
 cannot claim seats already back on sale. Applying the same outcome twice announces the release once,
 so seats are never released a second time after somebody else has taken them.
 
+**A lost outcome is asked about again (Payments).** A charge whose result failed to record, or a webhook
+that never arrived, leaves an order `Executing`. `ReconcileOrdersJob` runs every minute, asks the provider
+that started each order idle for over two minutes, and records a final answer through the same
+transactional `RecordOutcome` the synchronous charge uses — well inside the 15-minute window after which the
+expiry would fail the order over money already taken.
+
+**A cancellation may overtake its payment request (Payments).** The two messages travel separately, so a
+`BookingCancelled` can arrive before its `PaymentRequested`. With no checkout to cancel, Payments records the
+booking as cancelled, and the late request is refused rather than opening a checkout the buyer could still
+pay. Both handlers insert a claim keyed by the booking id, so when the two arrive together the primary key
+makes the second wait for the first and then read what it decided. No lock is taken.
+
 **Domain event dispatch, two ways.** Bookings (and Payments) use a `SaveChangesInterceptor`, so persistence and
 event emission cannot diverge. Dispatch runs *after* the write, so a handler that changes something
 must save that change itself — the surrounding transaction is what keeps its save atomic with the
@@ -357,7 +369,9 @@ way to change its `PaymentOrder`s, so the checkout-wide rule — done once every
 be bypassed. Repeating an outcome is a no-op and the opposite outcome is refused, which is what makes
 redelivered webhooks and messages safe. The domain refuses any amount `numeric(18,2)` cannot hold exactly,
 because Postgres would otherwise round it and the PSP would charge a different amount than the ledger
-records.
+records. A checkout is created empty and given its orders with `AddOrder` — none once payment has begun.
+Since nothing then forces an order in code, an empty checkout is never paid, and the database refuses to
+store one (`CHECK ("OrderCount" > 0)`).
 
 **A version the database checks, set at save time (Payments).** Two orders of one checkout settling at
 once would each see the other unfinished; `PaymentEvent.Version` makes the second save fail and reload. An
@@ -440,7 +454,8 @@ the real host on Postgres and RabbitMQ with a stand-in Bookings host (request �
 outbox rollback). `PaymentDomain` covers every aggregate rule, `PaymentAdapters` the PSP adapters, and
 `PaymentArchitecture` the slice rules — the domain depends on nothing but itself, `PaymentSystem.Enums`, the BCL and MediatR, no feature area
 reaches into another, `PaymentProvider` never references `PaymentSystem`, handlers are internal and sealed,
-and every writing command is transactional.
+and every writing command is transactional — except `SubmitPaymentMethod.Command`, which only calls the PSP
+and hands the write to its transactional `RecordOutcome.Command`.
 
 **Needs a running Docker daemon** — every test in `BookingIntegration`, `EventsIntegration` and `PaymentIntegration` starts
 containers; with the daemon down the whole project fails at fixture initialisation. `Bookings.Sql` and
@@ -570,9 +585,12 @@ it should do — the fix is a decision, not a gap.
   sends `$50 × tickets` in USD and a seller derived from the event id (`PaymentPricing`). Payments treats the
   request's amount as authoritative, so it is correct the moment real pricing exists upstream.
 - **No refunds.** Payments is pay-in only. A booking cancelled after its payment succeeded is logged as
-  needing a refund, and a `RefundPending` booking in Bookings is still never refunded.
-- **No reconciliation job** against PSP settlement files, so a charge the service failed to record stays
-  `Executing` until someone looks.
+  needing a refund, a PSP success that lands after the cancellation is logged as needing reconciling, and a
+  `RefundPending` booking in Bookings is still never refunded. In every case the money stays taken.
+- **No settlement-file reconciliation.** `ReconcileOrdersJob` asks the provider about any order left
+  `Executing` for over two minutes and records a final answer, but nothing compares the PSP's settlement
+  reports with the ledger, and an order already failed by expiry or cancellation whose payment the provider
+  then took is only logged as needing reconciling.
 - **A role change takes effect at the next login.** `AdminOnly` reads the role claim baked into the token,
   never the store, so a demoted admin keeps admin access until their token expires (1 day) and a promoted
   user must log in again. Nothing stops an admin demoting the last admin, themselves included.
@@ -602,17 +620,27 @@ Deliberate, and recorded so nobody "fixes" one without knowing what it carries.
 - **Reservation correctness rests entirely on the distributed locks.** The check and the write both
   happen with every seat's lock held, but the write is not conditional, so a lock lost mid-operation is
   a real double-reservation window rather than a wasted attempt.
-- **A cancellation that reaches Payments before its `PaymentRequested`** is a no-op; the checkout is then
-  created, and only the 15-minute expiry fails it — a buyer who pays inside that window pays for a cancelled
-  booking.
 - **After-commit work is dropped when a command is sent from a message handler.** `TransactionBehavior`
   does not own that transaction, so it logs a warning rather than running the queued work — the same way
   a failure on the owned path is treated. Only `MakeBookingCommand` queues any, and only over HTTP, so
   nothing hits this today.
+- **A synchronous charge can succeed and fail to be recorded.** `SubmitPaymentMethod` charges with no
+  transaction open and records the outcome in a transaction of its own (`RecordOutcome`), so a slow PSP
+  holds nothing. If that recording then loses twice to concurrent writers (`409
+  payment_outcome_not_recorded`) or the database fails (a 500), the order stays `Executing` until a webhook
+  or the reconciliation job, within about three minutes, settles it. The same 409 also answers a charge
+  that lands after the order already settled the other way — expired, say — and that one is only logged as
+  needing reconciling, since no job looks at a settled order.
+- **Concurrent settlements for one seller contend on its wallet.** The wallet row carries an `xmin`
+  concurrency token, so two orders crediting the same seller's wallet at once make one of them lose with a
+  409; a webhook is then redelivered by the PSP and settles, and the synchronous Braintree path falls into
+  the case above. (Two settlements creating a seller's *first* wallet do not conflict: the one that loses on
+  the unique index credits the winner's wallet in the same transaction.) With the placeholder seller
+  derived from the event id, every payment for one event shares a wallet.
 
 ## 🗺️ Roadmap
 
 - Real ticket pricing and sellers in Events, replacing Bookings' `PaymentPricing` placeholder
 - Refunds and notifications — for a `RefundPending` booking and for a booking cancelled after payment
-- Reconciliation against PSP settlement files, using `IPaymentGateway.LookupAsync`
+- Reconciliation against PSP settlement files, beyond the per-order lookup `ReconcileOrdersJob` does
 - Saga / process-manager work for the full booking flow in Wolverine

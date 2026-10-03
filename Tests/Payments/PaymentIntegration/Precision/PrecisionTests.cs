@@ -26,7 +26,7 @@ public sealed class PrecisionTests(PaymentsFixture fixture) : IntegrationTest(fi
         PaymentEvent checkout;
         try
         {
-            checkout = PaymentEvent.Create(Guid.NewGuid(), Random.Shared.NextInt64(1, long.MaxValue), Guid.NewGuid(), [new PaymentOrderLine(Guid.NewGuid(), amount, "USD")]);
+            checkout = CheckoutSeed.Create(Guid.NewGuid(), Random.Shared.NextInt64(1, long.MaxValue), Guid.NewGuid(), [new OrderLine(Guid.NewGuid(), amount, "USD")]);
         }
         catch (PaymentDomainException)
         {
@@ -46,8 +46,8 @@ public sealed class PrecisionTests(PaymentsFixture fixture) : IntegrationTest(fi
     {
         var amount = decimal.Parse(text, CultureInfo.InvariantCulture);
 
-        Assert.Throws<PaymentDomainException>(() => PaymentEvent.Create(Guid.NewGuid(), Random.Shared.NextInt64(1, long.MaxValue), Guid.NewGuid(),
-            [new PaymentOrderLine(Guid.NewGuid(), 10m, "USD"), new PaymentOrderLine(Guid.NewGuid(), amount, "USD")]));
+        Assert.Throws<PaymentDomainException>(() => CheckoutSeed.Create(Guid.NewGuid(), Random.Shared.NextInt64(1, long.MaxValue), Guid.NewGuid(),
+            [new OrderLine(Guid.NewGuid(), 10m, "USD"), new OrderLine(Guid.NewGuid(), amount, "USD")]));
     }
 
     [Fact]
@@ -125,7 +125,7 @@ public sealed class PrecisionTests(PaymentsFixture fixture) : IntegrationTest(fi
         var saved = await SeedCheckoutAsync(OrderState.NotStarted);
         var checkout = await LoadCheckoutAsync(saved.CheckoutId);
 
-        var domainError = Record.Exception(() => checkout.StartExecuting(saved.OrderId(0), token));
+        var domainError = Record.Exception(() => checkout.StartExecuting(saved.OrderId(0), CheckoutSeed.Provider, token));
         if (domainError is not null)
         {
             Assert.IsType<PaymentDomainException>(domainError);

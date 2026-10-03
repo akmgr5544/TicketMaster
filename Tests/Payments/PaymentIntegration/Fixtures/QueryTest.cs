@@ -22,9 +22,9 @@ public abstract class QueryTest(PaymentsFixture fixture) : IntegrationTest(fixtu
     }
 
     // The fixture's seeder picks a random buyer and random merchants; these tests need to choose them.
-    protected async Task<PaymentEvent> SeedCheckoutForAsync(Guid buyerId, params PaymentOrderLine[] lines)
+    protected async Task<PaymentEvent> SeedCheckoutForAsync(Guid buyerId, params OrderLine[] lines)
     {
-        var checkout = PaymentEvent.Create(Guid.NewGuid(), Random.Shared.NextInt64(1, long.MaxValue), buyerId, lines);
+        var checkout = CheckoutSeed.Create(Guid.NewGuid(), Random.Shared.NextInt64(1, long.MaxValue), buyerId, lines);
         await InScopeAsync(async c =>
         {
             c.PaymentEvents.Add(checkout);

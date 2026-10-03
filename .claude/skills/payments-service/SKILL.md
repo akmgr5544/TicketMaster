@@ -27,7 +27,7 @@ Users-style anaemic entity applies here.
 
 ```
 PaymentSystem/
-  Domain/            PaymentEvent (root), PaymentOrder (child), Wallet, LedgerEntry, PaymentOrderLine,
+  Domain/            PaymentEvent (root), PaymentOrder (child), Wallet, LedgerEntry, BookingClaim,
                      Events/ (domain events), Exceptions/, Shared/ (MoneyAmount, CurrencyCode), Abstractions/
   Enums/             PaymentOrderStatus, EntryType (used by the domain)
   Data/              PaymentDbContext, Configurations/, Interceptors/, Migrations/
@@ -63,14 +63,17 @@ seller) and is the only way to change them: `StartExecuting`, `SucceedOrder`, `F
 `MarkWalletUpdated`, `MarkLedgerUpdated`, `Expire`, `Cancel`. `PaymentOrder`'s mutators are `internal`.
 `Wallet` and `LedgerEntry` are separate.
 
-1. **Created whole.** `PaymentEvent.Create(checkoutId, bookingId, buyerId, lines)`: at least one line; every
-   line valid (a bad line refuses the whole checkout); **one order per seller**; **the buyer can never be a
-   seller**. `BookingId` is unique in the store — that index is what makes a redelivered request a no-op.
+1. **Created, then given its orders.** `PaymentEvent.Create(checkoutId, bookingId, buyerId)` makes an empty
+   checkout; `AddOrder(merchantId, amount, currency)` adds one order: valid money and currency, **one order
+   per seller**, **the buyer can never be a seller**, and **none once any order has left `NotStarted`**. A
+   refused order leaves the checkout unchanged. **An empty checkout is never paid** (`IsPaymentDone` needs at
+   least one order) **and never stored** — check constraint `CK_PaymentEvents_OrderCount` (`OrderCount > 0`).
+   `BookingId` is unique in the store — that index is what makes a redelivered request a no-op.
 2. **State machine per order:** `NotStarted → Executing → Success | Failed`. `Expire`/`Cancel` fail every
    order still `NotStarted` or `Executing`; they never touch `Success` or `Failed`.
 3. **At-least-once safe.** Repeating the outcome already reached is a no-op and raises nothing; the opposite
    outcome is refused (a settled payment cannot change its mind). `StartExecuting` replayed with the same
-   token — including `null` again, for Braintree — is a no-op; a different token is refused.
+   provider and token — including `null` again, for Braintree — is a no-op; a different either is refused.
 4. **`IsPaymentDone` is derived** from the orders at the end of every root operation (all `Success`), no-ops
    included, so a stale flag heals.
 5. **The root must be loaded whole.** Orders are an `AutoInclude` navigation, and a persisted `OrderCount`
@@ -86,6 +89,10 @@ seller) and is the only way to change them: `StartExecuting`, `SucceedOrder`, `F
    currency and a balance past the storable maximum. `Credit` itself is not idempotent:
    `PaymentOrder.WalletUpdated`, saved in the same transaction, is.
 9. **`AddDomainEvent` is protected** — only an aggregate raises its own events.
+10. **An order remembers its provider.** `StartExecuting` records the PSP's name (a string, so the domain
+   never references `PaymentProvider`), and every later PSP call for the order goes through
+   `ProviderOutcome.GatewayFor` — that provider, or the default for an order with none recorded (not
+   started, or started before the column existed). Never call `gateways.Default` for an existing order.
 
 ## Persistence and interceptors
 
@@ -123,9 +130,29 @@ Client    pays on the PSP-hosted page (Stripe) / POST orders/{id}/payment-method
 PSP       POST webhooks/{provider} ─► Succeeded → SucceedOrder │ Canceled → FailOrder │ anything else → no-op
 Payments  Settle (on PaymentOrderSucceeded): credit wallet + ledger pair + both flags; BookingPaid once all done
           Fail   (on PaymentOrderFailed):    BookingPaymentFailed
+Job       ReconcileOrdersJob every 1 min: orders Executing > 2 min → LookupAsync at their provider →
+          RecordOutcome (same write as a synchronous charge); errors per order are logged and skipped
 Timer     ExpireCheckout after 15 min: fail every unsettled order → BookingPaymentFailed
 Bookings  BookingCancelled ─► CancelCheckout: fail unsettled orders; a paid one is left and logged for refund
+          no checkout yet ─► claim the booking Cancelled; a later PaymentRequested is refused (booking_cancelled)
 ```
+
+- **A booking is claimed once, by whichever message lands first** (`Domain/BookingClaim`, table
+  `BookingClaims`, primary key `BookingId`). `RequestPayment` inserts a `Requested` claim with the checkout,
+  in one save; `CancelCheckout` with no checkout inserts a `Cancelled` one. Two inserts of the same key
+  serialise in Postgres — the second waits for the first to commit, then fails on the key — so a request and
+  a cancellation arriving together cannot each miss the other's write. The loser clears its tracker and reads
+  what won (EF saved inside a savepoint, so the open transaction stays usable). **No lock is taken**; a new
+  handler that must order against these two claims the key the same way rather than locking.
+- **Both handlers look for the checkout before the claim.** Checkouts stored before claims existed got a
+  `Requested` claim from the `AddBookingClaims` backfill, but the order keeps a claim-less checkout safe
+  regardless. Test seeding (`SeedCheckoutAsync`) inserts the claim too, matching production.
+- A refused `booking_cancelled` request publishes nothing — Bookings already released the seats.
+- **Rejected alternatives:** a Redis lock as in Bookings is released when the handler returns, *before*
+  Wolverine commits its transaction, so the race reopens in that gap — and Payments has no Redis. EF Core 10
+  has no pessimistic-lock or upsert API, and optimistic concurrency needs a row both sides update; here
+  neither row exists yet. `Serializable` isolation would work but Wolverine owns the transaction. The
+  `pg_advisory_xact_lock` this replaced was correct but held the rule by convention, not by schema.
 
 - **PSP `Failed` is not final.** The provider lets the buyer retry with another method, so the order stays
   `Executing`; only `Canceled`, the 15-minute expiry, or a booking cancellation fails it.
@@ -197,7 +224,7 @@ from `.env` (`PAYMENTS_STRIPE_SECRET_KEY`, `PAYMENTS_STRIPE_WEBHOOK_SECRET`).
 | `Tests/Payments/PaymentIntegration` | Postgres (Testcontainers) via the production `AddInfrastructureServices`; schema from `MigrateAsync`. `Features/` per slice, plus Concurrency, Integrity, RoundTrip, Precision, Timestamps, DomainEvents |
 | `…/Mechanics` | The real host (`WebApplicationFactory<Program>`) on Postgres + RabbitMQ with a stand-in Bookings host: durable endpoints, end-to-end request/cancel/expiry, outbox rollback |
 | `Tests/Payments/PaymentAdapters` | The PSP adapters in `PaymentProvider` |
-| `Tests/Payments/PaymentArchitecture` | ArchUnitNET: Domain depends only on itself, `Enums`, the BCL and MediatR; no feature area depends on another; `Shared` and `Data` never depend on `Features`; `PaymentProvider` never references `PaymentSystem`; handlers internal sealed; endpoints public sealed; every `Command` is `ITransactionalRequest` and no `Query` is; feature types live in `PaymentSystem.Features.<Aggregate>` |
+| `Tests/Payments/PaymentArchitecture` | ArchUnitNET: Domain depends only on itself, `Enums`, the BCL and MediatR; no feature area depends on another; `Shared` and `Data` never depend on `Features`; `PaymentProvider` never references `PaymentSystem`; handlers internal sealed; endpoints public sealed; every `Command` is `ITransactionalRequest` and no `Query` is — the one named exception is `SubmitPaymentMethod.Command`, which charges the PSP with no transaction open and sends the transactional `RecordOutcome.Command` for the write (never add a second exception without the same reason); feature types live in `PaymentSystem.Features.<Aggregate>` |
 
 - The fast fixture registers a recording `IIntegrationEventPublisher` (`IntegrationEventLog`, with scheduled
   messages kept separately) and `StubPsp`; the PSP is another process, so stubbing it is correct.
@@ -207,14 +234,13 @@ from `.env` (`PAYMENTS_STRIPE_SECRET_KEY`, `PAYMENTS_STRIPE_WEBHOOK_SECRET`).
 
 ## Known gaps
 
-- **A cancel that arrives before `PaymentRequested`** is a no-op (no checkout yet); the checkout is then
-  created and only the 15-minute expiry fails it. A buyer paying inside that window pays for a cancelled
-  booking. Closing it needs a record of cancelled booking ids.
 - **Refunds are not modelled.** A booking cancelled after its payment succeeded is logged ("needs a refund")
   on every redelivery; nothing issues the refund.
-- **No reconciliation job** against PSP settlement files; a Braintree charge whose write fails twice stays
-  `Executing` until `LookupAsync`-based reconciliation exists (it doesn't).
-- **The order does not store its provider**, so changing `PaymentProviders:Default` mid-checkout sends
-  submit to the wrong provider. The Braintree sale also runs while the request's DB transaction is open.
-- Two checkouts settling at once for a brand-new seller and currency can collide on the wallet's unique
-  index; the loser rolls back and the webhook redelivery settles it.
+- **No settlement-file reconciliation.** `ReconcileOrdersJob` (`Features/PaymentOrders/ReconcileOrders.cs`)
+  covers orders still `Executing`; an order already failed by expiry or cancellation whose payment the PSP
+  then took is only logged ("needs reconciling").
+- Two orders crediting one seller's existing wallet at once conflict on its `xmin` token; the loser answers
+  409 and the webhook redelivery settles it (the synchronous Braintree path reports
+  `payment_outcome_not_recorded`). Creating a seller's *first* wallet concurrently is not a gap: `Settle`
+  catches the loss on the unique index and credits the winner's wallet in the same transaction
+  (`SettlementTests.ConcurrentFirstCredit_…`).

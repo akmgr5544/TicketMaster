@@ -186,7 +186,7 @@ public sealed class AuditTimestampTests(PaymentsFixture fixture) : IntegrationTe
         var saved = await SeedCheckoutAsync(OrderState.NotStarted);
         Clock.Advance(TimeSpan.FromSeconds(30));
 
-        (await LoadCheckoutAsync(saved.CheckoutId)).StartExecuting(saved.OrderId(0), "tok");
+        (await LoadCheckoutAsync(saved.CheckoutId)).StartExecuting(saved.OrderId(0), CheckoutSeed.Provider, "tok");
         Context.SaveChanges();
 
         var loaded = await ReadCheckoutAsync(saved.CheckoutId);

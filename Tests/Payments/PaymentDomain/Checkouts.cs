@@ -7,9 +7,21 @@ internal static class Checkouts
 {
     public const string Token = "psp-token";
 
-    public static PaymentOrderLine Line(decimal amount = 25.50m, string currency = "USD") => new(Guid.NewGuid(), amount, currency);
+    public const string Provider = "Stripe";
 
-    public static PaymentEvent WithLines(params PaymentOrderLine[] lines) => PaymentEvent.Create(Guid.NewGuid(), Random.Shared.NextInt64(1, long.MaxValue), Guid.NewGuid(), lines);
+    public static OrderLine Line(decimal amount = 25.50m, string currency = "USD") => new(Guid.NewGuid(), amount, currency);
+
+    public static PaymentEvent NewCheckout(Guid? checkoutId = null, Guid? buyerId = null) =>
+        PaymentEvent.Create(checkoutId ?? Guid.NewGuid(), Random.Shared.NextInt64(1, long.MaxValue), buyerId ?? Guid.NewGuid());
+
+    public static PaymentEvent WithOrders(this PaymentEvent paymentEvent, params OrderLine[] lines)
+    {
+        foreach (var line in lines)
+            paymentEvent.AddOrder(line.MerchantId, line.Amount, line.Currency);
+        return paymentEvent;
+    }
+
+    public static PaymentEvent WithLines(params OrderLine[] lines) => NewCheckout().WithOrders(lines);
 
     public static PaymentEvent SingleOrder(decimal amount = 25.50m, string currency = "USD") => WithLines(Line(amount, currency));
 
@@ -27,7 +39,7 @@ internal static class Checkouts
     {
         if (status == PaymentOrderStatus.NotStarted)
             return;
-        paymentEvent.StartExecuting(paymentOrderId, Token);
+        paymentEvent.StartExecuting(paymentOrderId, Provider, Token);
         if (status == PaymentOrderStatus.Success)
             paymentEvent.SucceedOrder(paymentOrderId);
         else if (status == PaymentOrderStatus.Failed)
@@ -50,6 +62,9 @@ internal static class Checkouts
             "events=" + string.Join(",", paymentEvent.DomainEvents.Select(domainEvent => domainEvent.ToString()))
         }.Concat(paymentEvent.PaymentOrders.Select(order =>
             $"order={order.PaymentOrderId} checkout={order.CheckoutId} buyer={order.BuyerId} merchant={order.MerchantId} " +
-            $"amount={order.Amount} currency={order.Currency} status={order.Status} token={order.PspToken ?? "<null>"} " +
+            $"amount={order.Amount} currency={order.Currency} status={order.Status} provider={order.Provider ?? "<null>"} token={order.PspToken ?? "<null>"} " +
             $"wallet={order.WalletUpdated} ledger={order.LedgerUpdated}")));
 }
+
+// One seller's order as a test describes it; expanded into PaymentEvent.AddOrder calls.
+public sealed record OrderLine(Guid MerchantId, decimal Amount, string Currency);

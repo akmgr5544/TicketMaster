@@ -9,12 +9,23 @@ namespace PaymentIntegration.Integrity;
 
 public sealed class IntegrityTests(PaymentsFixture fixture) : IntegrationTest(fixture)
 {
+    // Orders are added after the checkout is created, so only the store stops one being saved with none.
+    [Fact]
+    public async Task Checkout_WithNoOrders_IsRefusedByTheStore()
+    {
+        Context.PaymentEvents.Add(PaymentEvent.Create(Guid.NewGuid(), Random.Shared.NextInt64(1, long.MaxValue), Guid.NewGuid()));
+
+        var thrown = await Assert.ThrowsAsync<DbUpdateException>(() => Context.SaveChangesAsync());
+        Assert.Equal(PostgresErrorCodes.CheckViolation, Assert.IsType<PostgresException>(thrown.InnerException).SqlState);
+        Assert.Equal(0, await ReadAsync(c => c.PaymentEvents.CountAsync()));
+    }
+
     [Fact]
     public async Task Checkout_SecondWithSameCheckoutId_IsRefusedAndFirstIsUntouched()
     {
         var first = await SeedCheckoutAsync(OrderState.NotStarted);
 
-        Context.PaymentEvents.Add(PaymentEvent.Create(first.CheckoutId, Random.Shared.NextInt64(1, long.MaxValue), Guid.NewGuid(), CheckoutSeed.Lines(2)));
+        Context.PaymentEvents.Add(CheckoutSeed.Create(first.CheckoutId, Random.Shared.NextInt64(1, long.MaxValue), Guid.NewGuid(), CheckoutSeed.Lines(2)));
 
         await Assert.ThrowsAsync<DbUpdateException>(() => Context.SaveChangesAsync());
         var stored = Assert.Single(await ReadAsync(c => c.PaymentEvents.ToListAsync()));
@@ -83,10 +94,10 @@ public sealed class IntegrityTests(PaymentsFixture fixture) : IntegrationTest(fi
         // "One payment order per seller": two orders for one merchant would pay the seller twice for one
         // checkout. The domain refuses it before anything reaches the database.
         var merchant = Guid.NewGuid();
-        var lines = new[] { new PaymentOrderLine(merchant, 10m, "USD"), new PaymentOrderLine(merchant, 10m, "USD") };
+        var lines = new[] { new OrderLine(merchant, 10m, "USD"), new OrderLine(merchant, 10m, "USD") };
 
         Assert.Throws<PaymentDomainException>(() =>
-            PaymentEvent.Create(Guid.NewGuid(), Random.Shared.NextInt64(1, long.MaxValue), Guid.NewGuid(), lines));
+            CheckoutSeed.Create(Guid.NewGuid(), Random.Shared.NextInt64(1, long.MaxValue), Guid.NewGuid(), lines));
         Assert.Equal(0, await ReadAsync(c => c.Set<PaymentOrder>().CountAsync()));
     }
 
@@ -96,8 +107,8 @@ public sealed class IntegrityTests(PaymentsFixture fixture) : IntegrationTest(fi
         // Two valid checkouts for one seller, then raw SQL moves one order into the other checkout — a write
         // no aggregate would make, so only the database can refuse it.
         var merchant = Guid.NewGuid();
-        var kept = await SeedCheckoutAsync([new PaymentOrderLine(merchant, 10m, "USD")], OrderState.NotStarted);
-        var moved = await SeedCheckoutAsync([new PaymentOrderLine(merchant, 5m, "USD")], OrderState.NotStarted);
+        var kept = await SeedCheckoutAsync([new OrderLine(merchant, 10m, "USD")], OrderState.NotStarted);
+        var moved = await SeedCheckoutAsync([new OrderLine(merchant, 5m, "USD")], OrderState.NotStarted);
 
         var error = await Record.ExceptionAsync(() => ReadAsync(c => c.Database.ExecuteSqlAsync(
             $"""UPDATE "PaymentOrders" SET "CheckoutId" = {kept.CheckoutId} WHERE "PaymentOrderId" = {moved.OrderId(0)}""")));
@@ -211,7 +222,7 @@ public sealed class IntegrityTests(PaymentsFixture fixture) : IntegrationTest(fi
         var duplicate = await ReadAsync(c => c.PaymentEvents.Select(e => e.CheckoutId).SingleAsync());
 
         Context.Wallets.Add(Wallet.Create(Guid.NewGuid(), "USD"));
-        Context.PaymentEvents.Add(PaymentEvent.Create(duplicate, Random.Shared.NextInt64(1, long.MaxValue), Guid.NewGuid(), CheckoutSeed.Lines(1)));
+        Context.PaymentEvents.Add(CheckoutSeed.Create(duplicate, Random.Shared.NextInt64(1, long.MaxValue), Guid.NewGuid(), CheckoutSeed.Lines(1)));
 
         await Assert.ThrowsAsync<DbUpdateException>(() => Context.SaveChangesAsync());
         Assert.Equal(0, await ReadAsync(c => c.Wallets.CountAsync()));

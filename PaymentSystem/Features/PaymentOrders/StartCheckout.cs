@@ -35,7 +35,7 @@ public static class StartCheckout
             if (order.Status is PaymentOrderStatus.Success or PaymentOrderStatus.Failed)
                 return Error.Conflict("payment_order_settled", $"Payment order {order.PaymentOrderId} is already {order.Status}.");
 
-            var gateway = gateways.Default;
+            var gateway = ProviderOutcome.GatewayFor(gateways, order);
             CheckoutSession session;
             try
             {
@@ -67,7 +67,7 @@ public static class StartCheckout
 
             try
             {
-                checkout.StartExecuting(order.PaymentOrderId, session.ProviderReference);
+                checkout.StartExecuting(order.PaymentOrderId, gateway.Kind.ToString(), session.ProviderReference);
                 await context.SaveChangesAsync(cancellationToken);
             }
             catch (PaymentDomainException exception)

@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using PaymentSystem.Data;
@@ -11,9 +12,11 @@ using PaymentSystem.Data;
 namespace PaymentSystem.Data.Migrations
 {
     [DbContext(typeof(PaymentDbContext))]
-    partial class PaymentDbContextModelSnapshot : ModelSnapshot
+    [Migration("20261001201521_AddPaymentOrderProvider")]
+    partial class AddPaymentOrderProvider
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -21,24 +24,6 @@ namespace PaymentSystem.Data.Migrations
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
-
-            modelBuilder.Entity("PaymentSystem.Domain.BookingClaim", b =>
-                {
-                    b.Property<long>("BookingId")
-                        .HasColumnType("bigint");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("character varying(20)");
-
-                    b.HasKey("BookingId");
-
-                    b.ToTable("BookingClaims", (string)null);
-                });
 
             modelBuilder.Entity("PaymentSystem.Domain.LedgerEntry", b =>
                 {
@@ -109,10 +94,7 @@ namespace PaymentSystem.Data.Migrations
                     b.HasIndex("BookingId")
                         .IsUnique();
 
-                    b.ToTable("PaymentEvents", null, t =>
-                        {
-                            t.HasCheckConstraint("CK_PaymentEvents_OrderCount", "\"OrderCount\" > 0");
-                        });
+                    b.ToTable("PaymentEvents", (string)null);
                 });
 
             modelBuilder.Entity("PaymentSystem.Domain.PaymentOrder", b =>

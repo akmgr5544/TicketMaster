@@ -1,8 +1,12 @@
 using System.Text.Json;
+using MediatR;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using PaymentSystem.Data;
 using PaymentIntegration.Fixtures;
 using PaymentProvider.Exceptions;
 using PaymentProvider.Models;
+using PaymentSystem.Domain;
 using PaymentSystem.Domain.Events;
 using PaymentSystem.Enums;
 using PaymentSystem.Features.PaymentOrders;
@@ -16,7 +20,6 @@ public sealed class SubmitPaymentMethodTests : PspTest
 
     public SubmitPaymentMethodTests(PaymentsFixture fixture) : base(fixture) =>
         Psp.DefaultKind = PaymentProviderKind.Braintree;
-
     private static Dictionary<string, string> Route(Guid paymentOrderId) =>
         new() { ["paymentOrderId"] = paymentOrderId.ToString() };
 
@@ -43,6 +46,79 @@ public sealed class SubmitPaymentMethodTests : PspTest
 
         // The amount charged is the order's, and the order id is what a timed-out sale is found by.
         Assert.Equal(new SubmitPaymentMethodRequest(id, 12.34m, "GBP", Nonce), Assert.Single(Psp.Braintree.Submissions));
+    }
+
+    // A slow PSP must not hold a connection and a transaction open, and a write that fails afterwards must not
+    // roll back over a charge that already happened. The outcome gets a transaction of its own.
+    [Fact]
+    public async Task The_charge_runs_with_no_database_transaction_open()
+    {
+        var checkout = await SeedCheckoutAsync(OrderState.Executing);
+        await using var scope = NewScope();
+        var requestContext = scope.ServiceProvider.GetRequiredService<PaymentDbContext>();
+        var openDuringCharge = true;
+        Psp.Braintree.OnSubmit = request =>
+        {
+            openDuringCharge = requestContext.Database.CurrentTransaction is not null;
+            return Task.FromResult<PaymentResult?>(new PaymentResult($"bt_{request.PaymentOrderId:N}", PaymentStatus.Succeeded));
+        };
+
+        var result = await scope.ServiceProvider.GetRequiredService<ISender>()
+            .Send(new SubmitPaymentMethod.Command(checkout.BuyerId, checkout.OrderId(0), Nonce));
+
+        Assert.False(openDuringCharge);
+        Assert.Equal("Success", result.Value!.OrderStatus);
+        Assert.Equal(PaymentOrderStatus.Success, (await OrderAsync(checkout, 0)).Status);
+    }
+
+    // With no transaction around the charge, the order can settle by webhook while the charge is in flight. The
+    // outcome is decided over the fresh state, so the same success is a redelivery, not a conflict.
+    [Fact]
+    public async Task A_webhook_that_settles_the_order_during_the_charge_is_taken_as_the_same_success()
+    {
+        var checkout = await SeedCheckoutAsync(OrderState.Executing);
+        var id = checkout.OrderId(0);
+        Psp.Braintree.OnSubmit = async request =>
+        {
+            await WebhookAsync(id, PaymentStatus.Succeeded, provider: "braintree");
+            return new PaymentResult($"bt_{request.PaymentOrderId:N}", PaymentStatus.Succeeded);
+        };
+
+        var result = await SendAsync(new SubmitPaymentMethod.Command(checkout.BuyerId, id, Nonce));
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("Success", result.Value!.OrderStatus);
+        Assert.Single(Events.Published, e => e.Event is PaymentOrderSucceededDomainEvent);
+    }
+
+    // The order was started at Braintree; Stripe, the new default, has no session for it to charge against.
+    [Fact]
+    public async Task The_charge_goes_to_the_provider_that_started_the_order_after_the_default_changes()
+    {
+        var checkout = await SeedCheckoutAsync(OrderState.Executing);
+        Psp.DefaultKind = PaymentProviderKind.Stripe;
+
+        var result = await SendAsync(new SubmitPaymentMethod.Command(checkout.BuyerId, checkout.OrderId(0), Nonce));
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("Success", result.Value!.OrderStatus);
+        Assert.Single(Psp.Braintree.Submissions);
+        Assert.Empty(Psp.Stripe.Submissions);
+    }
+
+    // Orders started before the provider was recorded have none, and go where every order went then.
+    [Fact]
+    public async Task An_order_with_no_recorded_provider_is_charged_at_the_default()
+    {
+        var checkout = await SeedCheckoutAsync(OrderState.Executing);
+        var id = checkout.OrderId(0);
+        await InScopeAsync(c => c.Set<PaymentOrder>().Where(o => o.PaymentOrderId == id)
+            .ExecuteUpdateAsync(set => set.SetProperty(o => o.Provider, (string?)null)));
+
+        var result = await SendAsync(new SubmitPaymentMethod.Command(checkout.BuyerId, id, Nonce));
+
+        Assert.True(result.IsSuccess);
+        Assert.Single(Psp.Braintree.Submissions);
     }
 
     [Fact]

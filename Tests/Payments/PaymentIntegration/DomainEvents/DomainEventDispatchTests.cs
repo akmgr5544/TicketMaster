@@ -227,7 +227,7 @@ public sealed class DomainEventDispatchTests(PaymentsFixture fixture) : Integrat
     public async Task FailedSave_PublishesNothing()
     {
         var existing = await SeedCheckoutAsync(OrderState.NotStarted);
-        var clash = PaymentEvent.Create(existing.CheckoutId, Random.Shared.NextInt64(1, long.MaxValue), Guid.NewGuid(), CheckoutSeed.Lines(1));
+        var clash = CheckoutSeed.Create(existing.CheckoutId, Random.Shared.NextInt64(1, long.MaxValue), Guid.NewGuid(), CheckoutSeed.Lines(1));
         CheckoutSeed.Drive(clash, clash.OrderId(0), OrderState.Success);
         Context.PaymentEvents.Add(clash);
 

@@ -2,6 +2,7 @@ using MediatR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using PaymentIntegration.Fixtures;
+using PaymentSystem.Data;
 using PaymentSystem.Domain;
 using PaymentSystem.Domain.Events;
 using PaymentSystem.Domain.Exceptions;
@@ -59,7 +60,7 @@ public sealed class SettlementTests(PaymentsFixture fixture) : MessagingTest(fix
         var existing = Wallet.Create(merchant, "USD");
         existing.Credit(100m, "USD");
         await InScopeAsync(async c => { c.Wallets.Add(existing); await c.SaveChangesAsync(); });
-        var saved = await SeedCheckoutAsync([new PaymentOrderLine(merchant, 25.50m, "USD")], OrderState.Executing);
+        var saved = await SeedCheckoutAsync([new OrderLine(merchant, 25.50m, "USD")], OrderState.Executing);
 
         await ThroughTransactionBehaviorAsync(saved.CheckoutId, c => c.SucceedOrder(saved.OrderId(0)));
 
@@ -75,7 +76,7 @@ public sealed class SettlementTests(PaymentsFixture fixture) : MessagingTest(fix
         var merchant = Guid.NewGuid();
         var usd = Wallet.Create(merchant, "USD");
         await InScopeAsync(async c => { c.Wallets.Add(usd); await c.SaveChangesAsync(); });
-        var saved = await SeedCheckoutAsync([new PaymentOrderLine(merchant, 9.99m, "EUR")], OrderState.Executing);
+        var saved = await SeedCheckoutAsync([new OrderLine(merchant, 9.99m, "EUR")], OrderState.Executing);
 
         await ThroughTransactionBehaviorAsync(saved.CheckoutId, c => c.SucceedOrder(saved.OrderId(0)));
 
@@ -120,14 +121,46 @@ public sealed class SettlementTests(PaymentsFixture fixture) : MessagingTest(fix
     {
         // One checkout holds one order per seller, so a seller's second credit comes from another checkout.
         var merchant = Guid.NewGuid();
-        var first = await SeedCheckoutAsync([new PaymentOrderLine(merchant, 10m, "USD")], OrderState.Executing);
-        var second = await SeedCheckoutAsync([new PaymentOrderLine(merchant, 2.5m, "USD")], OrderState.Executing);
+        var first = await SeedCheckoutAsync([new OrderLine(merchant, 10m, "USD")], OrderState.Executing);
+        var second = await SeedCheckoutAsync([new OrderLine(merchant, 2.5m, "USD")], OrderState.Executing);
 
         await ThroughTransactionBehaviorAsync(first.CheckoutId, c => c.SucceedOrder(first.OrderId(0)));
         await ThroughTransactionBehaviorAsync(second.CheckoutId, c => c.SucceedOrder(second.OrderId(0)));
 
         Assert.Equal(12.5m, (await ReadWalletAsync(merchant))!.Balance);
         Assert.Equal(1, await ReadAsync(c => c.Wallets.CountAsync(w => w.OwnerId == merchant)));
+    }
+
+    [Fact]
+    public async Task ConcurrentFirstCredit_LosesOnTheWalletIndex_AndCreditsTheWinnersWallet()
+    {
+        var merchant = Guid.NewGuid();
+        var saved = await SeedCheckoutAsync([new OrderLine(merchant, 25.50m, "USD")], OrderState.Executing);
+
+        // Another settlement for the same seller creates the wallet first but holds its transaction open, so
+        // this one's lookup finds nothing and its insert waits on the unique index until the winner commits.
+        await using var winnerScope = NewScope();
+        var winnerContext = winnerScope.ServiceProvider.GetRequiredService<PaymentDbContext>();
+        await using var winnerTransaction = await winnerContext.Database.BeginTransactionAsync();
+        var winnersWallet = Wallet.Create(merchant, "USD");
+        winnersWallet.Credit(10m, "USD");
+        winnerContext.Wallets.Add(winnersWallet);
+        await winnerContext.SaveChangesAsync();
+
+        var loser = ThroughTransactionBehaviorAsync(saved.CheckoutId, c => c.SucceedOrder(saved.OrderId(0)));
+        await Task.Delay(TimeSpan.FromMilliseconds(500));
+        Assert.False(loser.IsCompleted, "The settlement should be blocked on the winner's uncommitted wallet.");
+        await winnerTransaction.CommitAsync();
+
+        await loser;
+
+        var wallet = Assert.Single(await ReadAsync(c => c.Wallets.Where(w => w.OwnerId == merchant).ToListAsync()));
+        Assert.Equal(winnersWallet.WalletId, wallet.WalletId);
+        Assert.Equal(35.50m, wallet.Balance);
+        Assert.Equal(2, (await ReadLedgerAsync(saved.OrderId(0))).Length);
+        var stored = (await ReadCheckoutAsync(saved.CheckoutId)).Order(saved.OrderId(0));
+        Assert.True(stored is { Status: PaymentOrderStatus.Success, WalletUpdated: true, LedgerUpdated: true });
+        Assert.Single(Outbox.OfType<BookingPaidIntegrationEvent>());
     }
 
     [Fact]
@@ -212,7 +245,7 @@ public sealed class SettlementTests(PaymentsFixture fixture) : MessagingTest(fix
         var full = Wallet.Create(merchant, "USD");
         full.Credit(9999999999999999.98m, "USD");
         await InScopeAsync(async c => { c.Wallets.Add(full); await c.SaveChangesAsync(); });
-        var saved = await SeedCheckoutAsync([new PaymentOrderLine(merchant, 1m, "USD")], OrderState.Executing);
+        var saved = await SeedCheckoutAsync([new OrderLine(merchant, 1m, "USD")], OrderState.Executing);
 
         await Assert.ThrowsAsync<PaymentDomainException>(() =>
             ThroughTransactionBehaviorAsync(saved.CheckoutId, c => c.SucceedOrder(saved.OrderId(0))));

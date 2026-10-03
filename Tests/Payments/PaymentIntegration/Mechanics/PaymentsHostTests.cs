@@ -253,7 +253,7 @@ public sealed class PaymentsHostTests(PaymentsHostFixture fixture)
     private async Task<PaymentEvent> SeedExecutingCheckoutAsync()
     {
         var checkout = CheckoutSeed.New();
-        checkout.StartExecuting(checkout.OrderId(0), CheckoutSeed.Token);
+        checkout.StartExecuting(checkout.OrderId(0), CheckoutSeed.Provider, CheckoutSeed.Token);
         await using var scope = fixture.Services.CreateAsyncScope();
         var context = scope.ServiceProvider.GetRequiredService<PaymentDbContext>();
         context.PaymentEvents.Add(checkout);

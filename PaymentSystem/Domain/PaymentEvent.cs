@@ -5,30 +5,17 @@ using PaymentSystem.Enums;
 
 namespace PaymentSystem.Domain;
 
-// A checkout: the aggregate root, owning one payment order per seller. Every change to an order goes
-// through here, so the checkout-wide rule — done once every order has succeeded — cannot be bypassed.
 public class PaymentEvent : Entity
 {
     private readonly List<PaymentOrder> _paymentOrders = [];
 
     public Guid CheckoutId { get; private set; }
-    // The booking this checkout pays for. Unique in the store, which is what turns a redelivered
-    // PaymentRequested message into a duplicate-key refusal instead of a second checkout.
     public long BookingId { get; private set; }
     public Guid BuyerId { get; private set; }
-    // Stored so queries can filter on it, but always re-derived from the orders at the end of each operation,
-    // so a stale copy (a reload of the root alone, a redelivered no-op) cannot leave it saying the wrong thing.
     public bool IsPaymentDone { get; private set; }
     public IReadOnlyCollection<PaymentOrder> PaymentOrders => _paymentOrders.AsReadOnly();
-    // How many orders the checkout was created with; orders are never added or removed afterwards. A root
-    // handed fewer (IgnoreAutoIncludes plus a filtered Include) refuses every operation rather than deciding
-    // "every order succeeded" over part of the list.
     public int OrderCount { get; private set; }
-    // Concurrency token, bumped once per save by AggregateVersionInterceptor when the checkout or any of its
-    // orders changed — never here. Two orders settling at once would otherwise each see the other unfinished
-    // and leave the checkout never marked done; with it, the second save is refused and must reload.
     public int Version { get; private set; }
-    // Stamped by AuditTimestampsInterceptor on save.
     public DateTime CreatedAt { get; private set; }
     public DateTime UpdatedAt { get; private set; }
 
@@ -36,8 +23,8 @@ public class PaymentEvent : Entity
     {
     }
 
-    public static PaymentEvent Create(Guid checkoutId, long bookingId, Guid buyerId,
-        IReadOnlyCollection<PaymentOrderLine> lines)
+    // Holds no order yet; the store refuses a checkout saved without one (OrderCount > 0).
+    public static PaymentEvent Create(Guid checkoutId, long bookingId, Guid buyerId)
     {
         if (checkoutId == Guid.Empty)
             throw new PaymentDomainException("A checkout needs an id.");
@@ -45,29 +32,30 @@ public class PaymentEvent : Entity
             throw new PaymentDomainException("A checkout must pay for a booking.");
         if (buyerId == Guid.Empty)
             throw new PaymentDomainException("A checkout needs a buyer.");
-        ArgumentNullException.ThrowIfNull(lines);
-        if (lines.Count == 0)
-            throw new PaymentDomainException("A checkout needs at least one payment order.");
 
-        var paymentEvent = new PaymentEvent
-        {
-            CheckoutId = checkoutId,
-            BookingId = bookingId,
-            BuyerId = buyerId,
-            OrderCount = lines.Count
-        };
-        paymentEvent._paymentOrders.AddRange(lines.Select(line => PaymentOrder.Create(checkoutId, buyerId, line)));
-
-        // One order per seller: two would double the PSP calls and make a callback ambiguous for that seller.
-        if (paymentEvent._paymentOrders.DistinctBy(order => order.MerchantId).Count() != paymentEvent._paymentOrders.Count)
-            throw new PaymentDomainException("A checkout holds one payment order per seller.");
-
-        return paymentEvent;
+        return new PaymentEvent { CheckoutId = checkoutId, BookingId = bookingId, BuyerId = buyerId };
     }
 
-    public void StartExecuting(Guid paymentOrderId, string? pspToken)
+    public void AddOrder(Guid merchantId, decimal amount, string currency)
     {
-        OrderById(paymentOrderId).StartExecuting(pspToken);
+        EnsureWhole();
+        // An order added once payment began would be one the buyer never saw when they started paying.
+        if (_paymentOrders.Exists(order => order.Status != PaymentOrderStatus.NotStarted))
+            throw new PaymentDomainException($"Checkout {CheckoutId} takes no new payment order once payment has begun.");
+
+        var order = PaymentOrder.Create(CheckoutId, BuyerId, merchantId, amount, currency);
+        // One order per seller: two would double the PSP calls and make a callback ambiguous for that seller.
+        if (_paymentOrders.Exists(existing => existing.MerchantId == order.MerchantId))
+            throw new PaymentDomainException("A checkout holds one payment order per seller.");
+
+        _paymentOrders.Add(order);
+        OrderCount = _paymentOrders.Count;
+        RefreshIsPaymentDone();
+    }
+
+    public void StartExecuting(Guid paymentOrderId, string provider, string? pspToken)
+    {
+        OrderById(paymentOrderId).StartExecuting(provider, pspToken);
         RefreshIsPaymentDone();
     }
 
@@ -87,11 +75,8 @@ public class PaymentEvent : Entity
         RefreshIsPaymentDone();
     }
 
-    // The checkout's payment window closed. Returns how many orders it failed; none on a repeat.
     public int Expire() => AbandonUnsettledOrders();
 
-    // The booking was cancelled. Returns how many orders it failed; an order that already succeeded is not
-    // reversed here, the caller has to flag it for a refund.
     public int Cancel() => AbandonUnsettledOrders();
 
     public void MarkWalletUpdated(Guid paymentOrderId)
@@ -120,8 +105,10 @@ public class PaymentEvent : Entity
         return abandoned;
     }
 
+    // TrueForAll is true over no orders; a checkout with nothing to pay is not paid.
     private void RefreshIsPaymentDone() =>
-        IsPaymentDone = _paymentOrders.TrueForAll(order => order.Status == PaymentOrderStatus.Success);
+        IsPaymentDone = _paymentOrders.Count > 0
+                        && _paymentOrders.TrueForAll(order => order.Status == PaymentOrderStatus.Success);
 
     private void EnsureWhole()
     {

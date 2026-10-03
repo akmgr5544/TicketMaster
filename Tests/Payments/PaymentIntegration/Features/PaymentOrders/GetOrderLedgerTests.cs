@@ -12,7 +12,7 @@ public sealed class GetOrderLedgerTests(PaymentsFixture fixture) : QueryTest(fix
     {
         var buyer = Guid.NewGuid();
         var merchant = Guid.NewGuid();
-        var checkout = await SeedCheckoutForAsync(buyer, new PaymentOrderLine(merchant, 250.75m, "USD"));
+        var checkout = await SeedCheckoutForAsync(buyer, new OrderLine(merchant, 250.75m, "USD"));
         await SettleAsync(checkout, checkout.OrderId(0));
 
         var result = await SendAsync(new GetOrderLedger.Query(buyer, checkout.OrderId(0)));
@@ -37,7 +37,7 @@ public sealed class GetOrderLedgerTests(PaymentsFixture fixture) : QueryTest(fix
     public async Task Merchant_SeesTheSameLedger()
     {
         var merchant = Guid.NewGuid();
-        var checkout = await SeedCheckoutForAsync(Guid.NewGuid(), new PaymentOrderLine(merchant, 9.99m, "EUR"));
+        var checkout = await SeedCheckoutForAsync(Guid.NewGuid(), new OrderLine(merchant, 9.99m, "EUR"));
         await SettleAsync(checkout, checkout.OrderId(0));
 
         var result = await SendAsync(new GetOrderLedger.Query(merchant, checkout.OrderId(0)));

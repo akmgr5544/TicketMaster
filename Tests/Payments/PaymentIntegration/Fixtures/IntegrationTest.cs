@@ -47,6 +47,9 @@ public abstract class IntegrationTest(PaymentsFixture fixture) : IAsyncLifetime
 
     protected AsyncServiceScope NewScope() => fixture.Services.CreateAsyncScope();
 
+    // The provider a seeded order was started with, which is the one every later PSP call for it goes to.
+    protected virtual string SeedProvider => CheckoutSeed.Provider;
+
     protected Task<PaymentEvent> LoadCheckoutAsync(Guid checkoutId) =>
         Context.PaymentEvents.SingleAsync(e => e.CheckoutId == checkoutId);
 
@@ -55,18 +58,19 @@ public abstract class IntegrationTest(PaymentsFixture fixture) : IAsyncLifetime
     protected async Task<PaymentEvent> SeedCheckoutAsync(params OrderState[] states) =>
         await SeedCheckoutAsync(CheckoutSeed.Lines(states.Length == 0 ? 1 : states.Length), states);
 
-    protected async Task<PaymentEvent> SeedCheckoutAsync(IReadOnlyCollection<PaymentOrderLine> lines, params OrderState[] states)
+    protected async Task<PaymentEvent> SeedCheckoutAsync(IReadOnlyCollection<OrderLine> lines, params OrderState[] states)
     {
-        var checkout = PaymentEvent.Create(Guid.NewGuid(), Random.Shared.NextInt64(1, long.MaxValue), Guid.NewGuid(), lines);
+        var checkout = CheckoutSeed.Create(Guid.NewGuid(), Random.Shared.NextInt64(1, long.MaxValue), Guid.NewGuid(), lines);
         var orders = checkout.PaymentOrders.ToArray();
         for (var i = 0; i < states.Length; i++)
-            CheckoutSeed.Drive(checkout, orders[i].PaymentOrderId, states[i]);
+            CheckoutSeed.Drive(checkout, orders[i].PaymentOrderId, states[i], SeedProvider);
         // Seeds a state, not a settlement: a pending success event would run the real Settle handler on save
         // and write the wallet and ledger a test means to arrange itself.
         checkout.ClearDomainEvents();
 
         await InScopeAsync(async c =>
         {
+            c.BookingClaims.Add(BookingClaim.Requested(checkout.BookingId));
             c.PaymentEvents.Add(checkout);
             await c.SaveChangesAsync();
         });
@@ -96,17 +100,27 @@ public static class CheckoutSeed
 {
     public const string Token = "psp_tok_123";
 
-    public static PaymentOrderLine[] Lines(int count, decimal amount = 25.50m, string currency = "USD") =>
-        Enumerable.Range(0, count).Select(_ => new PaymentOrderLine(Guid.NewGuid(), amount, currency)).ToArray();
+    public const string Provider = "Stripe";
+
+    public static OrderLine[] Lines(int count, decimal amount = 25.50m, string currency = "USD") =>
+        Enumerable.Range(0, count).Select(_ => new OrderLine(Guid.NewGuid(), amount, currency)).ToArray();
 
     public static PaymentEvent New(int orders = 1, decimal amount = 25.50m, string currency = "USD") =>
-        PaymentEvent.Create(Guid.NewGuid(), Random.Shared.NextInt64(1, long.MaxValue), Guid.NewGuid(), Lines(orders, amount, currency));
+        Create(Guid.NewGuid(), Random.Shared.NextInt64(1, long.MaxValue), Guid.NewGuid(), Lines(orders, amount, currency));
 
-    public static void Drive(PaymentEvent checkout, Guid paymentOrderId, OrderState state)
+    public static PaymentEvent Create(Guid checkoutId, long bookingId, Guid buyerId, IEnumerable<OrderLine> lines)
+    {
+        var checkout = PaymentEvent.Create(checkoutId, bookingId, buyerId);
+        foreach (var line in lines)
+            checkout.AddOrder(line.MerchantId, line.Amount, line.Currency);
+        return checkout;
+    }
+
+    public static void Drive(PaymentEvent checkout, Guid paymentOrderId, OrderState state, string provider = Provider)
     {
         if (state == OrderState.NotStarted)
             return;
-        checkout.StartExecuting(paymentOrderId, Token);
+        checkout.StartExecuting(paymentOrderId, provider, Token);
         if (state == OrderState.Success)
             checkout.SucceedOrder(paymentOrderId);
         else if (state == OrderState.Failed)
@@ -119,3 +133,6 @@ public static class CheckoutSeed
     public static PaymentOrder Order(this PaymentEvent checkout, Guid paymentOrderId) =>
         checkout.PaymentOrders.Single(o => o.PaymentOrderId == paymentOrderId);
 }
+
+// One seller's order as a test describes it; expanded into PaymentEvent.AddOrder calls.
+public sealed record OrderLine(Guid MerchantId, decimal Amount, string Currency);

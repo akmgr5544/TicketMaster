@@ -3,8 +3,6 @@ using PaymentSystem.Enums;
 
 namespace PaymentSystem.Domain;
 
-// Append-only. Entries only come into being as a balanced debit/credit pair, so the ledger sums to zero per
-// currency by construction rather than by a check someone has to remember to run.
 public class LedgerEntry
 {
     public Guid PaymentOrderId { get; private set; }
@@ -12,7 +10,6 @@ public class LedgerEntry
     public EntryType Type { get; private set; }
     public decimal Amount { get; private set; }
     public string Currency { get; private set; } = null!;
-    // Stamped by AuditTimestampsInterceptor on save.
     public DateTime CreatedAt { get; private set; }
 
     private LedgerEntry()

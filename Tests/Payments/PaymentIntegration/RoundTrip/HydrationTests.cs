@@ -14,10 +14,10 @@ public sealed class HydrationTests(PaymentsFixture fixture) : IntegrationTest(fi
     {
         var lines = new[]
         {
-            new PaymentOrderLine(Guid.NewGuid(), 10.00m, "USD"),
-            new PaymentOrderLine(Guid.NewGuid(), 20.50m, "EUR"),
-            new PaymentOrderLine(Guid.NewGuid(), 0.01m, "GBP"),
-            new PaymentOrderLine(Guid.NewGuid(), 1234.56m, "JPY")
+            new OrderLine(Guid.NewGuid(), 10.00m, "USD"),
+            new OrderLine(Guid.NewGuid(), 20.50m, "EUR"),
+            new OrderLine(Guid.NewGuid(), 0.01m, "GBP"),
+            new OrderLine(Guid.NewGuid(), 1234.56m, "JPY")
         };
         var saved = await SeedCheckoutAsync(lines, OrderState.NotStarted, OrderState.Executing, OrderState.Success, OrderState.Failed);
 
@@ -118,7 +118,7 @@ public sealed class HydrationTests(PaymentsFixture fixture) : IntegrationTest(fi
     }
 
     [Fact]
-    public void Model_MapsExactlyTheFourTypes_AndNoDomainEventsMember()
+    public void Model_MapsExactlyTheFiveTypes_AndNoDomainEventsMember()
     {
         foreach (var entityType in Context.Model.GetEntityTypes())
         {
@@ -126,7 +126,9 @@ public sealed class HydrationTests(PaymentsFixture fixture) : IntegrationTest(fi
             Assert.DoesNotContain(entityType.GetNavigations(), n => n.Name == "DomainEvents");
         }
 
-        Assert.Equal(4, Context.Model.GetEntityTypes().Count());
+        Assert.Equal(
+            [nameof(BookingClaim), nameof(LedgerEntry), nameof(PaymentEvent), nameof(PaymentOrder), nameof(Wallet)],
+            Context.Model.GetEntityTypes().Select(t => t.ClrType.Name).Order());
     }
 
     [Fact]

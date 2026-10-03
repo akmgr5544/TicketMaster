@@ -2,6 +2,8 @@ using MediatR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using PaymentIntegration.Fixtures;
+using PaymentSystem.Data;
+using PaymentSystem.Domain;
 using PaymentSystem.Enums;
 using PaymentSystem.Features.Checkouts;
 using TicketMaster.Common.IntegrationEvents;
@@ -72,17 +74,85 @@ public sealed class CancelCheckoutTests : MessagingTest
         Assert.Contains(_logs.Lines, line => line.StartsWith("Warning") && line.Contains("refund"));
     }
 
-    // The cancellation overtook PaymentRequested, or the booking never reached payment.
+    // The cancellation overtook PaymentRequested, or the booking never reached payment. Either way it is kept,
+    // so a PaymentRequested that arrives later opens nothing to pay.
     [Fact]
-    public async Task Cancelling_a_booking_with_no_checkout_is_a_no_op()
+    public async Task Cancelling_a_booking_with_no_checkout_records_the_cancellation_and_touches_nothing_else()
     {
         var unrelated = await SeedCheckoutAsync(OrderState.Executing);
+        var bookingId = unrelated.BookingId == long.MaxValue ? 1 : unrelated.BookingId + 1;
 
-        await CancelAsync(unrelated.BookingId == long.MaxValue ? 1 : unrelated.BookingId + 1);
+        await CancelAsync(bookingId);
 
         Assert.Empty(Outbox.Published);
         Assert.Equal(PaymentOrderStatus.Executing, (await ReadOrderAsync(unrelated.OrderId(0))).Status);
         Assert.Equal(1, await ReadAsync(c => c.PaymentEvents.CountAsync()));
+        Assert.Equal([bookingId], await ReadAsync(c => c.BookingClaims
+            .Where(b => b.Status == BookingClaimStatus.Cancelled)
+            .Select(b => b.BookingId)
+            .ToListAsync()));
+    }
+
+    // The request's claim and checkout are uncommitted, so the cancellation's check sees no checkout; its own
+    // claim insert must wait on the key, then cancel the checkout it lost to rather than record a cancellation.
+    [Fact]
+    public async Task A_cancellation_racing_a_request_waits_on_the_claim_and_cancels_the_checkout()
+    {
+        var checkout = CheckoutSeed.Create(Guid.CreateVersion7(), 5150, Guid.NewGuid(), CheckoutSeed.Lines(1));
+        checkout.ClearDomainEvents();
+        await using var requestScope = NewScope();
+        var requestContext = requestScope.ServiceProvider.GetRequiredService<PaymentDbContext>();
+        await using var requestTransaction = await requestContext.Database.BeginTransactionAsync();
+        requestContext.BookingClaims.Add(BookingClaim.Requested(checkout.BookingId));
+        requestContext.PaymentEvents.Add(checkout);
+        await requestContext.SaveChangesAsync();
+
+        var cancel = CancelAsync(checkout.BookingId);
+        await Task.Delay(TimeSpan.FromMilliseconds(500));
+        Assert.False(cancel.IsCompleted, "The cancellation should wait on the request's uncommitted claim.");
+        await requestTransaction.CommitAsync();
+        await cancel;
+
+        Assert.Equal(PaymentOrderStatus.Failed, (await ReadOrderAsync(checkout.PaymentOrders.Single().PaymentOrderId)).Status);
+        Assert.Equal(checkout.BookingId, Assert.Single(Outbox.OfType<BookingPaymentFailedIntegrationEvent>()).BookingId);
+        Assert.Equal(0, await ReadAsync(c => c.BookingClaims.CountAsync(b => b.Status == BookingClaimStatus.Cancelled)));
+    }
+
+    // A checkout stored before claims existed has none; it is still found and cancelled, never claimed over.
+    [Fact]
+    public async Task Cancelling_a_checkout_that_predates_claims_cancels_it()
+    {
+        var checkout = await SeedCheckoutAsync(OrderState.Executing);
+        await InScopeAsync(async c =>
+        {
+            await c.BookingClaims.Where(b => b.BookingId == checkout.BookingId).ExecuteDeleteAsync();
+        });
+
+        await CancelAsync(checkout.BookingId);
+
+        Assert.Equal(PaymentOrderStatus.Failed, (await ReadOrderAsync(checkout.OrderId(0))).Status);
+        Assert.Equal(0, await ReadAsync(c => c.BookingClaims.CountAsync()));
+    }
+
+    [Fact]
+    public async Task A_redelivered_cancellation_with_no_checkout_is_recorded_once()
+    {
+        await CancelAsync(77);
+
+        await CancelAsync(77);
+
+        Assert.Equal(1, await ReadAsync(c => c.BookingClaims.CountAsync(b => b.Status == BookingClaimStatus.Cancelled)));
+    }
+
+    // A checkout exists, so its failed orders already say the booking is cancelled; nothing more to remember.
+    [Fact]
+    public async Task Cancelling_a_booking_that_has_a_checkout_records_no_separate_cancellation()
+    {
+        var checkout = await SeedCheckoutAsync(OrderState.Executing);
+
+        await CancelAsync(checkout.BookingId);
+
+        Assert.Equal(0, await ReadAsync(c => c.BookingClaims.CountAsync(b => b.Status == BookingClaimStatus.Cancelled)));
     }
 
     [Fact]
