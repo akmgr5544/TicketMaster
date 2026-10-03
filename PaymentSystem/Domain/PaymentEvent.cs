@@ -88,6 +88,32 @@ public class PaymentEvent : Entity
         _paymentOrders.Exists(order => order.Status == PaymentOrderStatus.Refunded)
         && !_paymentOrders.Exists(order => order.Status == PaymentOrderStatus.Success);
 
+    // The provider's final word on an order — a webhook, a synchronous charge or a reconciliation lookup. Reports
+    // rather than throws for a repeat, a stale answer or an early one: all three arrive in normal operation, since
+    // providers deliver at least once and out of order.
+    public OrderUpdate ApplyProviderAnswer(Guid paymentOrderId, bool succeeded)
+    {
+        var order = OrderById(paymentOrderId);
+        switch (order.Status)
+        {
+            case PaymentOrderStatus.NotStarted:
+                return OrderUpdate.NotStarted;
+            case PaymentOrderStatus.Executing when succeeded:
+                SucceedOrder(paymentOrderId);
+                return OrderUpdate.Applied;
+            case PaymentOrderStatus.Executing:
+                FailOrder(paymentOrderId);
+                return OrderUpdate.Applied;
+            // The payment stays succeeded at the provider after a refund, so a late success is old news.
+            case PaymentOrderStatus.Success or PaymentOrderStatus.Refunded:
+                return succeeded ? OrderUpdate.AlreadyApplied : OrderUpdate.Superseded;
+            default:
+                return succeeded ? OrderUpdate.Superseded : OrderUpdate.AlreadyApplied;
+        }
+    }
+
+    public PaymentOrder Order(Guid paymentOrderId) => OrderById(paymentOrderId);
+
     public int Expire() => AbandonUnsettledOrders();
 
     public int Cancel() => AbandonUnsettledOrders();

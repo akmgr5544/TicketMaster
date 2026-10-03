@@ -96,7 +96,7 @@ Each project has a marker interface (`IApiAssemblyMarker`, `IApplicationAssembly
 
 **PaymentSystem** is vertical slices on a rich DDD domain, in one project: `Domain/` (the `PaymentEvent`
 checkout is the aggregate root owning one `PaymentOrder` per seller; `Wallet`; double-entry `LedgerEntry`),
-`Data/`, `Shared/{Endpoints,Pipelines,Results,Messaging,Psp}`, and `Features/<Aggregate>/<Feature>.cs` — one
+`Data/`, `Shared/{Endpoints,Pipelines,Results,Messaging}`, and `Features/<Aggregate>/<Feature>.cs` — one
 file per feature, **no per-feature folder** (`Checkouts/`, `PaymentOrders/`, `Webhooks/`, `Wallets/`).
 Handlers return `Result<T>` like Users. It takes pay-ins and gives them back in full as refunds; there is no
 pay-out to sellers. `PaymentProvider` is the PSP anti-corruption library (Stripe, Braintree). See the

@@ -227,7 +227,7 @@ POST   /api/payments/orders/{id}/payment-method  # synchronous charge (Braintree
 POST   /api/payments/webhooks/{provider}         # PSP callback — signature-verified, no user token
 GET    /api/payments/checkouts/{bookingId}       # the buyer's checkout and its orders
 GET    /api/payments/orders/{id}                 # visible to the order's buyer or its seller
-GET    /api/payments/orders/{id}/ledger          # the order's debit/credit pair (sums to zero)
+GET    /api/payments/orders/{id}/ledger          # the order's pay-in pair, and its refund pair if refunded (sums to zero)
 GET    /api/wallets/me                           # the caller's wallets, one per currency
 ```
 
@@ -310,7 +310,8 @@ so seats are never released a second time after somebody else has taken them.
 that never arrived, leaves an order `Executing`. `ReconcileOrdersJob` runs every minute, asks the provider
 that started each order idle for over two minutes, and records a final answer through the same
 transactional `RecordOutcome` the synchronous charge uses — well inside the 15-minute window after which the
-expiry would fail the order over money already taken.
+expiry would fail the order over money already taken. A refund is split the same way: `RefundCheckout` calls
+the provider with no transaction open, and `RecordRefund` writes the order, the wallet debit and the ledger pair.
 
 **A cancellation may overtake its payment request (Payments).** The two messages travel separately, so a
 `BookingCancelled` can arrive before its `PaymentRequested`. With no checkout to cancel, Payments records the
@@ -371,8 +372,8 @@ creation invariants that would reject it.
 
 **One aggregate per checkout, one order per seller (Payments).** `PaymentEvent` is the root and the only
 way to change its `PaymentOrder`s, so the checkout-wide rule — done once every order has succeeded — cannot
-be bypassed. Repeating an outcome is a no-op and the opposite outcome is refused, which is what makes
-redelivered webhooks and messages safe. The domain refuses any amount `numeric(18,2)` cannot hold exactly,
+be bypassed. A provider's answer goes through `ApplyProviderAnswer`, which reports a repeat or a stale answer
+instead of applying it — what makes redelivered webhooks and messages safe. The domain refuses any amount `numeric(18,2)` cannot hold exactly,
 because Postgres would otherwise round it and the PSP would charge a different amount than the ledger
 records. A checkout is created empty and given its orders with `AddOrder` — none once payment has begun.
 Since nothing then forces an order in code, an empty checkout is never paid, and the database refuses to
@@ -459,8 +460,8 @@ the real host on Postgres and RabbitMQ with a stand-in Bookings host (request �
 outbox rollback). `PaymentDomain` covers every aggregate rule, `PaymentAdapters` the PSP adapters, and
 `PaymentArchitecture` the slice rules — the domain depends on nothing but itself, `PaymentSystem.Enums`, the BCL and MediatR, no feature area
 reaches into another, `PaymentProvider` never references `PaymentSystem`, handlers are internal and sealed,
-and every writing command is transactional — except `SubmitPaymentMethod.Command`, which only calls the PSP
-and hands the write to its transactional `RecordOutcome.Command`.
+and every writing command is transactional — except `SubmitPaymentMethod.Command` and `RefundCheckout.Command`,
+which only call the PSP and hand the write to a transactional `RecordOutcome` / `RecordRefund`.
 
 **Needs a running Docker daemon** — every test in `BookingIntegration`, `EventsIntegration` and `PaymentIntegration` starts
 containers; with the daemon down the whole project fails at fixture initialisation. `Bookings.Sql` and

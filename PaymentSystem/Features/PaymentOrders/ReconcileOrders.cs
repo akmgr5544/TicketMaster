@@ -6,7 +6,6 @@ using PaymentProvider.Models;
 using PaymentSystem.Data;
 using PaymentSystem.Domain;
 using PaymentSystem.Enums;
-using PaymentSystem.Shared.Psp;
 
 namespace PaymentSystem.Features.PaymentOrders;
 
@@ -84,7 +83,7 @@ public sealed class ReconcileOrdersJob(
         PaymentResult? payment;
         try
         {
-            payment = await ProviderOutcome.GatewayFor(gateways, order.Provider)
+            payment = await gateways.ForProvider(order.Provider)
                 .LookupAsync(new PaymentLookupRequest(order.PaymentOrderId, order.PspToken), cancellationToken);
         }
         catch (PaymentProviderException exception)
@@ -99,7 +98,7 @@ public sealed class ReconcileOrdersJob(
 
         var applied = await scope.ServiceProvider.GetRequiredService<ISender>()
             .Send(new RecordOutcome.Command(order.PaymentOrderId, payment.Status), cancellationToken);
-        if (applied.Kind == ProviderOutcome.Kind.Applied)
+        if (applied.Kind == RecordOutcome.Recorded.Applied)
             logger.LogInformation("Reconciled payment order {PaymentOrderId} as {Status}.", order.PaymentOrderId,
                 applied.OrderStatus);
     }

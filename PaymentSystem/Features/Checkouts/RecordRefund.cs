@@ -4,7 +4,6 @@ using PaymentSystem.Data;
 using PaymentSystem.Domain;
 using PaymentSystem.Shared.Messaging;
 using PaymentSystem.Shared.Pipelines;
-using PaymentSystem.Shared.Psp;
 using PaymentSystem.Shared.Results;
 using TicketMaster.Common.IntegrationEvents;
 
@@ -26,14 +25,16 @@ public static class RecordRefund
         {
             for (var attempt = 0;; attempt++)
             {
-                var checkout = await ProviderOutcome.FindCheckoutAsync(context, request.PaymentOrderId, null, cancellationToken);
+                var checkout = await context.PaymentEvents
+                    .Where(e => e.PaymentOrders.Any(o => o.PaymentOrderId == request.PaymentOrderId))
+                    .SingleOrDefaultAsync(cancellationToken);
                 if (checkout is null)
                     return Error.NotFound("payment_order_not_found", $"No payment order {request.PaymentOrderId}.");
 
                 if (!checkout.RefundOrder(request.PaymentOrderId, request.RefundReference))
                     return new Response(false, false);
 
-                var order = ProviderOutcome.OrderIn(checkout, request.PaymentOrderId);
+                var order = checkout.Order(request.PaymentOrderId);
                 // Settlement created it when the order succeeded, and Refund refuses an order whose wallet was never
                 // credited, so it is there.
                 var wallet = await context.Wallets.SingleAsync(

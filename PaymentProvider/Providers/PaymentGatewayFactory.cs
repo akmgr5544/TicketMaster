@@ -24,4 +24,7 @@ internal sealed class PaymentGatewayFactory : IPaymentGatewayFactory
             ? gateway
             : throw new PaymentProviderException(
                 kind, PaymentProviderErrorKind.Configuration, $"The {kind} payment provider is not configured.");
+
+    public IPaymentGateway ForProvider(string? provider) =>
+        provider is null ? Default : Get(Enum.Parse<PaymentProviderKind>(provider));
 }

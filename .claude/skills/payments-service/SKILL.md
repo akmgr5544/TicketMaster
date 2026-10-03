@@ -36,10 +36,10 @@ PaymentSystem/
     Pipelines/       ITransactionalRequest, TransactionBehavior
     Results/         Error, ErrorType, ErrorResults (ToProblem), Result, Result<T>
     Messaging/       IIntegrationEventPublisher, OutboxIntegrationEventPublisher, OutboxFlushInterceptor
-    Psp/             ProviderOutcome (shared by PaymentOrders and Webhooks slices)
   Features/<Aggregate>/<Feature>.cs
     Checkouts/       RequestPayment, GetCheckout, ExpireCheckout, CancelCheckout, RefundCheckout, RecordRefund
-    PaymentOrders/   StartCheckout, SubmitPaymentMethod, GetPaymentOrder, GetOrderLedger, Settle, Fail
+    PaymentOrders/   StartCheckout, SubmitPaymentMethod, RecordOutcome, ReconcileOrders, GetPaymentOrder,
+                     GetOrderLedger, Settle, Fail
     Webhooks/        HandleWebhook
     Wallets/         GetMyWallets
   Extensions/        ServiceCollectionExtension (infrastructure, endpoints, migrations), MessagingExtension
@@ -49,8 +49,11 @@ PaymentSystem/
   class named for the intent (`Command`/`Query`, `Response`, `internal sealed Handler`) plus its trigger: a
   `public sealed ...Endpoints : IEndpointMarker`, a public Wolverine consumer, or a MediatR notification
   handler. Every file in an aggregate folder shares that folder's namespace.
-- **Code shared by slices of two aggregates goes in `Shared/`**, never in one area for another to reach into
-  (`ProviderOutcome` is the example).
+- **No area reaches into another.** A rule two areas need belongs on the aggregate (`ApplyProviderAnswer` is
+  shared by `RecordOutcome` and `HandleWebhook`), a capability on the type that owns it
+  (`IPaymentGatewayFactory.ForProvider`, `Error.FromProvider`). The few lines of plumbing around it — the query,
+  the save-and-retry — are written in each handler, like every other checkout handler's retry loop. **No static
+  helper takes a `DbContext`**; `ProviderOutcome` was one, and it was removed for that.
 - Endpoints are discovered by Scrutor (`AddFeatureEndpoints`), never registered in `Program.cs`.
 - Tests mirror it: `Tests/Payments/PaymentIntegration/Features/<Aggregate>/<Feature>Tests.cs`; shared test
   helpers in `Fixtures/` (`CheckoutSeed`, `MessagingTest`, `PspTest`, `QueryTest`, `StubPsp`,
@@ -78,7 +81,10 @@ seller) and is the only way to change them: `StartExecuting`, `SucceedOrder`, `F
    **Every slice that refuses a settled order must list `Refunded` too** — `StartCheckout` and
    `SubmitPaymentMethod` would otherwise charge a refunded order again.
 3. **At-least-once safe.** Repeating the outcome already reached is a no-op and raises nothing; the opposite
-   outcome is refused (a settled payment cannot change its mind). `StartExecuting` replayed with the same
+   outcome is refused (a settled payment cannot change its mind). A provider's answer goes through
+   `ApplyProviderAnswer(id, succeeded)`, which **reports** instead of throwing — `Applied`, `AlreadyApplied`,
+   `Superseded` or `NotStarted` (`Enums/OrderUpdate`) — because repeats, stale answers and early ones are normal
+   traffic from a provider, not errors. A `Refunded` order takes a late success as `AlreadyApplied`. `StartExecuting` replayed with the same
    provider and token — including `null` again, for Braintree — is a no-op; a different either is refused.
 4. **`IsPaymentDone` is derived** from the orders at the end of every root operation (all `Success`), no-ops
    included, so a stale flag heals.
@@ -102,7 +108,7 @@ seller) and is the only way to change them: `StartExecuting`, `SucceedOrder`, `F
 9. **`AddDomainEvent` is protected** — only an aggregate raises its own events.
 10. **An order remembers its provider.** `StartExecuting` records the PSP's name (a string, so the domain
    never references `PaymentProvider`), and every later PSP call for the order goes through
-   `ProviderOutcome.GatewayFor` — that provider, or the default for an order with none recorded (not
+   `gateways.ForProvider(order.Provider)` — that provider, or the default for an order with none recorded (not
    started, or started before the column existed). Never call `gateways.Default` for an existing order.
 
 ## Persistence and interceptors

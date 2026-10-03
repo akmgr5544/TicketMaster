@@ -1,4 +1,3 @@
-using PaymentSystem.Shared.Psp;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
 using PaymentProvider.Abstractions;
@@ -26,16 +25,19 @@ public static class StartCheckout
     {
         public async Task<Result<Response>> Handle(Command request, CancellationToken cancellationToken)
         {
-            var checkout = await ProviderOutcome.FindCheckoutAsync(context, request.PaymentOrderId, request.CallerId,
-                cancellationToken);
+            // The buyer is in the predicate, so another buyer's order is indistinguishable from a missing one.
+            var checkout = await context.PaymentEvents
+                .Where(e => e.BuyerId == request.CallerId
+                            && e.PaymentOrders.Any(o => o.PaymentOrderId == request.PaymentOrderId))
+                .SingleOrDefaultAsync(cancellationToken);
             if (checkout is null)
                 return Error.NotFound("payment_order_not_found", $"No payment order {request.PaymentOrderId}.");
 
-            var order = ProviderOutcome.OrderIn(checkout, request.PaymentOrderId);
+            var order = checkout.Order(request.PaymentOrderId);
             if (order.Status is PaymentOrderStatus.Success or PaymentOrderStatus.Failed or PaymentOrderStatus.Refunded)
                 return Error.Conflict("payment_order_settled", $"Payment order {order.PaymentOrderId} is already {order.Status}.");
 
-            var gateway = ProviderOutcome.GatewayFor(gateways, order);
+            var gateway = gateways.ForProvider(order.Provider);
             CheckoutSession session;
             try
             {
@@ -44,9 +46,9 @@ public static class StartCheckout
                 session = await gateway.CreateCheckoutAsync(
                     new CheckoutRequest(order.PaymentOrderId, order.Amount, order.Currency), cancellationToken);
             }
-            catch (PaymentProviderException exception) when (ProviderOutcome.IsCallerFacing(exception))
+            catch (PaymentProviderException exception) when (Error.FromProvider(exception) is { } error)
             {
-                return ProviderOutcome.ToError(exception);
+                return error;
             }
 
             // A redelivered or reloaded checkout. The client token is never stored, so the provider is the only

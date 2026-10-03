@@ -29,6 +29,9 @@ public sealed class StubPsp : IPaymentGatewayFactory
         _ => throw new PaymentProviderException(kind, PaymentProviderErrorKind.Configuration, "Not configured.")
     };
 
+    public IPaymentGateway ForProvider(string? provider) =>
+        provider is null ? Default : Get(Enum.Parse<PaymentProviderKind>(provider));
+
     public void Reset()
     {
         DefaultKind = PaymentProviderKind.Stripe;

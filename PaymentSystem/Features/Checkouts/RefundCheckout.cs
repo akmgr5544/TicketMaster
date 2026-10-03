@@ -5,7 +5,6 @@ using PaymentProvider.Exceptions;
 using PaymentProvider.Models;
 using PaymentSystem.Data;
 using PaymentSystem.Enums;
-using PaymentSystem.Shared.Psp;
 using PaymentSystem.Shared.Results;
 using TicketMaster.Common.IntegrationEvents;
 using Wolverine.Attributes;
@@ -47,7 +46,7 @@ public static class RefundCheckout
                 RefundResult refund;
                 try
                 {
-                    refund = await ProviderOutcome.GatewayFor(gateways, order).RefundAsync(
+                    refund = await gateways.ForProvider(order.Provider).RefundAsync(
                         new RefundRequest(order.PaymentOrderId, order.PspToken, order.Amount, order.Currency),
                         cancellationToken);
                 }

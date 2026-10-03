@@ -1,5 +1,5 @@
-using PaymentSystem.Shared.Psp;
 using MediatR;
+using Microsoft.EntityFrameworkCore;
 using PaymentProvider.Abstractions;
 using PaymentProvider.Exceptions;
 using PaymentProvider.Models;
@@ -38,12 +38,15 @@ public static class SubmitPaymentMethod
             if (string.IsNullOrWhiteSpace(request.PaymentMethod))
                 return Error.BadRequest("payment_method_missing", "A payment method is required.");
 
-            var checkout = await ProviderOutcome.FindCheckoutAsync(context, request.PaymentOrderId, request.CallerId,
-                cancellationToken);
+            // The buyer is in the predicate, so another buyer's order is indistinguishable from a missing one.
+            var checkout = await context.PaymentEvents
+                .Where(e => e.BuyerId == request.CallerId
+                            && e.PaymentOrders.Any(o => o.PaymentOrderId == request.PaymentOrderId))
+                .SingleOrDefaultAsync(cancellationToken);
             if (checkout is null)
                 return Error.NotFound("payment_order_not_found", $"No payment order {request.PaymentOrderId}.");
 
-            var order = ProviderOutcome.OrderIn(checkout, request.PaymentOrderId);
+            var order = checkout.Order(request.PaymentOrderId);
             switch (order.Status)
             {
                 case PaymentOrderStatus.NotStarted:
@@ -55,13 +58,13 @@ public static class SubmitPaymentMethod
             PaymentResult? payment;
             try
             {
-                payment = await ProviderOutcome.GatewayFor(gateways, order).SubmitPaymentMethodAsync(
+                payment = await gateways.ForProvider(order.Provider).SubmitPaymentMethodAsync(
                     new SubmitPaymentMethodRequest(order.PaymentOrderId, order.Amount, order.Currency, request.PaymentMethod),
                     cancellationToken);
             }
-            catch (PaymentProviderException exception) when (ProviderOutcome.IsCallerFacing(exception))
+            catch (PaymentProviderException exception) when (Error.FromProvider(exception) is { } error)
             {
-                return ProviderOutcome.ToError(exception);
+                return error;
             }
 
             if (payment is null)
@@ -72,9 +75,9 @@ public static class SubmitPaymentMethod
             var applied = await sender.Send(new RecordOutcome.Command(order.PaymentOrderId, payment.Status),
                 cancellationToken);
 
-            // The charge has already happened in both cases, so the buyer must not simply pay again; the order
-            // needs reconciling against the provider.
-            if (applied.Kind is ProviderOutcome.Kind.Conflict or ProviderOutcome.Kind.Superseded)
+            // The charge has already happened, so the buyer must not simply pay again; the order needs reconciling
+            // against the provider.
+            if (applied.Kind == RecordOutcome.Recorded.NotRecorded)
                 return Error.Conflict("payment_outcome_not_recorded",
                     $"The payment for order {order.PaymentOrderId} was processed but could not be recorded.");
 

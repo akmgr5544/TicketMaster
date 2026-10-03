@@ -1,9 +1,10 @@
-using PaymentSystem.Shared.Psp;
 using MediatR;
+using Microsoft.EntityFrameworkCore;
 using PaymentProvider.Abstractions;
 using PaymentProvider.Exceptions;
 using PaymentProvider.Models;
 using PaymentSystem.Data;
+using PaymentSystem.Enums;
 using PaymentSystem.Shared.Endpoints;
 using PaymentSystem.Shared.Pipelines;
 using PaymentSystem.Shared.Results;
@@ -65,27 +66,58 @@ public static class HandleWebhook
                 return Response.Ignored;
             }
 
-            var applied = await ProviderOutcome.ApplyAsync(context, logger, paymentOrderId, webhook.Payment.Status,
-                cancellationToken);
+            // Only Succeeded and Canceled are final; Failed included, the customer can still retry.
+            if (webhook.Payment.Status is not (PaymentStatus.Succeeded or PaymentStatus.Canceled))
+                return Response.Unchanged;
 
-            switch (applied.Kind)
+            for (var attempt = 0;; attempt++)
             {
-                case ProviderOutcome.Kind.Applied:
-                    logger.LogInformation("{Provider} webhook {EventId} settled payment order {PaymentOrderId} as {Status}.",
-                        kind, webhook.EventId, paymentOrderId, applied.OrderStatus);
-                    return Response.Applied;
-                case ProviderOutcome.Kind.OrderNotFound:
+                var checkout = await context.PaymentEvents
+                    .Where(e => e.PaymentOrders.Any(o => o.PaymentOrderId == paymentOrderId))
+                    .SingleOrDefaultAsync(cancellationToken);
+                if (checkout is null)
+                {
                     // Not ours — another environment sharing the account. A retry would never find it either.
                     logger.LogWarning("{Provider} webhook {EventId} names unknown payment order {PaymentOrderId}.",
                         kind, webhook.EventId, paymentOrderId);
                     return Response.Ignored;
-                // The provider retries a non-2xx, and by then the start or the other writer has committed.
-                case ProviderOutcome.Kind.NotStarted:
-                    return Error.Conflict("payment_order_not_started", $"Payment order {paymentOrderId} has not started.");
-                case ProviderOutcome.Kind.Conflict:
+                }
+
+                var update = checkout.ApplyProviderAnswer(paymentOrderId, webhook.Payment.Status == PaymentStatus.Succeeded);
+                var order = checkout.Order(paymentOrderId);
+                switch (update)
+                {
+                    // The provider retries a non-2xx, and by then the start has committed.
+                    case OrderUpdate.NotStarted:
+                        return Error.Conflict("payment_order_not_started", $"Payment order {paymentOrderId} has not started.");
+                    case OrderUpdate.Superseded:
+                        logger.LogWarning(
+                            "Payment order {PaymentOrderId} is {OrderStatus} but the provider reports {ProviderStatus}; it needs reconciling.",
+                            paymentOrderId, order.Status, webhook.Payment.Status);
+                        return Response.Unchanged;
+                    case OrderUpdate.AlreadyApplied:
+                        return Response.Unchanged;
+                }
+
+                try
+                {
+                    await context.SaveChangesAsync(cancellationToken);
+                    logger.LogInformation("{Provider} webhook {EventId} settled payment order {PaymentOrderId} as {Status}.",
+                        kind, webhook.EventId, paymentOrderId, order.Status);
+                    return Response.Applied;
+                }
+                // Events still pending means this write itself was refused, and it is retried once from a cleared
+                // tracker. Once they are cleared the refusal came from a settlement handler's own save inside the
+                // dispatch, after this write landed — retrying would call it a redelivery and drop the settlement.
+                catch (DbUpdateConcurrencyException) when (checkout.DomainEvents.Length > 0 && attempt == 0)
+                {
+                    context.ChangeTracker.Clear();
+                }
+                // The provider retries a non-2xx, and by then the other writer has committed.
+                catch (DbUpdateConcurrencyException)
+                {
                     return Error.Conflict("checkout_changed", "The checkout changed concurrently. Retry.");
-                default:
-                    return Response.Unchanged;
+                }
             }
         }
 
