@@ -237,7 +237,8 @@ GET    /api/wallets/me                           # the caller's wallets, one per
 No request body carries a user id. Identity comes from the gateway's `X-Identity-UserId` header, and
 every Bookings and Payments action that acts for a user answers 401 without it, so a caller cannot book as somebody else by editing the body. A
 booking belonging to another user answers exactly as a nonexistent one does — telling them apart
-would confirm the id exists to someone with no business knowing.
+would confirm the id exists to someone with no business knowing. Nor does a body repeat the id of the
+resource it changes: the route names it, and the catalogue's `PUT` bodies hold only the fields being set.
 
 Each event mutation has a different downstream consequence — relocating changes which seats exist,
 rescheduling does not — so they are separate sub-resources rather than one `PUT` that would have to

@@ -131,6 +131,9 @@ goes to. The organizer never changes.
   after loading it and throws `ForbiddenException` (403) otherwise. A command with no caller is refused, so a
   new sender that forgets it fails closed. Admins can change any event — including one stored before organizers
   existed, whose `OrganizerId` is empty and so is organized by nobody (`Event.IsOrganizedBy`).
+- **Change endpoints bind a request record, not the command** (`Events.Api/Requests/`) — the event facets and the
+  venue and performer PUTs alike — and the controller builds the command from route id, body and caller. Binding the command made `[ApiController]`
+  reject any body without the non-nullable `Id` with a 400.
 - **`EventCreated`, `EventRelocated` and `EventRepriced` carry the pricing** as one `EventPricing` —
   relocation too, because Bookings creates tickets for the seats a relocation adds. Tiers go out flattened to
   `SeatPrices` (seat → price, tiered seats only); `EventPricing.PriceFor(seat)` reads it. The gRPC

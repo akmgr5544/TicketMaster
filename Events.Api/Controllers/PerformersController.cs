@@ -1,6 +1,7 @@
 using Events.Application.Commands;
 using Events.Application.Dtos;
 using Events.Application.Queries;
+using Events.Api.Requests;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
@@ -62,11 +63,10 @@ public class PerformersController : ControllerBase
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> UpdatePerformerAsync(string id,
-        [FromBody] UpdatePerformerCommand command,
+        [FromBody] UpdatePerformerRequest request,
         CancellationToken cancellationToken)
     {
-        // The route is the address of the resource, so it wins over whatever the body claims.
-        await _sender.Send(command with { Id = id }, cancellationToken);
+        await _sender.Send(new UpdatePerformerCommand(id, request.Name, request.Description), cancellationToken);
 
         return NoContent();
     }
