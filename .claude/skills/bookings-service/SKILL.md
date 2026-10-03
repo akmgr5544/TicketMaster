@@ -140,8 +140,11 @@ handlers that translate each contract into one of them.
 finds the covering booking (`IBookingRepository.FindByTicketIdAsync`) and calls
 `Booking.OnBookedSeatCancelled()` — an unpaid booking is cancelled, a paid one moves to
 `RefundPending` (it cannot be cancelled: undoing a payment is a refund). It is idempotent, so several
-lost seats on one booking are safe. This closes the silent-strand hole; the actual refund and
-notification for a `RefundPending` booking belong to the unbuilt payment path.
+lost seats on one booking are safe. Flagging raises `BookingRefundRequestedDomainEvent`, whose handler
+publishes `RefundRequested` on the same transaction; PaymentSystem refunds the booking in full and answers
+`BookingRefunded`, which `CompleteRefundCommand` turns into `Booking.MarkRefunded()` — `Refunded`, and
+`BookingRefundedDomainEvent` releases the seats the booking still holds (the seat the relocation removed stays
+`Cancelled`; `Ticket.Release` skips it). Nobody is notified yet.
 
 ## The reservation and booking flow
 
@@ -304,8 +307,9 @@ refused booking answered 500.
 PaymentSystem takes the money. Bookings asks for it and hears back through contracts in
 `TicketMaster.Common`: it **publishes** `PaymentRequested` from `MakeBookingCommandHandler` (after the
 save, since the id is database-generated) and `BookingCancelled` from `BookingCancelledDomainEventHandler`
-(so every cancel path — owner, failed payment, relocation — announces it), and **consumes** the two
-outcomes below through `Consume` handlers and `Commands/Payments`.
+(so every cancel path — owner, failed payment, relocation — announces it) and `RefundRequested` from
+`BookingRefundRequestedDomainEventHandler`, and **consumes** the three outcomes below through `Consume`
+handlers and `Commands/Payments`.
 
 Both publishes go through `IIntegrationEventPublisher` (`Bookings.Domain/Abstractions`, for the
 `IAfterCommitQueue` reason). `Bookings.Sql`'s `OutboxIntegrationEventPublisher` stages each message with
@@ -323,6 +327,7 @@ before Events had any — fails `IsAvailableFor`, so it is refused at reservatio
 |---|---|
 | `BookingPaidIntegrationEvent` | `Booking.MarkPaid()` — `Booked → Payed`. Tickets are untouched; they were already booked. |
 | `BookingPaymentFailedIntegrationEvent` | `Booking.Cancel()` — `Booked → Cancelled`, raising `BookingCancelledDomainEvent`, whose handler calls `Ticket.Release()` to put the seats back to `None`. |
+| `BookingRefundedIntegrationEvent` | `Booking.MarkRefunded()` — `RefundPending → Refunded`, raising `BookingRefundedDomainEvent`, whose handler releases the seats still held. A `Cancelled` booking (cancelled before its payment's success was heard) is left as it is; anything else refuses. |
 
 23. **The two outcomes race, and whichever lands first wins.** `Cancel()` refuses a `Payed` booking
     and `MarkPaid()` refuses a `Cancelled` one, which is why the contracts need no version: a late
@@ -334,9 +339,9 @@ before Events had any — fails `IsAvailableFor`, so it is refused at reservatio
     was called off must not return to sale because a payment for it also failed; its holder has been
     told it is void and the seat may no longer exist. It is skipped rather than refused, so cancelling
     the booking still succeeds — this is the one place the relocation loose end below is handled.
-26. **Booking-level cancellation exists only for unpaid bookings.** `Cancel()` refusing a `Payed`
-    booking means refunds are still not modelled. A relocation that cancels already-booked tickets
-    still leaves the parent `Booking` pointing at cancelled tickets with no notification.
+26. **Booking-level cancellation exists only for unpaid bookings.** `Cancel()` refuses a `Payed`
+    booking: a paid booking is only ever voided by the system (a relocation), which refunds it. A customer
+    cannot cancel a paid booking yet, and nobody is notified of a refund or a cancellation.
 
 ## Known gaps
 

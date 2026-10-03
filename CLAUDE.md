@@ -78,7 +78,7 @@ Five .NET services plus a shared kernel, wired together at runtime by a YARP API
                              Redis cache/locks)                           PSPs via PaymentProvider)
                                      │                                          │
                                      └──────────► RabbitMQ (Wolverine) ◄────────┘
-                           PaymentRequested, BookingCancelled ──►   ◄── BookingPaid, BookingPaymentFailed
+        PaymentRequested, BookingCancelled, RefundRequested ──►   ◄── BookingPaid, BookingPaymentFailed, BookingRefunded
 ```
 
 ### Per-service layering
@@ -98,8 +98,9 @@ Each project has a marker interface (`IApiAssemblyMarker`, `IApplicationAssembly
 checkout is the aggregate root owning one `PaymentOrder` per seller; `Wallet`; double-entry `LedgerEntry`),
 `Data/`, `Shared/{Endpoints,Pipelines,Results,Messaging,Psp}`, and `Features/<Aggregate>/<Feature>.cs` — one
 file per feature, **no per-feature folder** (`Checkouts/`, `PaymentOrders/`, `Webhooks/`, `Wallets/`).
-Handlers return `Result<T>` like Users. It is **pay-in only**. `PaymentProvider` is the PSP anti-corruption
-library (Stripe, Braintree). See the `payments-service` skill for the rules, the flow and the known gaps.
+Handlers return `Result<T>` like Users. It takes pay-ins and gives them back in full as refunds; there is no
+pay-out to sellers. `PaymentProvider` is the PSP anti-corruption library (Stripe, Braintree). See the
+`payments-service` skill for the rules, the flow and the known gaps.
 
 ### Cross-cutting patterns
 
@@ -110,7 +111,9 @@ library (Stripe, Braintree). See the `payments-service` skill for the rules, the
   paid to the event's organizer — each ticket's `TicketPricing` is copied from `EventCreated`/`EventRelocated`;
   an unpriced ticket is not on sale) and every booking cancellation publishes
   `BookingCancelled`; PaymentSystem answers with `BookingPaid` or `BookingPaymentFailed` (PSP cancel,
-  15-minute checkout expiry, or the booking being cancelled). Both services publish through an
+  15-minute checkout expiry, or the booking being cancelled). A paid booking a relocation voids publishes
+  `RefundRequested`; PaymentSystem refunds every paid order in full — as it does for a booking cancelled after it
+  was paid — and answers `BookingRefunded`, which releases the seats the booking still held. Both services publish through an
   `IIntegrationEventPublisher` that stages into Wolverine's `DbContextOutbox` on the open transaction and
   sends after commit — never `SaveChangesAndFlushMessagesAsync`, which commits the transaction itself.
 - **Outbox / messaging**: `Bookings.Application.Extensions.ConfigureRabbitMq` sets up **WolverineFx** with RabbitMQ transport, Postgres-backed outbox (`PersistMessagesWithPostgresql`), EF Core transactions, and all three durability policies — `UseDurableLocalQueues`, `UseDurableInboxOnAllListeners` and `UseDurableOutboxOnAllSendingEndpoints`. Uses conventional routing and auto-provisioning.

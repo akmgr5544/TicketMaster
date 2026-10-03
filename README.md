@@ -42,7 +42,7 @@ flowchart TB
         users["<b>Users.Api</b><br/>vertical slices<br/>JWT issuer · roles"]
         events["<b>Events.Api</b><br/>Clean Architecture<br/>catalogue: events, venues, performers"]
         bookings["<b>Bookings.Api</b><br/>Clean Architecture + DDD<br/>tickets, reservations, bookings"]
-        payments["<b>PaymentSystem</b><br/>vertical slices on a DDD domain<br/>checkouts, wallets, ledger · pay-in only"]
+        payments["<b>PaymentSystem</b><br/>vertical slices on a DDD domain<br/>checkouts, wallets, ledger · pay-in and refunds"]
     end
 
     subgraph data["Stores and broker"]
@@ -85,20 +85,22 @@ flowchart LR
     payments["<b>Payments</b>"]
 
     events -- "EventCreated<br/>EventRescheduled<br/>EventRelocated<br/>EventCancelled" --> bookings
-    bookings -- "PaymentRequested<br/>BookingCancelled" --> payments
-    payments -- "BookingPaid<br/>BookingPaymentFailed" --> bookings
+    bookings -- "PaymentRequested<br/>BookingCancelled<br/>RefundRequested" --> payments
+    payments -- "BookingPaid<br/>BookingPaymentFailed<br/>BookingRefunded" --> bookings
 ```
 
 | Message | From → To | What the consumer does |
 |---|---|---|
 | `EventCreated` | Events → Bookings | Creates one ticket per seat of the event's venue |
 | `EventRescheduled` | Events → Bookings | Moves every ticket's event date; ignored if not newer than the ticket's `EventVersion` |
-| `EventRelocated` | Events → Bookings | Reconciles tickets to the seats the event *now* has; a booking that loses a seat is cancelled, or flagged `RefundPending` if paid |
+| `EventRelocated` | Events → Bookings | Reconciles tickets to the seats the event *now* has; a booking that loses a seat is cancelled, or flagged `RefundPending` and refunded if paid |
 | `EventCancelled` | Events → Bookings | Cancels the event's tickets |
 | `PaymentRequested` | Bookings → Payments | Opens a checkout (one payment order per seller) and schedules its 15-minute expiry |
-| `BookingCancelled` | Bookings → Payments | Fails the checkout's unsettled orders; a paid one is left and logged for refund. With no checkout yet, claims the booking as cancelled so a late `PaymentRequested` is refused |
+| `BookingCancelled` | Bookings → Payments | Fails the checkout's unsettled orders and refunds any that were already paid. With no checkout yet, claims the booking as cancelled so a late `PaymentRequested` is refused |
+| `RefundRequested` | Bookings → Payments | Refunds every paid order of the booking's checkout in full, at its provider, and reverses the wallet credit and ledger pair |
 | `BookingPaid` | Payments → Bookings | Confirms the booking |
 | `BookingPaymentFailed` | Payments → Bookings | Cancels the unpaid booking and releases its seats |
+| `BookingRefunded` | Payments → Bookings | Marks a `RefundPending` booking `Refunded` and releases the seats it still held |
 
 ### A booking, end to end
 
@@ -249,7 +251,7 @@ pages by `page`/`pageSize` and returns `items`, `page`, `pageSize`, `total` and 
 | **Users.Api** | Vertical slice (`Features/Users/…`) | Postgres | Registration (the first account becomes Admin), authentication, refresh tokens, admin role assignment. Issues the JWTs and answers the gateway's introspection call. |
 | **Bookings** | `Domain` / `Application` / `Sql` / `Api` | Postgres + Redis | Reservations and bookings. Owns the whole ticket lifecycle — held in Redis, sold in Postgres, settled or released when a payment result arrives — with a distributed lock per seat guarding concurrent reservation. |
 | **Events** | `Domain` / `Application` / `Cosmos` / `Api` | Cosmos DB | The catalogue: venues and performers with full CRUD; events created, rescheduled, relocated, re-lined-up and cancelled (never deleted). Serves the `EventsLookup` gRPC service Bookings calls. Publishes `EventCreated`, `EventRescheduled`, `EventRelocated` and `EventCancelled` — the first is what causes tickets to exist in Bookings, and the rest are what keep them correct. |
-| **PaymentSystem** | Vertical slices (`Features/<Aggregate>/<Feature>.cs`) on a DDD `Domain/` | Postgres | The pay-in flow: a checkout per booking with one payment order per seller, PSP checkout and webhooks, seller wallets, a double-entry ledger, 15-minute checkout expiry. Publishes `BookingPaid` / `BookingPaymentFailed`. |
+| **PaymentSystem** | Vertical slices (`Features/<Aggregate>/<Feature>.cs`) on a DDD `Domain/` | Postgres | The pay-in flow: a checkout per booking with one payment order per seller, PSP checkout and webhooks, seller wallets, a double-entry ledger, 15-minute checkout expiry, full refunds. Publishes `BookingPaid` / `BookingPaymentFailed` / `BookingRefunded`. |
 | **PaymentProvider** | Class library | — | Anti-corruption layer over the PSPs (Stripe, Braintree) behind `IPaymentGateway`. |
 | **TicketMaster.ApiGateway** | — | — | YARP routing, edge authentication, identity header propagation. |
 | **TicketMaster.Common** | — | — | Integration event contracts and the `events.proto` gRPC contract shared across service boundaries. |
@@ -579,72 +581,23 @@ Central package management is enabled: add package versions to `Directory.Packag
 
 ## 🗺️ Known gaps
 
-Split two ways: not built, and deliberate. Every entry names what the code does today rather than what
-it should do — the fix is a decision, not a gap.
+Deliberate trade-offs, listed so nobody "fixes" one without knowing what it carries. The reasoning behind
+each lives in the owning service's skill under `.claude/skills/`.
 
-### Not built
-
-- **One price per event, fixed at creation.** An event has a single ticket price and currency, and its
-  creator is the organizer every payment goes to. There are no seat categories, and nothing changes a price
-  or the organizer after creation. An event created before pricing existed has none: its tickets are unpriced
-  and cannot be reserved.
-- **No refunds.** Payments is pay-in only. A booking cancelled after its payment succeeded is logged as
-  needing a refund, a PSP success that lands after the cancellation is logged as needing reconciling, and a
-  `RefundPending` booking in Bookings is still never refunded. In every case the money stays taken.
-- **No settlement-file reconciliation.** `ReconcileOrdersJob` asks the provider about any order left
-  `Executing` for over two minutes and records a final answer, but nothing compares the PSP's settlement
-  reports with the ledger, and an order already failed by expiry or cancellation whose payment the provider
-  then took is only logged as needing reconciling.
-
-### Accepted limitations
-
-Deliberate, and recorded so nobody "fixes" one without knowing what it carries.
-
-- **The gateway trusts an introspection for 30 seconds.** A successful check is cached by a hash of the
-  token (`IntrospectionCache`), so a token revoked or a role changed in Users.Api keeps working at the edge
-  for up to that long. Refusals and outages are never cached.
-- **Two first registrations at once both become Admin.** The empty-table check and the insert are separate
-  statements with no guard between them — acceptable for a one-time bootstrap, and pinned by a test that
-  will turn red if a guard is ever added.
-- **Two admins demoting each other at once can leave no admin.** `SetUserRole` refuses to demote the last
-  admin (409 `last_admin`), but the count and the write are separate statements with no lock, so two
-  demotions landing at the same instant both see two admins. Role changes are too rare to justify a row lock
-  or a Serializable transaction; recovering means setting a role in the database by hand.
-- **The Events outbox is durable but not atomic.** `WolverineFx.CosmosDb` stores envelopes in a
-  separate `wolverine` container by per-item upsert, so the message survives a crash but is not written
-  in the same batch as the `events` document — a small window where the write lands and the envelope
-  does not, or vice versa. A hand-rolled in-document outbox would close it but is bespoke; the standard
-  package was chosen deliberately, and Bookings' version guard makes the resulting at-least-once,
-  possibly-lost-once delivery tolerable.
-- **`Events.Application.Pipelines.TransactionBehavior` is a no-op** — its body is `return next(...)`.
-  Under Cosmos there is no honest implementation: atomicity is confined to a single logical partition,
-  and with `/id` partition keys no two documents ever share one.
-- **The venue and performer delete guards are best-effort.** Each counts upcoming events and refuses the
-  delete, but an event can be created in that window and no transaction spans two logical partitions.
-  Events are cancelled rather than deleted, so they need no equivalent guard.
-- **Reservation correctness rests entirely on the distributed locks.** The check and the write both
-  happen with every seat's lock held, but the write is not conditional, so a lock lost mid-operation is
-  a real double-reservation window rather than a wasted attempt.
-- **After-commit work is dropped when a command is sent from a message handler.** `TransactionBehavior`
-  does not own that transaction, so it logs a warning rather than running the queued work — the same way
-  a failure on the owned path is treated. Only `MakeBookingCommand` queues any, and only over HTTP, so
-  nothing hits this today.
-- **A synchronous charge can succeed and fail to be recorded.** `SubmitPaymentMethod` charges with no
-  transaction open and records the outcome in a transaction of its own (`RecordOutcome`), so a slow PSP
-  holds nothing. If that recording then loses twice to concurrent writers (`409
-  payment_outcome_not_recorded`) or the database fails (a 500), the order stays `Executing` until a webhook
-  or the reconciliation job, within about three minutes, settles it. The same 409 also answers a charge
-  that lands after the order already settled the other way — expired, say — and that one is only logged as
-  needing reconciling, since no job looks at a settled order.
-- **Concurrent settlements for one seller contend on its wallet.** The wallet row carries an `xmin`
-  concurrency token, so two orders crediting the same seller's wallet at once make one of them lose with a
-  409; a webhook is then redelivered by the PSP and settles, and the synchronous Braintree path falls into
-  the case above. (Two settlements creating a seller's *first* wallet do not conflict: the one that loses on
-  the unique index credits the winner's wallet in the same transaction.) The seller is the event's
-  organizer, so every payment for one organizer's events shares a wallet.
+- **The gateway trusts an introspection for 30 seconds**, so a revoked token or changed role lasts that long at the edge.
+- **Two first registrations at once both become Admin**, and **two admins demoting each other at once can leave none**.
+- **The Events outbox is durable but not atomic** — `WolverineFx.CosmosDb` writes envelopes to a separate container.
+- **Events has no real transaction** (`TransactionBehavior` is a no-op), so the venue and performer delete guards are best-effort.
+- **Reservations rest entirely on the distributed locks**; a lock lost mid-operation can double-reserve a seat.
+- **After-commit work is dropped for a command sent from a message handler** — nothing does that today.
+- **A charge or settlement can lose a concurrency race** (409); a webhook or `ReconcileOrdersJob` settles it within minutes.
+- **A refund can take a seller's wallet below zero**, because the provider has already returned the money.
+- **A refund the provider refuses is logged for a person**, and one accepted as pending that fails later goes unnoticed.
 
 ## 🗺️ Roadmap
 
-- Refunds and notifications — for a `RefundPending` booking and for a booking cancelled after payment
-- Reconciliation against PSP settlement files, beyond the per-order lookup `ReconcileOrdersJob` does
+- Notifications to the customer when a booking is refunded or cancelled
+- Customer-initiated cancellation of a paid booking, and partial refunds
+- Seat categories and price changes (today one price per event, fixed at creation)
+- Reconciliation against PSP settlement files
 - Saga / process-manager work for the full booking flow in Wolverine

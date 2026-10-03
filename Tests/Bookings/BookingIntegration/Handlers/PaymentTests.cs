@@ -1,6 +1,7 @@
 using Bookings.Application.Commands;
 using Bookings.Application.Commands.Payments;
 using Bookings.Application.Exceptions;
+using Bookings.Domain.Entities;
 using Bookings.Domain.Enums;
 using Bookings.Domain.Exceptions;
 using BookingIntegration.Fixtures;
@@ -207,5 +208,53 @@ public sealed class PaymentTests : IntegrationTest
     {
         await Assert.ThrowsAsync<NotFoundException>(() =>
             Sender.Send(new ReleaseUnpaidBookingCommand(long.MaxValue)));
+    }
+
+    [Fact]
+    public async Task Refuses_to_refund_a_booking_that_does_not_exist()
+    {
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            Sender.Send(new CompleteRefundCommand(long.MaxValue)));
+    }
+
+    // --- Refund completed ---
+
+    // The relocation took A1 and voided the paid booking; the refund puts back the A2 it still held. A1 stays
+    // cancelled — the event no longer has that seat.
+    [Fact]
+    public async Task A_completed_refund_marks_the_booking_refunded_and_puts_its_remaining_seats_back()
+    {
+        var booking = await RefundPendingBookingAsync();
+
+        await Sender.Send(new CompleteRefundCommand(booking.Id));
+
+        var stored = await ReadAsync(context => context.Bookings.SingleAsync(b => b.Id == booking.Id));
+        Assert.Equal(BookingStatus.Refunded, stored.Status);
+        var seats = await ReadAsync(context => context.Tickets
+            .Where(t => t.EventId == "evt-1").ToDictionaryAsync(t => t.Seat, t => t.Status));
+        Assert.Equal(TicketStatus.Cancelled, seats["A1"]);
+        Assert.Equal(TicketStatus.None, seats["A2"]);
+    }
+
+    [Fact]
+    public async Task The_same_refund_arriving_twice_completes_it_once()
+    {
+        var booking = await RefundPendingBookingAsync();
+
+        await Sender.Send(new CompleteRefundCommand(booking.Id));
+        await Sender.Send(new CompleteRefundCommand(booking.Id));
+
+        var stored = await ReadAsync(context => context.Bookings
+            .Include(b => b.BookingHistories).SingleAsync(b => b.Id == booking.Id));
+        Assert.Single(stored.BookingHistories, h => h.BookingStatus == BookingStatus.Refunded);
+    }
+
+    private async Task<Booking> RefundPendingBookingAsync()
+    {
+        var tickets = await Seed.TicketsAsync("evt-1", Seed.Soon, eventVersion: 1, "A1", "A2");
+        var booking = await Seed.BookingAsync(TestUsers.Owner, tickets.Select(t => t.Id).ToArray());
+        await Sender.Send(new ConfirmBookingCommand(booking.Id));
+        await Sender.Send(new ReconcileEventVenueCommand("evt-1", 2, "venue-2", Seed.Soon, ["A2"], Seed.Pricing));
+        return booking;
     }
 }

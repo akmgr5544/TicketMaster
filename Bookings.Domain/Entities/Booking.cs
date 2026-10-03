@@ -78,6 +78,23 @@ public sealed class Booking : Entity, IAggregateRoot
     {
         Status = BookingStatus.RefundPending;
         BookingHistories.Add(new BookingHistory(Status, BookedTickets.Count));
+        AddDomainEvent(new BookingRefundRequestedDomainEvent(Id));
+    }
+
+    // A Cancelled booking is the other one a refund reaches: it was cancelled before its payment's success was
+    // heard, the seats are already back on sale, and only the money had to follow.
+    public void MarkRefunded()
+    {
+        if (Status is BookingStatus.Refunded or BookingStatus.Cancelled)
+            return;
+
+        if (Status != BookingStatus.RefundPending)
+            throw new BookingsDomainException($"A {Status} booking was not waiting for a refund.");
+
+        Status = BookingStatus.Refunded;
+        BookingHistories.Add(new BookingHistory(Status, BookedTickets.Count));
+        AddDomainEvent(new BookingRefundedDomainEvent(Id,
+            BookedTickets.Select(bookedTicket => bookedTicket.TicketId).ToArray()));
     }
 
     public static Booking Create(Guid userId, BookingStatus status, long[] ticketIds)

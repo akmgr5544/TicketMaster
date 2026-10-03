@@ -213,4 +213,76 @@ public class BookingTests
         Assert.Equal(BookingStatus.RefundPending, booking.Status);
         Assert.Equal(historyCount, booking.BookingHistories.Count);
     }
+
+    // --- Refunds ---
+
+    // Asked once: a second lost seat leaves the booking where it is, so it does not ask the payment service again.
+    [Fact]
+    public void Flagging_a_paid_booking_for_refund_asks_for_the_refund_once()
+    {
+        var booking = APaidBooking();
+
+        booking.OnBookedSeatCancelled();
+        booking.OnBookedSeatCancelled();
+
+        Assert.Single(booking.DomainEvents.OfType<BookingRefundRequestedDomainEvent>());
+    }
+
+    [Fact]
+    public void A_refund_completes_a_booking_waiting_for_one_and_releases_its_seats()
+    {
+        var booking = APaidBooking();
+        booking.OnBookedSeatCancelled();
+        booking.ClearDomainEvents();
+
+        booking.MarkRefunded();
+
+        Assert.Equal(BookingStatus.Refunded, booking.Status);
+        Assert.Equal(BookingStatus.Refunded, booking.BookingHistories[^1].BookingStatus);
+        var refunded = Assert.Single(booking.DomainEvents.OfType<BookingRefundedDomainEvent>());
+        Assert.Equal(TwoTickets, refunded.TicketIds);
+    }
+
+    [Fact]
+    public void A_refund_arriving_twice_releases_the_seats_once()
+    {
+        var booking = APaidBooking();
+        booking.OnBookedSeatCancelled();
+        booking.MarkRefunded();
+        booking.ClearDomainEvents();
+        var historyCount = booking.BookingHistories.Count;
+
+        booking.MarkRefunded();
+
+        Assert.Empty(booking.DomainEvents);
+        Assert.Equal(historyCount, booking.BookingHistories.Count);
+    }
+
+    // Cancelled before its payment's success was heard: the seats went back then, only the money had to follow.
+    [Fact]
+    public void A_refund_of_a_cancelled_booking_changes_nothing()
+    {
+        var booking = ABooking();
+        booking.Cancel();
+        booking.ClearDomainEvents();
+
+        booking.MarkRefunded();
+
+        Assert.Equal(BookingStatus.Cancelled, booking.Status);
+        Assert.Empty(booking.DomainEvents);
+    }
+
+    [Fact]
+    public void A_booking_not_waiting_for_a_refund_refuses_one()
+    {
+        Assert.Throws<BookingsDomainException>(() => ABooking().MarkRefunded());
+        Assert.Throws<BookingsDomainException>(() => APaidBooking().MarkRefunded());
+    }
+
+    private static Booking APaidBooking()
+    {
+        var booking = ABooking();
+        booking.MarkPaid();
+        return booking;
+    }
 }

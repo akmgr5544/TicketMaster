@@ -144,6 +144,23 @@ public sealed class IntegrationEventPublishingTests : IntegrationTest
         Assert.Empty(Log.OfType<BookingCancelledIntegrationEvent>());
     }
 
+    // Raised from the domain event the relocation's nested save dispatches, so it must still be staged inside the
+    // relocation's own transaction — or a rolled-back relocation would refund a booking that was never voided.
+    [Fact]
+    public async Task A_relocation_that_flags_a_paid_booking_for_refund_requests_the_refund_once()
+    {
+        var tickets = await Seed.TicketsAsync(EventId, Seed.Soon, eventVersion: 1, "A1", "A2", "A3");
+        var booking = await Seed.BookingAsync(TestUsers.Owner, tickets[0].Id, tickets[1].Id);
+        await Sender.Send(new ConfirmBookingCommand(booking.Id));
+
+        // Both of the booking's seats are lost; the second finds it already waiting for a refund.
+        await Sender.Send(new ReconcileEventVenueCommand(EventId, 2, "venue-2", Seed.Soon, ["A3"]));
+
+        var published = Assert.Single(Log.Published);
+        Assert.Equal(new RefundRequestedIntegrationEvent(booking.Id), published.Event);
+        Assert.NotNull(published.TransactionId);
+    }
+
     [Fact]
     public async Task Cancelling_twice_announces_it_once()
     {

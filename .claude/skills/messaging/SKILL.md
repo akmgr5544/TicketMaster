@@ -17,7 +17,7 @@ Events publishes four contracts — `EventCreatedIntegrationEvent`, `EventResche
 `EventRelocatedIntegrationEvent`, `EventCancelledIntegrationEvent` (shortened to `EventCreated` etc.
 below) — all through `Events.Application/IntegrationEvents/IIntegrationEventPublisher`.
 
-Bookings consumes **six** contracts in `Bookings.Application/IntegrationEventHandlers`, each a thin
+Bookings consumes **seven** contracts in `Bookings.Application/IntegrationEventHandlers`, each a thin
 `Consume` handler translating to a command:
 
 | Consumed contract | Slice |
@@ -25,9 +25,12 @@ Bookings consumes **six** contracts in `Bookings.Application/IntegrationEventHan
 | the four `Event*` contracts above | `EventSync` |
 | `BookingPaidIntegrationEvent` | `Payments/Confirm` |
 | `BookingPaymentFailedIntegrationEvent` | `Payments/ReleaseUnpaid` |
+| `BookingRefundedIntegrationEvent` | `Payments/CompleteRefund` |
 
-The two payment outcomes are produced by **PaymentSystem**, which in turn consumes `PaymentRequested`
-(published by Bookings' `MakeBooking`) and `BookingCancelled` (published on every booking cancellation).
+The three payment outcomes are produced by **PaymentSystem**, which in turn consumes `PaymentRequested`
+(published by Bookings' `MakeBooking`), `BookingCancelled` (published on every booking cancellation) and
+`RefundRequested` (published when a relocation voids a paid booking). Its own `CheckoutRefundDue` stays on
+a durable local queue, like `CheckoutExpiryDue`.
 Both services publish through an `IIntegrationEventPublisher` that stages into Wolverine's
 `DbContextOutbox` on the open transaction and flushes after commit — see the `payments-service` skill.
 
