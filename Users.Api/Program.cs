@@ -1,7 +1,10 @@
 using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.IdentityModel.Tokens;
+using Users.Api.Entities;
 using Users.Api.Extensions;
+using Users.Api.Features.Users;
 using Users.Api.Options;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -47,8 +50,11 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         };
     });
 
+builder.Services.AddScoped<IAuthorizationHandler, StoredRoleHandler>();
 builder.Services.AddAuthorization(options =>
-    options.AddPolicy("AdminOnly", policy => policy.RequireRole(nameof(Users.Api.Entities.UserRole.Admin))));
+    options.AddPolicy("AdminOnly", policy => policy
+        .RequireAuthenticatedUser()
+        .AddRequirements(new StoredRoleRequirement(UserRole.Admin))));
 
 var app = builder.Build();
 

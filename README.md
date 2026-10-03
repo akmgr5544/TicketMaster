@@ -154,7 +154,9 @@ The gateway requires an authenticated caller on `/bookings-service/**`, `/events
 `X-Identity-UserName` / `X-Identity-Role` headers — Bookings and PaymentSystem read identity from those
 rather than re-validating the token; Events does not use identity at all. Two actions are admin-gated:
 `POST /api/tickets`, which Bookings refuses (403) unless the role header says `Admin`, and
-`PUT /api/users/{id}/role`, which Users.Api checks against the JWT's role claim.
+`PUT /api/users/{id}/role`, which Users.Api checks against the caller's role in its own store — not the
+token's role claim — so a promotion or demotion applies on the next request. The last admin cannot be
+demoted (409 `last_admin`).
 
 Bookings also calls Events synchronously over gRPC (`EventsLookup.GetEvent`, contract in
 `TicketMaster.Common/Protos/events.proto`) to validate an event when a ticket is created.
@@ -591,9 +593,6 @@ it should do — the fix is a decision, not a gap.
   `Executing` for over two minutes and records a final answer, but nothing compares the PSP's settlement
   reports with the ledger, and an order already failed by expiry or cancellation whose payment the provider
   then took is only logged as needing reconciling.
-- **A role change takes effect at the next login.** `AdminOnly` reads the role claim baked into the token,
-  never the store, so a demoted admin keeps admin access until their token expires (1 day) and a promoted
-  user must log in again. Nothing stops an admin demoting the last admin, themselves included.
 
 ### Accepted limitations
 
@@ -605,6 +604,10 @@ Deliberate, and recorded so nobody "fixes" one without knowing what it carries.
 - **Two first registrations at once both become Admin.** The empty-table check and the insert are separate
   statements with no guard between them — acceptable for a one-time bootstrap, and pinned by a test that
   will turn red if a guard is ever added.
+- **Two admins demoting each other at once can leave no admin.** `SetUserRole` refuses to demote the last
+  admin (409 `last_admin`), but the count and the write are separate statements with no lock, so two
+  demotions landing at the same instant both see two admins. Role changes are too rare to justify a row lock
+  or a Serializable transaction; recovering means setting a role in the database by hand.
 - **The Events outbox is durable but not atomic.** `WolverineFx.CosmosDb` stores envelopes in a
   separate `wolverine` container by per-item upsert, so the message survives a crash but is not written
   in the same batch as the `events` document — a small window where the write lands and the envelope

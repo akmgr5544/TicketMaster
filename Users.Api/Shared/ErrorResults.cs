@@ -25,6 +25,7 @@ public static class ErrorResults
         ErrorType.Unauthorized => StatusCodes.Status401Unauthorized,
         ErrorType.Forbidden => StatusCodes.Status403Forbidden,
         ErrorType.BadRequest => StatusCodes.Status400BadRequest,
+        ErrorType.Conflict => StatusCodes.Status409Conflict,
         _ => StatusCodes.Status400BadRequest
     };
 
@@ -34,6 +35,7 @@ public static class ErrorResults
         ErrorType.Unauthorized => "Unauthorized",
         ErrorType.Forbidden => "Forbidden",
         ErrorType.BadRequest => "Invalid request",
+        ErrorType.Conflict => "Conflict",
         _ => "Invalid request"
     };
 }

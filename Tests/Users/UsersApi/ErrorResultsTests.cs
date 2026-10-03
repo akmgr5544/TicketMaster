@@ -18,6 +18,7 @@ public class ErrorResultsTests
     [InlineData(ErrorType.Unauthorized, StatusCodes.Status401Unauthorized)]
     [InlineData(ErrorType.Forbidden, StatusCodes.Status403Forbidden)]
     [InlineData(ErrorType.BadRequest, StatusCodes.Status400BadRequest)]
+    [InlineData(ErrorType.Conflict, StatusCodes.Status409Conflict)]
     public void Each_error_type_maps_to_its_own_status(ErrorType type, int expected)
     {
         Assert.Equal(expected, StatusOf(new Error("some_code", type, "message")));

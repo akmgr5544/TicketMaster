@@ -101,8 +101,8 @@ public sealed class SetRoleTests : UsersTest
         Assert.Equal(UserRole.Admin, (await StoredUserAsync("admin")).Role);
     }
 
-    // The role is read off the token, so the signature is all that stands between a caller and a self-issued
-    // Admin claim. Everything else about this token — issuer, audience, lifetime, subject — is valid.
+    // A forged token must fail authentication before the stored role is ever consulted. Everything else about
+    // this token — issuer, audience, lifetime, subject — is valid.
     [Fact]
     public async Task An_Admin_claim_signed_with_another_key_is_unauthorized()
     {
@@ -184,10 +184,10 @@ public sealed class SetRoleTests : UsersTest
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
-    // Characterises current behaviour, not a desired one: AdminOnly reads the role claim baked into the token
-    // at issue, never the store, so a demotion takes effect only when the old token expires (one day).
+    // AdminOnly reads the role the store holds, not the claim baked into the token, so a demotion bites on the
+    // demoted admin's very next request rather than when their day-long token expires.
     [Fact]
-    public async Task A_demoted_admins_existing_token_still_passes_the_admin_check_until_it_expires()
+    public async Task A_demoted_admins_existing_token_is_forbidden_at_once()
     {
         var admin = await RegisterAsync("admin");
         await RegisterAsync("carol");
@@ -201,8 +201,66 @@ public sealed class SetRoleTests : UsersTest
 
         using var stale = await PutRoleAsync(admin.Token, carolId, "Customer");
 
+        Assert.Equal(HttpStatusCode.Forbidden, stale.StatusCode);
+        Assert.Equal(UserRole.Admin, (await StoredUserAsync("carol")).Role);
+    }
+
+    [Fact]
+    public async Task A_promoted_users_existing_token_passes_the_admin_check_without_a_new_login()
+    {
+        var admin = await RegisterAsync("admin");
+        var carol = await RegisterAsync("carol");
+        await RegisterAsync("dave");
+        var carolId = (await StoredUserAsync("carol")).Id;
+        var daveId = (await StoredUserAsync("dave")).Id;
+        using (var promoted = await PutRoleAsync(admin.Token, carolId, "Admin"))
+            Assert.Equal(HttpStatusCode.NoContent, promoted.StatusCode);
+
+        using var response = await PutRoleAsync(carol.Token, daveId, "Admin");
+
+        Assert.Equal(nameof(UserRole.Customer), RoleClaimOf(carol.Token));
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        Assert.Equal(UserRole.Admin, (await StoredUserAsync("dave")).Role);
+    }
+
+    [Fact]
+    public async Task The_only_admin_cannot_demote_themselves()
+    {
+        var admin = await RegisterAsync("admin");
+        var adminId = (await StoredUserAsync("admin")).Id;
+
+        using var response = await PutRoleAsync(admin.Token, adminId, "Customer");
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal("last_admin", await ProblemCodeAsync(response));
+        Assert.Equal(UserRole.Admin, (await StoredUserAsync("admin")).Role);
+    }
+
+    [Fact]
+    public async Task An_admin_can_demote_themselves_while_another_admin_remains()
+    {
+        var admin = await RegisterAsync("admin");
+        await RegisterAsync("carol");
+        var adminId = (await StoredUserAsync("admin")).Id;
+        var carolId = (await StoredUserAsync("carol")).Id;
+        using (var promoted = await PutRoleAsync(admin.Token, carolId, "Admin"))
+            Assert.Equal(HttpStatusCode.NoContent, promoted.StatusCode);
+
+        using var response = await PutRoleAsync(admin.Token, adminId, "Customer");
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
         Assert.Equal(UserRole.Customer, (await StoredUserAsync("admin")).Role);
-        Assert.Equal(HttpStatusCode.NoContent, stale.StatusCode);
+    }
+
+    [Fact]
+    public async Task Re_asserting_the_only_admins_role_is_not_a_demotion()
+    {
+        var admin = await RegisterAsync("admin");
+        var adminId = (await StoredUserAsync("admin")).Id;
+
+        using var response = await PutRoleAsync(admin.Token, adminId, "Admin");
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
     }
 
     private string ForgeAdminToken(User user)

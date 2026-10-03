@@ -32,6 +32,12 @@ public static class SetUserRole
             if (user is null)
                 return new Error("user_not_found", ErrorType.NotFound, "User not found");
 
+            // Not race-proof: two admins demoting each other at the same instant both count two and leave none.
+            // Role changes are too rare to justify a row lock — see Accepted limitations in the README.
+            if (user.Role == UserRole.Admin && role != UserRole.Admin
+                && await _dbContext.Users.CountAsync(u => u.Role == UserRole.Admin, cancellationToken) <= 1)
+                return new Error("last_admin", ErrorType.Conflict, "The last admin cannot be demoted");
+
             user.Role = role;
             await _dbContext.SaveChangesAsync(cancellationToken);
 

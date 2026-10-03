@@ -96,7 +96,7 @@ and mints a throwaway id. The migrations were squashed to a single clean `Initia
    empty.
 5. **`ErrorType` determines the status code**, and `ErrorResults.ToProblem` in `Shared/` is the one
    place that reads it: `NotFound` → 404, `BadRequest` → 400, `Unauthorized` → 401, `Forbidden` →
-   403, each as a `ProblemDetails` carrying the `Code` as a `code` extension. Endpoints call
+   403, `Conflict` → 409, each as a `ProblemDetails` carrying the `Code` as a `code` extension. Endpoints call
    `result.Error!.ToProblem()`; one returning `Results.BadRequest` directly makes the enum
    decorative again. Covered by `Tests/Users/UsersApi`, verified by mutation.
 6. **Users.Api is the only JWT issuer.** No other service creates or signs tokens; no other service
@@ -153,8 +153,14 @@ Implemented:
   no admin credential in config. (A one-time race: two simultaneous first registrations could both win
   admin. Acceptable for bootstrap.)
 - **`PUT api/users/{id:guid}/role`** (the `SetRole` slice) promotes or demotes, behind the `AdminOnly`
-  policy (`RequireRole("Admin")`). Because Users.Api validates its own JWT — which carries the role
-  claim `TokenService` issues — this is a real token check, not a trusted header.
+  policy. The JWT proves who the caller is; `StoredRoleHandler` (`Features/Users/StoredRoleRequirement.cs`)
+  then reads their role **from the store**, never the token's role claim — a token lives a day, so a claim
+  would let a demoted admin keep access that long and make a promoted user log in again. Do not swap it
+  back to `RequireRole`.
+- **The last admin cannot be demoted** (409 `last_admin`, `ErrorType.Conflict`). `SetUserRole` counts the
+  admins before demoting one. The count and the write are not atomic, so two admins demoting each other at
+  the same instant could leave none — accepted deliberately, since role changes are rare. A row lock
+  (`SELECT ... FOR UPDATE`) or a Serializable transaction would close it; both were considered and declined.
 - The role rides into the access token as a claim and is echoed by `Introspect`, which is how the
   gateway learns it and propagates `X-Identity-Role` for Bookings' admin-gated ticket endpoint.
 
@@ -167,8 +173,6 @@ Implemented:
 - Role paths are covered by `Tests/Users/UsersIntegration` (real host, real JWTs over HTTP, Postgres). The
   bootstrap race is pinned by `Two_first_registrations_that_both_see_an_empty_table_both_become_Admin`;
   a guard would turn it red, and it should then be flipped to assert exactly one Admin.
-- `AdminOnly` reads the token's role claim, never the store, so a demotion takes effect only when the token
-  expires (1 day), a promotion needs a fresh login, and an admin can demote the last admin.
 - **`AuthOptions` is a positional record, so never `Configure<AuthOptions>`** — the options factory needs a
   parameterless constructor and every `IOptions<AuthOptions>` consumer (register, login, refresh) then
   fails to construct, a 500. `Program.cs` registers `Options.Create(authOptions)` instead;
