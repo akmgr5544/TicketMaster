@@ -32,6 +32,9 @@ internal sealed class RelocateEventCommandHandler : IRequestHandler<RelocateEven
         var @event = await _eventRepository.GetEventByIdAsync(request.Id, cancellationToken)
                      ?? throw new NotFoundException(nameof(Event), request.Id);
 
+        if (request.Caller?.MayChange(@event) != true)
+            throw new ForbiddenException(nameof(Event), request.Id);
+
         var venue = await _venueRepository.GetVenueByIdAsync(request.VenueId, cancellationToken)
                     ?? throw new NotFoundException(nameof(Venue), request.VenueId);
 

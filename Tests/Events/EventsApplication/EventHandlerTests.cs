@@ -29,6 +29,8 @@ public class EventHandlerTests
 
     private static readonly Guid AnOrganizer = Guid.CreateVersion7();
 
+    private static readonly Caller TheOrganizer = new(AnOrganizer, IsAdmin: false);
+
     private Event AnEvent()
     {
         var @event = new Event(FarEnoughOut, AVenue(), [APerformer()], new TicketPrice(25m, "USD"), AnOrganizer);
@@ -152,7 +154,7 @@ public class EventHandlerTests
         var newDate = DateTime.UtcNow.AddDays(40);
 
         await new RescheduleEventCommandHandler(_events, _publisher)
-            .Handle(new RescheduleEventCommand(@event.Id, newDate), CancellationToken.None);
+            .Handle(new RescheduleEventCommand(@event.Id, newDate, TheOrganizer), CancellationToken.None);
 
         Assert.Same(@event, Assert.Single(_events.Updated));
 
@@ -182,7 +184,7 @@ public class EventHandlerTests
         var handler = new RescheduleEventCommandHandler(_events, _publisher);
 
         await Assert.ThrowsAsync<EventsDomainException>(() =>
-            handler.Handle(new RescheduleEventCommand(@event.Id, DateTime.UtcNow.AddDays(2)),
+            handler.Handle(new RescheduleEventCommand(@event.Id, DateTime.UtcNow.AddDays(2), TheOrganizer),
                 CancellationToken.None));
 
         Assert.Empty(_events.Updated);
@@ -199,7 +201,7 @@ public class EventHandlerTests
         _venues.Seed(destination);
 
         await new RelocateEventCommandHandler(_events, _venues, _publisher)
-            .Handle(new RelocateEventCommand(@event.Id, destination.Id), CancellationToken.None);
+            .Handle(new RelocateEventCommand(@event.Id, destination.Id, TheOrganizer), CancellationToken.None);
 
         Assert.Equal(destination.Id, @event.Venue.Id);
 
@@ -217,9 +219,73 @@ public class EventHandlerTests
         var handler = new RelocateEventCommandHandler(_events, _venues, _publisher);
 
         await Assert.ThrowsAsync<NotFoundException>(() =>
-            handler.Handle(new RelocateEventCommand(@event.Id, "missing"), CancellationToken.None));
+            handler.Handle(new RelocateEventCommand(@event.Id, "missing", TheOrganizer), CancellationToken.None));
 
         Assert.Empty(_publisher.Published);
+    }
+
+    // --- Who may change an event ---
+
+    public static TheoryData<string> Changes => new() { "reschedule", "relocate", "reprice", "lineup", "cancel" };
+
+    // Refused before anything is written or announced, whichever change it is.
+    [Theory]
+    [MemberData(nameof(Changes))]
+    public async Task Somebody_other_than_the_organizer_is_forbidden_and_nothing_changes(string change)
+    {
+        var @event = AnEvent();
+        var stranger = new Caller(Guid.CreateVersion7(), IsAdmin: false);
+
+        await Assert.ThrowsAsync<ForbiddenException>(() => ChangeAsync(change, @event, stranger));
+
+        Assert.Empty(_events.Updated);
+        Assert.Empty(_publisher.Published);
+        Assert.Equal(1, @event.Version);
+    }
+
+    [Theory]
+    [MemberData(nameof(Changes))]
+    public async Task An_admin_may_change_any_event(string change)
+    {
+        var @event = AnEvent();
+
+        await ChangeAsync(change, @event, new Caller(Guid.CreateVersion7(), IsAdmin: true));
+
+        Assert.Same(@event, Assert.Single(_events.Updated));
+    }
+
+    // Fails closed: a sender that forgets the caller is refused, not waved through.
+    [Theory]
+    [MemberData(nameof(Changes))]
+    public async Task A_command_with_no_caller_is_forbidden(string change)
+    {
+        var @event = AnEvent();
+
+        await Assert.ThrowsAsync<ForbiddenException>(() => ChangeAsync(change, @event, caller: null));
+
+        Assert.Empty(_events.Updated);
+    }
+
+    private Task ChangeAsync(string change, Event @event, Caller? caller)
+    {
+        var destination = AVenue("A1", "B1");
+        _venues.Seed(destination);
+        var performer = APerformer();
+        _performers.Seed(performer);
+
+        return change switch
+        {
+            "reschedule" => new RescheduleEventCommandHandler(_events, _publisher)
+                .Handle(new RescheduleEventCommand(@event.Id, DateTime.UtcNow.AddDays(40), caller), CancellationToken.None),
+            "relocate" => new RelocateEventCommandHandler(_events, _venues, _publisher)
+                .Handle(new RelocateEventCommand(@event.Id, destination.Id, caller), CancellationToken.None),
+            "reprice" => new RepriceEventCommandHandler(_events, _publisher)
+                .Handle(new RepriceEventCommand(@event.Id, 75m, "USD", Caller: caller), CancellationToken.None),
+            "lineup" => new ChangeEventLineupCommandHandler(_events, _performers, _publisher)
+                .Handle(new ChangeEventLineupCommand(@event.Id, [performer.Id], caller), CancellationToken.None),
+            _ => new CancelEventCommandHandler(_events, _publisher)
+                .Handle(new CancelEventCommand(@event.Id, caller), CancellationToken.None)
+        };
     }
 
     // --- Pricing ---
@@ -250,7 +316,7 @@ public class EventHandlerTests
         var @event = AnEvent();
 
         await new RepriceEventCommandHandler(_events, _publisher).Handle(
-            new RepriceEventCommand(@event.Id, 75m, "USD", [new PriceTierRequest("Front", 99m, ["A1"])]),
+            new RepriceEventCommand(@event.Id, 75m, "USD", [new PriceTierRequest("Front", 99m, ["A1"])], TheOrganizer),
             CancellationToken.None);
 
         Assert.Equal(75m, @event.TicketPrice.Amount);
@@ -283,7 +349,7 @@ public class EventHandlerTests
         _performers.Seed(replacement);
 
         await new ChangeEventLineupCommandHandler(_events, _performers, _publisher)
-            .Handle(new ChangeEventLineupCommand(@event.Id, [replacement.Id]), CancellationToken.None);
+            .Handle(new ChangeEventLineupCommand(@event.Id, [replacement.Id], TheOrganizer), CancellationToken.None);
 
         Assert.Equal(replacement.Id, @event.Performers.Single().Id);
 
@@ -298,7 +364,7 @@ public class EventHandlerTests
         var handler = new ChangeEventLineupCommandHandler(_events, _performers, _publisher);
 
         await Assert.ThrowsAsync<NotFoundException>(() =>
-            handler.Handle(new ChangeEventLineupCommand(@event.Id, ["missing"]), CancellationToken.None));
+            handler.Handle(new ChangeEventLineupCommand(@event.Id, ["missing"], TheOrganizer), CancellationToken.None));
     }
 
     // --- Cancel ---
@@ -309,7 +375,7 @@ public class EventHandlerTests
         var @event = AnEvent();
 
         await new CancelEventCommandHandler(_events, _publisher)
-            .Handle(new CancelEventCommand(@event.Id), CancellationToken.None);
+            .Handle(new CancelEventCommand(@event.Id, TheOrganizer), CancellationToken.None);
 
         Assert.Equal(EventStatus.Cancelled, @event.Status);
 
@@ -327,11 +393,11 @@ public class EventHandlerTests
     {
         var @event = AnEvent();
         var handler = new CancelEventCommandHandler(_events, _publisher);
-        await handler.Handle(new CancelEventCommand(@event.Id), CancellationToken.None);
+        await handler.Handle(new CancelEventCommand(@event.Id, TheOrganizer), CancellationToken.None);
 
         var publishedFirst = _publisher.Published.Count;
 
-        await handler.Handle(new CancelEventCommand(@event.Id), CancellationToken.None);
+        await handler.Handle(new CancelEventCommand(@event.Id, TheOrganizer), CancellationToken.None);
 
         Assert.Equal(publishedFirst, _publisher.Published.Count);
     }

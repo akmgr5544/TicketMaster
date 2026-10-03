@@ -6,11 +6,12 @@ using Microsoft.AspNetCore.Mvc;
 namespace Events.Api.Handlers;
 
 /// <summary>
-/// Turns the three exceptions Events throws into status codes and a <c>ProblemDetails</c> body.
+/// Turns the four exceptions Events throws into status codes and a <c>ProblemDetails</c> body.
 /// <para>
 /// The arms must stay in most-derived-first order, but that is enforced rather than remembered:
-/// <see cref="NotFoundException"/> derives from <see cref="EventsApplicationException"/>, so
-/// putting the base first makes the derived arm unreachable and the build fails with CS8510.
+/// <see cref="NotFoundException"/> and <see cref="ForbiddenException"/> derive from
+/// <see cref="EventsApplicationException"/>, so putting the base first makes the derived arms unreachable and
+/// the build fails with CS8510.
 /// </para>
 /// </summary>
 internal sealed class EventsExceptionHandler : IExceptionHandler
@@ -61,6 +62,9 @@ internal sealed class EventsExceptionHandler : IExceptionHandler
     {
         // Asked for something that isn't there.
         NotFoundException => (StatusCodes.Status404NotFound, "Not found"),
+
+        // The caller is not the event's organizer, nor an admin.
+        ForbiddenException => (StatusCodes.Status403Forbidden, "Forbidden"),
 
         // The model is intact, but the request conflicts with the state of the world.
         EventsApplicationException => (StatusCodes.Status409Conflict, "Conflict"),

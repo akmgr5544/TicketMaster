@@ -28,6 +28,9 @@ internal sealed class RescheduleEventCommandHandler : IRequestHandler<Reschedule
         var @event = await _repository.GetEventByIdAsync(request.Id, cancellationToken)
                      ?? throw new NotFoundException(nameof(Event), request.Id);
 
+        if (request.Caller?.MayChange(@event) != true)
+            throw new ForbiddenException(nameof(Event), request.Id);
+
         @event.Reschedule(request.StartDate);
 
         await _repository.UpdateEventAsync(@event, cancellationToken);

@@ -27,6 +27,9 @@ internal sealed class ChangeEventLineupCommandHandler : IRequestHandler<ChangeEv
         var @event = await _eventRepository.GetEventByIdAsync(request.Id, cancellationToken)
                      ?? throw new NotFoundException(nameof(Event), request.Id);
 
+        if (request.Caller?.MayChange(@event) != true)
+            throw new ForbiddenException(nameof(Event), request.Id);
+
         var requested = request.PerformerIds.Distinct().ToList();
         var performers = await _performerRepository.GetPerformersByIdsAsync(requested, cancellationToken);
 

@@ -29,6 +29,9 @@ internal sealed class CancelEventCommandHandler : IRequestHandler<CancelEventCom
         var @event = await _repository.GetEventByIdAsync(request.Id, cancellationToken)
                      ?? throw new NotFoundException(nameof(Event), request.Id);
 
+        if (request.Caller?.MayChange(@event) != true)
+            throw new ForbiddenException(nameof(Event), request.Id);
+
         @event.Cancel();
 
         await _repository.UpdateEventAsync(@event, cancellationToken);

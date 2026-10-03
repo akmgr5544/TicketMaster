@@ -34,6 +34,16 @@ public class EventsExceptionHandlerTests
         return (handled, context.Response.StatusCode);
     }
 
+    // Derives from EventsApplicationException too, so a reordered switch would quietly turn 403 into 409.
+    [Fact]
+    public async Task A_caller_who_may_not_change_the_event_gets_403_not_the_base_types_409()
+    {
+        var (handled, status) = await HandleAsync(new ForbiddenException("Event", "abc"));
+
+        Assert.True(handled);
+        Assert.Equal(StatusCodes.Status403Forbidden, status);
+    }
+
     [Fact]
     public async Task Something_that_is_not_there_becomes_404()
     {

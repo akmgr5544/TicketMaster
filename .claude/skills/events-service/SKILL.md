@@ -119,13 +119,18 @@ goes to. The organizer never changes.
   seat the venue has can be priced, and names are unique (case-insensitive) — all checked in the `Event`.
 - **`Reprice` replaces the whole pricing** (`PUT /api/events/{id}/pricing`): base price and every tier at once,
   validated before anything changes, bumping `Version` and raising `EventRepriced` with the resulting pricing.
-  A cancelled event cannot be repriced. Like every other event mutation it checks no identity.
+  A cancelled event cannot be repriced.
 - **Relocating narrows the tiers** to the seats the new venue still has; a tier left with none is dropped.
 
 - **The organizer comes from `X-Identity-UserId`, never the body.** `EventsController.CreateEventAsync`
-  reads the header and overwrites `CreateEventCommand.OrganizerId`; no header is a 401. This is the one place
-  Events reads identity. A body naming somebody else must not make them the payee (pinned in
-  `EventsIntegration`'s `CreateEndpointTests`).
+  reads the header and overwrites `CreateEventCommand.OrganizerId`; no header is a 401. A body naming somebody
+  else must not make them the payee (pinned in `EventsIntegration`'s `CreateEndpointTests`).
+- **Only the organizer or an admin changes an event.** Reschedule, relocate, reprice, lineup and cancel each
+  carry a `Caller` (user id + admin flag) that the controller builds from `X-Identity-UserId` / `X-Identity-Role`
+  and overwrites onto the command; no user header is a 401. Each handler checks `caller.MayChange(@event)`
+  after loading it and throws `ForbiddenException` (403) otherwise. A command with no caller is refused, so a
+  new sender that forgets it fails closed. Admins can change any event — including one stored before organizers
+  existed, whose `OrganizerId` is empty and so is organized by nobody (`Event.IsOrganizedBy`).
 - **`EventCreated`, `EventRelocated` and `EventRepriced` carry the pricing** as one `EventPricing` —
   relocation too, because Bookings creates tickets for the seats a relocation adds. Tiers go out flattened to
   `SeatPrices` (seat → price, tiered seats only); `EventPricing.PriceFor(seat)` reads it. The gRPC
@@ -230,8 +235,9 @@ Application/HTTP DTO the query handlers map it into for the response.
 Events breaks the flow by **throwing**, not by returning a result type. The `Result`/`Error`
 pattern belongs to Users.Api and must not be introduced here — see `cqrs` rule 4.
 
-**There are exactly three *public* exception types in the whole service.** Do not add a fourth without
-a good reason — a class per failure case multiplies with every entity. `ConcurrencyConflictException`
+**There are exactly four *public* exception types in the whole service.** Do not add a fifth without
+a good reason — a class per failure case multiplies with every entity. The fourth, `ForbiddenException`, was
+added because authorization is a distinct answer (403) that none of the other three can give. `ConcurrencyConflictException`
 in `Events.Domain/Exceptions` is the one exception to the count and is deliberately not in the table
 below: it exists because `Events.Cosmos` references only `Events.Domain` and so cannot throw an
 Application type, and `ConcurrencyRetryBehavior` consumes and converts it, so it never reaches the API.
@@ -240,6 +246,7 @@ Application type, and `ConcurrencyRetryBehavior` consumes and converts it, so it
 |---|---|---|---|
 | `EventsDomainException` | `Events.Domain/Exceptions` | An entity refuses a change — a broken invariant. Every entity throws this one; it has no subclasses. | 400 |
 | `NotFoundException(entity, id)` | `Events.Application/Exceptions` | Something was asked for by id and is not there. | 404 |
+| `ForbiddenException(entity, id)` | `Events.Application/Exceptions` | The caller is neither the event's organizer nor an admin. Not a 404: the catalogue is public. | 403 |
 | `EventsApplicationException` | `Events.Application/Exceptions` | The model is intact but the use case cannot proceed — the request conflicts with current state. | 409 |
 
 A lookup that misses is not a domain rule violation: nothing about the aggregate is wrong, the
@@ -249,11 +256,11 @@ document simply is not there. That is why "not found" lives in Application, not 
 indexer throws, so mapping it to 404 would turn a stray lookup bug in our own code into a "not
 found" for the caller instead of a visible failure.
 
-`Events.Api/Handlers/EventsExceptionHandler` maps all three to `ProblemDetails`. Anything else is
+`Events.Api/Handlers/EventsExceptionHandler` maps all four to `ProblemDetails`. Anything else is
 left unhandled and surfaces as a 500 — correct for the genuinely unexpected.
 
 **The switch arms are ordered most-derived-first, and the compiler enforces it.**
-`NotFoundException` derives from `EventsApplicationException`, so putting the base arm first makes
+`NotFoundException` and `ForbiddenException` derive from `EventsApplicationException`, so putting the base arm first makes
 the derived arm unreachable and the build fails with `CS8510`. This is not a convention anyone has
 to remember.
 

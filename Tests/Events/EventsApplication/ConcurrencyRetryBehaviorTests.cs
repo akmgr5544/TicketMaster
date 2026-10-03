@@ -22,6 +22,8 @@ public class ConcurrencyRetryBehaviorTests
 
     private const int MaxAttempts = 3;
 
+    private static readonly Caller AnAdmin = new(Guid.CreateVersion7(), IsAdmin: true);
+
     private static readonly RescheduleEventCommand ARequest = new("some-id", DateTime.UtcNow.AddDays(20));
 
     private static ConcurrencyRetryBehavior<RescheduleEventCommand, Unit> Behavior() => new();
@@ -114,7 +116,7 @@ public class ConcurrencyRetryBehaviorTests
     {
         var @event = AnEvent();
         var newDate = DateTime.UtcNow.AddDays(30);
-        var command = new RescheduleEventCommand(@event.Id, newDate);
+        var command = new RescheduleEventCommand(@event.Id, newDate, AnAdmin);
         var handler = new RescheduleEventCommandHandler(_events, _publisher);
 
         _events.ConflictsBeforeSuccess = 1;
@@ -138,7 +140,7 @@ public class ConcurrencyRetryBehaviorTests
     public async Task A_command_that_keeps_losing_the_race_surfaces_as_a_conflict_not_a_crash()
     {
         var @event = AnEvent();
-        var command = new RescheduleEventCommand(@event.Id, DateTime.UtcNow.AddDays(30));
+        var command = new RescheduleEventCommand(@event.Id, DateTime.UtcNow.AddDays(30), AnAdmin);
         var handler = new RescheduleEventCommandHandler(_events, _publisher);
 
         _events.ConflictsBeforeSuccess = MaxAttempts;

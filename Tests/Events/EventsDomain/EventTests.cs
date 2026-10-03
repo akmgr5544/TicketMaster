@@ -72,6 +72,16 @@ public class EventTests
     }
 
     [Fact]
+    public void Is_organized_by_its_organizer_and_nobody_else()
+    {
+        var @event = AnEvent();
+
+        Assert.True(@event.IsOrganizedBy(AnOrganizer));
+        Assert.False(@event.IsOrganizedBy(Guid.CreateVersion7()));
+        Assert.False(@event.IsOrganizedBy(Guid.Empty));
+    }
+
+    [Fact]
     public void Keeps_the_price_and_organizer_it_was_created_with()
     {
         var @event = AnEvent();

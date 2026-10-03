@@ -19,6 +19,8 @@ public class EventsController : ControllerBase
     private const int DefaultPageSize = 25;
     private const int MaxPageSize = 100;
     private const string IdentityUserIdHeader = "X-Identity-UserId";
+    private const string IdentityRoleHeader = "X-Identity-Role";
+    private const string AdminRole = "Admin";
 
     private readonly ISender _sender;
 
@@ -71,16 +73,25 @@ public class EventsController : ControllerBase
         return CreatedAtAction(nameof(GetEventAsync), new { id }, new { id });
     }
 
+    // Every change below is for the organizer or an admin only. The route is the address of the resource and the
+    // headers say who is asking, so both win over whatever the body claims.
+
     [HttpPut("{id}/schedule")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> RescheduleEventAsync(string id,
         [FromBody] RescheduleEventCommand command,
+        [FromHeader(Name = IdentityUserIdHeader)] string? userId,
+        [FromHeader(Name = IdentityRoleHeader)] string? role,
         CancellationToken cancellationToken)
     {
-        // The route is the address of the resource, so it wins over whatever the body claims.
-        await _sender.Send(command with { Id = id }, cancellationToken);
+        if (CallerFrom(userId, role) is not { } caller)
+            return Unauthorized();
+
+        await _sender.Send(command with { Id = id, Caller = caller }, cancellationToken);
 
         return NoContent();
     }
@@ -88,12 +99,19 @@ public class EventsController : ControllerBase
     [HttpPut("{id}/venue")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> RelocateEventAsync(string id,
         [FromBody] RelocateEventCommand command,
+        [FromHeader(Name = IdentityUserIdHeader)] string? userId,
+        [FromHeader(Name = IdentityRoleHeader)] string? role,
         CancellationToken cancellationToken)
     {
-        await _sender.Send(command with { Id = id }, cancellationToken);
+        if (CallerFrom(userId, role) is not { } caller)
+            return Unauthorized();
+
+        await _sender.Send(command with { Id = id, Caller = caller }, cancellationToken);
 
         return NoContent();
     }
@@ -101,12 +119,19 @@ public class EventsController : ControllerBase
     [HttpPut("{id}/pricing")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> RepriceEventAsync(string id,
         [FromBody] RepriceEventCommand command,
+        [FromHeader(Name = IdentityUserIdHeader)] string? userId,
+        [FromHeader(Name = IdentityRoleHeader)] string? role,
         CancellationToken cancellationToken)
     {
-        await _sender.Send(command with { Id = id }, cancellationToken);
+        if (CallerFrom(userId, role) is not { } caller)
+            return Unauthorized();
+
+        await _sender.Send(command with { Id = id, Caller = caller }, cancellationToken);
 
         return NoContent();
     }
@@ -114,12 +139,19 @@ public class EventsController : ControllerBase
     [HttpPut("{id}/lineup")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> ChangeEventLineupAsync(string id,
         [FromBody] ChangeEventLineupCommand command,
+        [FromHeader(Name = IdentityUserIdHeader)] string? userId,
+        [FromHeader(Name = IdentityRoleHeader)] string? role,
         CancellationToken cancellationToken)
     {
-        await _sender.Send(command with { Id = id }, cancellationToken);
+        if (CallerFrom(userId, role) is not { } caller)
+            return Unauthorized();
+
+        await _sender.Send(command with { Id = id, Caller = caller }, cancellationToken);
 
         return NoContent();
     }
@@ -131,11 +163,22 @@ public class EventsController : ControllerBase
     /// </summary>
     [HttpPost("{id}/cancel")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> CancelEventAsync(string id, CancellationToken cancellationToken)
+    public async Task<IActionResult> CancelEventAsync(string id,
+        [FromHeader(Name = IdentityUserIdHeader)] string? userId,
+        [FromHeader(Name = IdentityRoleHeader)] string? role,
+        CancellationToken cancellationToken)
     {
-        await _sender.Send(new CancelEventCommand(id), cancellationToken);
+        if (CallerFrom(userId, role) is not { } caller)
+            return Unauthorized();
+
+        await _sender.Send(new CancelEventCommand(id, caller), cancellationToken);
 
         return NoContent();
     }
+
+    private static Caller? CallerFrom(string? userId, string? role) =>
+        Guid.TryParse(userId, out var id) ? new Caller(id, role == AdminRole) : null;
 }

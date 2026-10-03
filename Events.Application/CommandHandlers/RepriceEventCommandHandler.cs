@@ -24,6 +24,9 @@ internal sealed class RepriceEventCommandHandler : IRequestHandler<RepriceEventC
         var @event = await _repository.GetEventByIdAsync(request.Id, cancellationToken)
                      ?? throw new NotFoundException(nameof(Event), request.Id);
 
+        if (request.Caller?.MayChange(@event) != true)
+            throw new ForbiddenException(nameof(Event), request.Id);
+
         @event.Reprice(new TicketPrice(request.TicketPrice, request.Currency),
             (request.PriceTiers ?? []).Select(tier => new PriceTier(tier.Name, tier.Price, tier.Seats)));
 

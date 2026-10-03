@@ -155,8 +155,9 @@ The gateway requires an authenticated caller on `/bookings-service/**`, `/events
 `/payments-service/**` (except PSP webhooks), checked by calling Users.Api's `GET api/users/auth`;
 `/users-service/**` is not gated. It forwards the resolved identity downstream as `X-Identity-UserId` /
 `X-Identity-UserName` / `X-Identity-Role` headers — Bookings and PaymentSystem read identity from those
-rather than re-validating the token; Events reads `X-Identity-UserId` only to make an event's creator its
-organizer, the seller every payment for it goes to. Two actions are admin-gated:
+rather than re-validating the token; Events makes an event's creator its organizer, the seller every payment
+for it goes to, and lets only the organizer or an admin change the event (403 otherwise). Two actions are
+admin-gated:
 `POST /api/tickets`, which Bookings refuses (403) unless the role header says `Admin`, and
 `PUT /api/users/{id}/role`, which Users.Api checks against the caller's role in its own store — not the
 token's role claim — so a promotion or demotion applies on the next request. The last admin cannot be

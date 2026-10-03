@@ -42,7 +42,7 @@ registration code — not the rules.
    | Service | Mechanism |
    |---|---|
    | **Users.Api** | `Result` / `Result<T>` with `Error` and `ErrorType`, in `Users.Api/Shared`. Handlers return failures; they do not throw. |
-   | **Bookings, Events** | Exceptions. Handlers throw; an `IExceptionHandler` at the edge maps them to status codes. Events has exactly three types — `EventsDomainException` (broken invariant, 400), `NotFoundException` (404) and `EventsApplicationException` (409) — and adding a failure mode means throwing one of them, not writing a fourth. |
+   | **Bookings, Events** | Exceptions. Handlers throw; an `IExceptionHandler` at the edge maps them to status codes. Events has exactly four types — `EventsDomainException` (broken invariant, 400), `NotFoundException` (404), `ForbiddenException` (403) and `EventsApplicationException` (409) — and adding a failure mode means throwing one of them, not writing a fifth. |
 
    Do not introduce the Result type into Bookings or Events, and do not throw for expected failures
    in Users. Whichever mechanism a service uses, an expected failure must produce the right status

@@ -88,6 +88,9 @@ public class Event : Entity
 
     public IReadOnlyList<PriceTier> PriceTiers => _priceTiers;
 
+    // An event stored before organizers existed has none, and so is organized by nobody.
+    public bool IsOrganizedBy(Guid userId) => OrganizerId != Guid.Empty && OrganizerId == userId;
+
     /// <summary>Snapshots of the performers, on the same terms as <see cref="Venue"/>.</summary>
     public IReadOnlyList<Performer> Performers => _performers;
 
