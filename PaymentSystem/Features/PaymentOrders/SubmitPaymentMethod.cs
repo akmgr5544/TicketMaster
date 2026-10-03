@@ -48,7 +48,7 @@ public static class SubmitPaymentMethod
             {
                 case PaymentOrderStatus.NotStarted:
                     return Error.Conflict("checkout_not_started", $"Payment order {order.PaymentOrderId} has no checkout yet.");
-                case PaymentOrderStatus.Success or PaymentOrderStatus.Failed:
+                case PaymentOrderStatus.Success or PaymentOrderStatus.Failed or PaymentOrderStatus.Refunded:
                     return Error.Conflict("payment_order_settled", $"Payment order {order.PaymentOrderId} is already {order.Status}.");
             }
 

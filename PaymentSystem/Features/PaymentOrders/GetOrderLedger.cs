@@ -15,7 +15,8 @@ public static class GetOrderLedger
     // SignedSum counts a debit as positive and a credit as negative; a balanced ledger reads 0.
     public sealed record Response(Guid PaymentOrderId, decimal SignedSum, IReadOnlyList<Entry> Entries);
 
-    public sealed record Entry(Guid AccountId, string Type, decimal Amount, string Currency, DateTime CreatedAt);
+    public sealed record Entry(Guid AccountId, string Type, decimal Amount, string Currency, DateTime CreatedAt,
+        string Reason);
 
     internal sealed class Handler(PaymentDbContext context) : IRequestHandler<Query, Result<Response>>
     {
@@ -30,15 +31,16 @@ public static class GetOrderLedger
             if (!visible)
                 return Error.NotFound("payment_order_not_found", $"Payment order {request.PaymentOrderId} was not found.");
 
-            // Not paginated: the unique (PaymentOrderId, Type) index allows one debit and one credit per order.
+            // Not paginated: the unique (PaymentOrderId, Reason, Type) index allows at most a pay-in pair and a
+            // refund pair per order.
             var rows = await context.LedgerEntries
                 .Where(e => e.PaymentOrderId == request.PaymentOrderId)
-                .OrderBy(e => e.Type)
-                .Select(e => new { e.AccountId, e.Type, e.Amount, e.Currency, e.CreatedAt })
+                .OrderBy(e => e.Reason).ThenBy(e => e.Type)
+                .Select(e => new { e.AccountId, e.Type, e.Reason, e.Amount, e.Currency, e.CreatedAt })
                 .ToListAsync(cancellationToken);
 
             var entries = rows
-                .Select(e => new Entry(e.AccountId, e.Type.ToString(), e.Amount, e.Currency, e.CreatedAt))
+                .Select(e => new Entry(e.AccountId, e.Type.ToString(), e.Amount, e.Currency, e.CreatedAt, e.Reason.ToString()))
                 .ToList();
             var signedSum = rows.Sum(e => e.Type == EntryType.Debit ? e.Amount : -e.Amount);
 

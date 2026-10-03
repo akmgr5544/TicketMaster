@@ -1,13 +1,13 @@
 ---
 name: payments-service
-description: Use when working on PaymentSystem or PaymentProvider — the pay-in flow, the PaymentEvent (checkout) aggregate and its PaymentOrders, wallets, the double-entry ledger, PSP checkout/webhooks, checkout expiry, the payment outbox, or anything under PaymentSystem/ or Tests/Payments/.
+description: Use when working on PaymentSystem or PaymentProvider — the pay-in flow, refunds, the PaymentEvent (checkout) aggregate and its PaymentOrders, wallets, the double-entry ledger, PSP checkout/webhooks/refunds, checkout expiry, the payment outbox, or anything under PaymentSystem/ or Tests/Payments/.
 ---
 
 # Payments Service
 
-PaymentSystem takes a booking's payment from "requested" to "settled or failed" and tells Bookings which.
-It is **pay-in only** — money from buyer to seller. Pay-out to a seller's bank, refunds and FX are out of
-scope. The design follows the Pragmatic Engineer "Designing a payment system" article (Alex Xu): a payment
+PaymentSystem takes a booking's payment from "requested" to "settled or failed" and tells Bookings which, and
+gives a settled payment back in full when the booking it paid for is voided. Money moves buyer to seller and,
+on a refund, back. Pay-out to a seller's bank, partial refunds and FX are out of scope. The design follows the Pragmatic Engineer "Designing a payment system" article (Alex Xu): a payment
 event (checkout) with one payment order per seller, a PSP-hosted payment page with the order id as the
 PSP's idempotency nonce, a wallet per seller, and a double-entry ledger.
 
@@ -29,7 +29,7 @@ Users-style anaemic entity applies here.
 PaymentSystem/
   Domain/            PaymentEvent (root), PaymentOrder (child), Wallet, LedgerEntry, BookingClaim,
                      Events/ (domain events), Exceptions/, Shared/ (MoneyAmount, CurrencyCode), Abstractions/
-  Enums/             PaymentOrderStatus, EntryType (used by the domain)
+  Enums/             PaymentOrderStatus, EntryType, EntryReason (used by the domain)
   Data/              PaymentDbContext, Configurations/, Interceptors/, Migrations/
   Shared/
     Endpoints/       IEndpointMarker, CallerIdentity (X-Identity-UserId)
@@ -38,7 +38,7 @@ PaymentSystem/
     Messaging/       IIntegrationEventPublisher, OutboxIntegrationEventPublisher, OutboxFlushInterceptor
     Psp/             ProviderOutcome (shared by PaymentOrders and Webhooks slices)
   Features/<Aggregate>/<Feature>.cs
-    Checkouts/       RequestPayment, GetCheckout, ExpireCheckout, CancelCheckout
+    Checkouts/       RequestPayment, GetCheckout, ExpireCheckout, CancelCheckout, RefundCheckout, RecordRefund
     PaymentOrders/   StartCheckout, SubmitPaymentMethod, GetPaymentOrder, GetOrderLedger, Settle, Fail
     Webhooks/        HandleWebhook
     Wallets/         GetMyWallets
@@ -60,7 +60,7 @@ PaymentSystem/
 
 **`PaymentEvent` is the aggregate root** — one checkout per booking. It owns its `PaymentOrders` (one per
 seller) and is the only way to change them: `StartExecuting`, `SucceedOrder`, `FailOrder`,
-`MarkWalletUpdated`, `MarkLedgerUpdated`, `Expire`, `Cancel`. `PaymentOrder`'s mutators are `internal`.
+`MarkWalletUpdated`, `MarkLedgerUpdated`, `Expire`, `Cancel`, `RefundOrder`. `PaymentOrder`'s mutators are `internal`.
 `Wallet` and `LedgerEntry` are separate.
 
 1. **Created, then given its orders.** `PaymentEvent.Create(checkoutId, bookingId, buyerId)` makes an empty
@@ -69,8 +69,14 @@ seller) and is the only way to change them: `StartExecuting`, `SucceedOrder`, `F
    refused order leaves the checkout unchanged. **An empty checkout is never paid** (`IsPaymentDone` needs at
    least one order) **and never stored** — check constraint `CK_PaymentEvents_OrderCount` (`OrderCount > 0`).
    `BookingId` is unique in the store — that index is what makes a redelivered request a no-op.
-2. **State machine per order:** `NotStarted → Executing → Success | Failed`. `Expire`/`Cancel` fail every
-   order still `NotStarted` or `Executing`; they never touch `Success` or `Failed`.
+2. **State machine per order:** `NotStarted → Executing → Success | Failed`, then `Success → Refunded`.
+   `Expire`/`Cancel` fail every order still `NotStarted` or `Executing`; they never touch `Success`, `Failed`
+   or `Refunded`. **Only a settled success is refunded** — `RefundOrder` refuses one whose `WalletUpdated` and
+   `LedgerUpdated` are not both set, since there is nothing yet to reverse — and a repeat returns `false`,
+   which is what keeps the money from being reversed twice. `IsFullyRefunded` is true once nothing is left
+   `Success` and something is `Refunded`; a `Failed` order took no money and does not hold it back.
+   **Every slice that refuses a settled order must list `Refunded` too** — `StartCheckout` and
+   `SubmitPaymentMethod` would otherwise charge a refunded order again.
 3. **At-least-once safe.** Repeating the outcome already reached is a no-op and raises nothing; the opposite
    outcome is refused (a settled payment cannot change its mind). `StartExecuting` replayed with the same
    provider and token — including `null` again, for Braintree — is a no-op; a different either is refused.
@@ -83,11 +89,16 @@ seller) and is the only way to change them: `StartExecuting`, `SucceedOrder`, `F
    `9999999999999999.99` — the `numeric(18,2)` column's range. The domain refuses what the column cannot
    hold exactly, because Postgres would round it and the PSP would charge a different amount than the ledger
    records. The configurations read `MoneyAmount.Precision`/`Scale`, so rule and column cannot drift.
-7. **Ledger** entries only exist as a balanced pair from `LedgerEntry.RecordPayIn(order)` (debit the buyer,
-   credit the seller, same amount and currency) for a successful order. Unique `(PaymentOrderId, Type)`.
+7. **Ledger** entries only exist as balanced pairs: `LedgerEntry.RecordPayIn(order)` (debit the buyer,
+   credit the seller) for a successful order, and `RecordRefund(order)` (debit the seller, credit the buyer)
+   for a refunded one, each tagged with its `EntryReason`. The refund pair is written beside the pay-in,
+   never in its place, so an order's ledger keeps its history and still sums to zero. Unique
+   `(PaymentOrderId, Reason, Type)`.
 8. **Wallet** — one per seller per currency (unique `(OwnerId, Currency)`); `Credit` refuses another
    currency and a balance past the storable maximum. `Credit` itself is not idempotent:
-   `PaymentOrder.WalletUpdated`, saved in the same transaction, is.
+   `PaymentOrder.WalletUpdated`, saved in the same transaction, is. `Debit` (a refund) **may go below
+   zero** on purpose — the provider has already returned the money — and is made idempotent by
+   `RefundOrder`'s return value, in the same transaction.
 9. **`AddDomainEvent` is protected** — only an aggregate raises its own events.
 10. **An order remembers its provider.** `StartExecuting` records the PSP's name (a string, so the domain
    never references `PaymentProvider`), and every later PSP call for the order goes through
@@ -133,9 +144,36 @@ Payments  Settle (on PaymentOrderSucceeded): credit wallet + ledger pair + both 
 Job       ReconcileOrdersJob every 1 min: orders Executing > 2 min → LookupAsync at their provider →
           RecordOutcome (same write as a synchronous charge); errors per order are logged and skipped
 Timer     ExpireCheckout after 15 min: fail every unsettled order → BookingPaymentFailed
-Bookings  BookingCancelled ─► CancelCheckout: fail unsettled orders; a paid one is left and logged for refund
+Bookings  BookingCancelled ─► CancelCheckout: fail unsettled orders; a paid one is left, and CheckoutRefundDue
+          is staged on a local queue                                                       [same transaction]
           no checkout yet ─► claim the booking Cancelled; a later PaymentRequested is refused (booking_cancelled)
+Bookings  RefundRequested ─► RefundCheckout ─┐
+Local     CheckoutRefundDue ─► RefundCheckout ┴► per Success order: RefundAsync at its provider (no transaction)
+          ─► RecordRefund: order Refunded + wallet debit + refund ledger pair; BookingRefunded once all refunded
 ```
+
+## Refunds
+
+- **Two halves, like a synchronous charge.** `RefundCheckout.Command` is the second command that is not
+  `ITransactionalRequest` (`TransactionTest` names both): it calls the PSP with no transaction open, then sends
+  `RecordRefund.Command`, which is transactional and does every write. Never move the PSP call inside a
+  transaction, and never let `CancelCheckout` call it directly — it runs inside one, which is why it stages
+  `CheckoutRefundDue` (pinned `[MessageIdentity("checkout-refund-due")]`, durable local queue `checkout-refund`)
+  instead.
+- **Idempotent end to end.** The adapters answer a repeated refund with the first one (Stripe: idempotency key
+  `refund:{PaymentOrderId}`, then the existing refund once the key has expired; Braintree, which has no key:
+  the sale's `RefundIds`, or a sale already `Voided`). `RecordRefund` reverses the money only when
+  `RefundOrder` returns true, and a second `RefundCheckout` finds no `Success` order left to refund.
+- **`BookingRefunded` is published after the save**, as `Settle` publishes `BookingPaid`, so a concurrency
+  retry cannot leave a copy in the outbox. Only the refund of the last paid order finds `IsFullyRefunded`.
+- **Pending counts as refunded.** The provider has taken the instruction; no refund webhook is handled, so one
+  that fails later is not heard about (known gap).
+- **A refusal is logged for a person, not retried.** `InvalidRequest` from the provider, a `Failed` refund, or a
+  `RecordRefund` failure is logged at Error ("needs a manual refund") and counted in `NeedsAttention`; the
+  booking is not reported refunded. A `Transient` provider error propagates, and Wolverine retries it on the
+  schedule in `MessagingExtension` (10 s, 1 min, 5 min, 30 min).
+- **Braintree voids an unsettled sale** instead of refunding it, and only for the full amount — a void returns
+  everything, so a partial amount is refused rather than voiding all of it.
 
 - **A booking is claimed once, by whichever message lands first** (`Domain/BookingClaim`, table
   `BookingClaims`, primary key `BookingId`). `RequestPayment` inserts a `Requested` claim with the checkout,
@@ -175,7 +213,8 @@ Bookings  BookingCancelled ─► CancelCheckout: fail unsettled orders; a paid 
   routing limited to `TicketMaster.Common.IntegrationEvents`, all three durability policies. The expiry
   timer `CheckoutExpiryDue` is pinned with `[MessageIdentity("checkout-expiry-due")]` and routed to a
   durable local queue, so it never touches the broker and a rename cannot strand stored envelopes.
-- **Consumes** `PaymentRequested`, `BookingCancelled`. **Publishes** `BookingPaid`, `BookingPaymentFailed`.
+- **Consumes** `PaymentRequested`, `BookingCancelled`, `RefundRequested`. **Publishes** `BookingPaid`,
+  `BookingPaymentFailed`, `BookingRefunded`.
 - **Always publish through `IIntegrationEventPublisher`** (`PublishAsync`, `ScheduleAsync`). It stages the
   message in Wolverine's `DbContextOutbox` on the transaction already open, and `OutboxFlushInterceptor`
   sends it only after that transaction commits (dropped on rollback). Never call Wolverine's
@@ -225,7 +264,7 @@ from `.env` (`PAYMENTS_STRIPE_SECRET_KEY`, `PAYMENTS_STRIPE_WEBHOOK_SECRET`).
 | `Tests/Payments/PaymentIntegration` | Postgres (Testcontainers) via the production `AddInfrastructureServices`; schema from `MigrateAsync`. `Features/` per slice, plus Concurrency, Integrity, RoundTrip, Precision, Timestamps, DomainEvents |
 | `…/Mechanics` | The real host (`WebApplicationFactory<Program>`) on Postgres + RabbitMQ with a stand-in Bookings host: durable endpoints, end-to-end request/cancel/expiry, outbox rollback |
 | `Tests/Payments/PaymentAdapters` | The PSP adapters in `PaymentProvider` |
-| `Tests/Payments/PaymentArchitecture` | ArchUnitNET: Domain depends only on itself, `Enums`, the BCL and MediatR; no feature area depends on another; `Shared` and `Data` never depend on `Features`; `PaymentProvider` never references `PaymentSystem`; handlers internal sealed; endpoints public sealed; every `Command` is `ITransactionalRequest` and no `Query` is — the one named exception is `SubmitPaymentMethod.Command`, which charges the PSP with no transaction open and sends the transactional `RecordOutcome.Command` for the write (never add a second exception without the same reason); feature types live in `PaymentSystem.Features.<Aggregate>` |
+| `Tests/Payments/PaymentArchitecture` | ArchUnitNET: Domain depends only on itself, `Enums`, the BCL and MediatR; no feature area depends on another; `Shared` and `Data` never depend on `Features`; `PaymentProvider` never references `PaymentSystem`; handlers internal sealed; endpoints public sealed; every `Command` is `ITransactionalRequest` and no `Query` is — the two named exceptions share one reason: `SubmitPaymentMethod.Command` charges the PSP and `RefundCheckout.Command` refunds through it, each with no transaction open, and each sends a transactional command (`RecordOutcome`, `RecordRefund`) for the write (never add another exception without that reason); feature types live in `PaymentSystem.Features.<Aggregate>` |
 
 - The fast fixture registers a recording `IIntegrationEventPublisher` (`IntegrationEventLog`, with scheduled
   messages kept separately) and `StubPsp`; the PSP is another process, so stubbing it is correct.
@@ -235,8 +274,11 @@ from `.env` (`PAYMENTS_STRIPE_SECRET_KEY`, `PAYMENTS_STRIPE_WEBHOOK_SECRET`).
 
 ## Known gaps
 
-- **Refunds are not modelled.** A booking cancelled after its payment succeeded is logged ("needs a refund")
-  on every redelivery; nothing issues the refund.
+- **Refunds are full only**, and triggered only by the system (a relocation voiding a paid booking, or a
+  booking cancelled after it was paid). `RefundRequest` already carries an amount, so partial refunds need no
+  new PSP contract — but the order, ledger and `IsFullyRefunded` all assume the whole amount.
+- **A refund that fails after being accepted as pending is not heard about** — no refund webhook is handled,
+  and `ReconcileOrdersJob` does not look at refunded orders. A refused or failed refund is only logged.
 - **No settlement-file reconciliation.** `ReconcileOrdersJob` (`Features/PaymentOrders/ReconcileOrders.cs`)
   covers orders still `Executing`; an order already failed by expiry or cancellation whose payment the PSP
   then took is only logged ("needs reconciling").

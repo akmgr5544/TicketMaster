@@ -32,7 +32,7 @@ public static class StartCheckout
                 return Error.NotFound("payment_order_not_found", $"No payment order {request.PaymentOrderId}.");
 
             var order = ProviderOutcome.OrderIn(checkout, request.PaymentOrderId);
-            if (order.Status is PaymentOrderStatus.Success or PaymentOrderStatus.Failed)
+            if (order.Status is PaymentOrderStatus.Success or PaymentOrderStatus.Failed or PaymentOrderStatus.Refunded)
                 return Error.Conflict("payment_order_settled", $"Payment order {order.PaymentOrderId} is already {order.Status}.");
 
             var gateway = ProviderOutcome.GatewayFor(gateways, order);

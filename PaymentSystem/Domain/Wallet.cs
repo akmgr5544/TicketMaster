@@ -47,4 +47,17 @@ public class Wallet : Entity
 
         Balance += amount;
     }
+
+    // Allowed below zero on purpose: the provider has already returned the money, and refusing to record it would
+    // leave the wallet claiming funds the seller no longer has. A negative balance is what the seller owes.
+    public void Debit(decimal amount, string currency)
+    {
+        MoneyAmount.EnsurePositiveAndStorable(amount, "A debit");
+        if (currency != Currency)
+            throw new PaymentDomainException($"Cannot debit {currency} from a {Currency} wallet.");
+        if (amount > MoneyAmount.MaxStorable + Balance)
+            throw new PaymentDomainException("The debit would take the balance past the smallest storable amount.");
+
+        Balance -= amount;
+    }
 }

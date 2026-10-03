@@ -8,6 +8,7 @@ public class PaymentOrder
 {
     public const int PspTokenMaxLength = 200;
     public const int ProviderMaxLength = 20;
+    public const int RefundReferenceMaxLength = 200;
 
     public Guid PaymentOrderId { get; private set; }
     public Guid CheckoutId { get; private set; }
@@ -20,6 +21,7 @@ public class PaymentOrder
     public string? PspToken { get; private set; }
     public bool WalletUpdated { get; private set; }
     public bool LedgerUpdated { get; private set; }
+    public string? RefundReference { get; private set; }
     public DateTime CreatedAt { get; private set; }
     public DateTime UpdatedAt { get; private set; }
 
@@ -97,6 +99,25 @@ public class PaymentOrder
             return false;
 
         Status = PaymentOrderStatus.Failed;
+        return true;
+    }
+
+    // Only a settled success is refunded: its wallet credit and ledger pair exist, so the refund has something to
+    // reverse. A repeat is a no-op, so a redelivered refund cannot reverse the money twice.
+    internal bool Refund(string refundReference)
+    {
+        if (string.IsNullOrWhiteSpace(refundReference))
+            throw new PaymentDomainException("A refund needs the provider's reference for it.");
+        if (refundReference.Length > RefundReferenceMaxLength)
+            throw new PaymentDomainException($"A refund reference cannot be longer than {RefundReferenceMaxLength} characters.");
+        if (Status == PaymentOrderStatus.Refunded)
+            return false;
+        EnsureSucceeded();
+        if (!WalletUpdated || !LedgerUpdated)
+            throw new PaymentDomainException("A payment order is refunded only once its settlement is recorded.");
+
+        Status = PaymentOrderStatus.Refunded;
+        RefundReference = refundReference;
         return true;
     }
 

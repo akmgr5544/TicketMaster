@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using JasperFx.Core;
+using PaymentProvider.Exceptions;
 using PaymentSystem.Data;
 using PaymentSystem.Features.Checkouts;
 using PaymentSystem.Shared.Messaging;
@@ -36,11 +37,17 @@ public static class MessagingExtension
                 .UseConventionalRouting(conventions => conventions.IncludeTypes(type =>
                     type.Namespace == typeof(PaymentRequestedIntegrationEvent).Namespace));
             options.PublishMessage<CheckoutExpiryDue>().ToLocalQueue("checkout-expiry");
+            options.PublishMessage<CheckoutRefundDue>().ToLocalQueue("checkout-refund");
 
             // The expiry and cancellation handlers retry a lost race once themselves; a second loss is retried
             // later from a fresh scope, where the change tracker holds nothing stale.
             options.OnException<DbUpdateConcurrencyException>()
                 .ScheduleRetry(1.Seconds(), 5.Seconds(), 30.Seconds());
+
+            // A provider that is down or rate-limiting is asked again, with room to recover; a refund repeated this
+            // way is answered by the provider with the first one. Anything else goes to the error queue.
+            options.OnException<PaymentProviderException>(exception => exception.Kind == PaymentProviderErrorKind.Transient)
+                .ScheduleRetry(10.Seconds(), 1.Minutes(), 5.Minutes(), 30.Minutes());
 
             options.PersistMessagesWithPostgresql(connectionString);
             options.UseEntityFrameworkCoreTransactions();

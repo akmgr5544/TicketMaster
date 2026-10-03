@@ -14,9 +14,9 @@ internal sealed class LedgerEntryConfiguration : IEntityTypeConfiguration<Ledger
         builder.Property<Guid>("Id").ValueGeneratedOnAdd();
         builder.HasKey("Id");
 
-        // One debit and one credit per order: a redelivered settlement that tries to record the pair again
-        // fails here instead of doubling the ledger.
-        builder.HasIndex(entry => new { entry.PaymentOrderId, entry.Type }).IsUnique();
+        // One debit and one credit per order and reason: a redelivered settlement or refund that tries to record
+        // its pair again fails here instead of doubling the ledger.
+        builder.HasIndex(entry => new { entry.PaymentOrderId, entry.Reason, entry.Type }).IsUnique();
         builder.HasOne<PaymentOrder>()
             .WithMany()
             .HasForeignKey(entry => entry.PaymentOrderId)
@@ -24,6 +24,7 @@ internal sealed class LedgerEntryConfiguration : IEntityTypeConfiguration<Ledger
 
         builder.Property(entry => entry.AccountId).IsRequired();
         builder.Property(entry => entry.Type).HasConversion<string>().HasMaxLength(10).IsRequired();
+        builder.Property(entry => entry.Reason).HasConversion<string>().HasMaxLength(10).IsRequired();
         builder.Property(entry => entry.Amount).HasPrecision(MoneyAmount.Precision, MoneyAmount.Scale).IsRequired();
         builder.Property(entry => entry.Currency).HasMaxLength(3).IsRequired();
         builder.Property(entry => entry.CreatedAt).IsRequired();

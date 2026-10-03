@@ -46,6 +46,14 @@ internal static class Checkouts
             paymentEvent.FailOrder(paymentOrderId);
     }
 
+    // A success whose wallet credit and ledger pair are recorded, as Settle leaves it: what a refund reverses.
+    public static void Settle(this PaymentEvent paymentEvent, Guid paymentOrderId)
+    {
+        paymentEvent.Drive(paymentOrderId, PaymentOrderStatus.Success);
+        paymentEvent.MarkWalletUpdated(paymentOrderId);
+        paymentEvent.MarkLedgerUpdated(paymentOrderId);
+    }
+
     public static PaymentEvent SingleOrderIn(PaymentOrderStatus status)
     {
         var paymentEvent = SingleOrder();

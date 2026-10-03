@@ -23,6 +23,7 @@ internal sealed class PaymentOrderConfiguration : IEntityTypeConfiguration<Payme
         builder.Property(order => order.Status).HasConversion<string>().HasMaxLength(20).IsRequired();
         builder.Property(order => order.Provider).HasMaxLength(PaymentOrder.ProviderMaxLength);
         builder.Property(order => order.PspToken).HasMaxLength(PaymentOrder.PspTokenMaxLength);
+        builder.Property(order => order.RefundReference).HasMaxLength(PaymentOrder.RefundReferenceMaxLength);
         builder.Property(order => order.WalletUpdated).IsRequired();
         builder.Property(order => order.LedgerUpdated).IsRequired();
         builder.Property(order => order.CreatedAt).IsRequired();

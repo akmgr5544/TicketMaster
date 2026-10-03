@@ -1,5 +1,6 @@
 using ArchUnitNET.xUnit;
 using MediatR;
+using PaymentSystem.Features.Checkouts;
 using PaymentSystem.Features.PaymentOrders;
 using PaymentSystem.Shared.Pipelines;
 using static ArchUnitNET.Fluent.ArchRuleDefinition;
@@ -16,14 +17,15 @@ public class TransactionTest : BaseTest
     private const string CommandName = @"(^|\+)Command$";
     private const string QueryName = @"(^|\+)Query$";
 
-    // The one exception: SubmitPaymentMethod's charge calls the PSP and must not hold a transaction while it
-    // does. It writes nothing itself — RecordOutcome.Command does, and is held to the rule.
+    // The exceptions share one reason: each calls the PSP and must not hold a transaction while it does, and
+    // writes nothing itself. SubmitPaymentMethod's charge is written by RecordOutcome.Command, RefundCheckout's
+    // refunds by RecordRefund.Command, and both of those are held to the rule. A new exception needs that reason.
     [Fact]
     public void Commands_AreTransactionalRequests()
     {
         Types().That().ImplementInterface(typeof(IRequest<>))
             .And().HaveNameMatching(CommandName)
-            .And().AreNot(typeof(SubmitPaymentMethod.Command))
+            .And().AreNot(typeof(SubmitPaymentMethod.Command), typeof(RefundCheckout.Command))
             .Should().ImplementInterface(typeof(ITransactionalRequest))
             .Check(Architecture);
     }

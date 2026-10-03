@@ -38,16 +38,20 @@ public sealed class PaymentsHostTests(PaymentsHostFixture fixture)
     {
         var listeners = BrokerEndpoints().Where(endpoint => endpoint.IsListener).ToArray();
 
-        Assert.Equal(2, listeners.Length);
+        Assert.Equal(3, listeners.Length);
         Assert.Single(listeners, l => l.Uri.ToString().Contains(nameof(PaymentRequestedIntegrationEvent)));
         Assert.Single(listeners, l => l.Uri.ToString().Contains(nameof(BookingCancelledIntegrationEvent)));
+        Assert.Single(listeners, l => l.Uri.ToString().Contains(nameof(RefundRequestedIntegrationEvent)));
         Assert.All(listeners, listener => Assert.Equal(EndpointMode.Durable, listener.Mode));
     }
 
-    [Fact]
-    public void The_expiry_timer_stays_on_a_durable_local_queue()
+    // Both are this service's own business: on the broker they would be published to every consumer of the type.
+    [Theory]
+    [InlineData(typeof(CheckoutExpiryDue))]
+    [InlineData(typeof(CheckoutRefundDue))]
+    public void Local_messages_stay_on_a_durable_local_queue(Type message)
     {
-        var routes = fixture.Services.GetRequiredService<IWolverineRuntime>().RoutingFor(typeof(CheckoutExpiryDue)).Routes
+        var routes = fixture.Services.GetRequiredService<IWolverineRuntime>().RoutingFor(message).Routes
             .OfType<MessageRoute>()
             .ToArray();
 

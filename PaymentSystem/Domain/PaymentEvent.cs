@@ -75,6 +75,19 @@ public class PaymentEvent : Entity
         RefreshIsPaymentDone();
     }
 
+    // True only when this call refunded the order; a repeat returns false so the caller reverses the money once.
+    public bool RefundOrder(Guid paymentOrderId, string refundReference)
+    {
+        var refunded = OrderById(paymentOrderId).Refund(refundReference);
+        RefreshIsPaymentDone();
+        return refunded;
+    }
+
+    // Everything that was paid has gone back, and something was paid to begin with.
+    public bool IsFullyRefunded =>
+        _paymentOrders.Exists(order => order.Status == PaymentOrderStatus.Refunded)
+        && !_paymentOrders.Exists(order => order.Status == PaymentOrderStatus.Success);
+
     public int Expire() => AbandonUnsettledOrders();
 
     public int Cancel() => AbandonUnsettledOrders();

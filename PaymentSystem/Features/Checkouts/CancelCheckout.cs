@@ -4,13 +4,15 @@ using Npgsql;
 using PaymentSystem.Data;
 using PaymentSystem.Domain;
 using PaymentSystem.Enums;
+using PaymentSystem.Shared.Messaging;
 using PaymentSystem.Shared.Pipelines;
 using PaymentSystem.Shared.Results;
 using TicketMaster.Common.IntegrationEvents;
 
 namespace PaymentSystem.Features.Checkouts;
 
-// Payments is pay-in only: an order that already succeeded is left as it is and flagged for a refund by hand.
+// Fails what is still unpaid. An order that already succeeded is not failed — a settled payment does not change its
+// mind — but refunded: the booking it paid for is gone.
 public static class CancelCheckout
 {
     public sealed record Command(long BookingId) : IRequest<Result<Response>>, ITransactionalRequest;
@@ -19,7 +21,7 @@ public static class CancelCheckout
     // the PaymentRequested message. The cancellation is recorded, so that request is refused when it lands.
     public sealed record Response(bool Found, int OrdersFailed, int OrdersAlreadyPaid);
 
-    internal sealed class Handler(PaymentDbContext context, ILogger<Handler> logger)
+    internal sealed class Handler(PaymentDbContext context, IIntegrationEventPublisher publisher, ILogger<Handler> logger)
         : IRequestHandler<Command, Result<Response>>
     {
         public async Task<Result<Response>> Handle(Command request, CancellationToken cancellationToken)
@@ -36,18 +38,17 @@ public static class CancelCheckout
 
                 var failed = checkout.Cancel();
                 var paid = checkout.PaymentOrders.Count(o => o.Status == PaymentOrderStatus.Success);
-                // Logged on every delivery, redeliveries included: nothing records that it was flagged already.
-                if (paid > 0)
-                    logger.LogWarning(
-                        "Booking {BookingId} was cancelled after {Paid} of its payment orders succeeded; checkout {CheckoutId} needs a refund.",
-                        request.BookingId, paid, checkout.CheckoutId);
 
                 if (failed == 0)
+                {
+                    await RefundIfPaidAsync(checkout, paid, cancellationToken);
                     return new Response(true, 0, paid);
+                }
 
                 try
                 {
                     await context.SaveChangesAsync(cancellationToken);
+                    await RefundIfPaidAsync(checkout, paid, cancellationToken);
                     return new Response(true, failed, paid);
                 }
                 // A PSP outcome for one of its orders landed first. Decided again over the fresh state, once;
@@ -57,6 +58,18 @@ public static class CancelCheckout
                     context.ChangeTracker.Clear();
                 }
             }
+        }
+
+        // Staged on this transaction, so it goes out only if the cancellation commits. Sent again on a redelivery:
+        // the refund itself is idempotent, so a second request costs a provider round trip and changes nothing.
+        private async Task RefundIfPaidAsync(PaymentEvent checkout, int paid, CancellationToken cancellationToken)
+        {
+            if (paid == 0)
+                return;
+
+            logger.LogInformation("Booking {BookingId} was cancelled after {Paid} of its payment orders succeeded; refunding checkout {CheckoutId}.",
+                checkout.BookingId, paid, checkout.CheckoutId);
+            await publisher.PublishAsync(new CheckoutRefundDue(checkout.BookingId), cancellationToken);
         }
 
         // False when a request claimed the booking first: its checkout is committed by now, and is cancelled instead.

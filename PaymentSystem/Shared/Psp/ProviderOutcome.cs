@@ -125,6 +125,8 @@ internal static class ProviderOutcome
             (PaymentOrderStatus.NotStarted, _) => Kind.NotStarted,
             (PaymentOrderStatus.Executing, _) => Kind.Applied,
             (PaymentOrderStatus.Success, PaymentStatus.Succeeded) => Kind.AlreadyApplied,
+            // The intent stays succeeded after a refund, so a late success webhook is old news, not a conflict.
+            (PaymentOrderStatus.Refunded, PaymentStatus.Succeeded) => Kind.AlreadyApplied,
             (PaymentOrderStatus.Failed, PaymentStatus.Canceled) => Kind.AlreadyApplied,
             _ => Kind.Superseded
         };

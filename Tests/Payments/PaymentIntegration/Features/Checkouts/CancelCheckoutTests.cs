@@ -12,12 +12,8 @@ namespace PaymentIntegration.Features.Checkouts;
 
 public sealed class CancelCheckoutTests : MessagingTest
 {
-    private readonly LogCapture _logs;
-
     public CancelCheckoutTests(PaymentsFixture fixture) : base(fixture)
     {
-        _logs = fixture.Services.GetRequiredService<LogCapture>();
-        _logs.Clear();
     }
 
     private async Task CancelAsync(long bookingId)
@@ -42,8 +38,10 @@ public sealed class CancelCheckoutTests : MessagingTest
         Assert.NotNull(published.TransactionId);
     }
 
+    // The cancellation does not fail a paid order — a settled payment does not change its mind — and does not call
+    // the provider with its transaction open. It stages the refund, which runs after it commits.
     [Fact]
-    public async Task Cancelling_a_paid_booking_reverses_nothing_and_flags_it_for_a_refund()
+    public async Task Cancelling_a_paid_booking_leaves_the_order_and_stages_its_refund()
     {
         var checkout = await SeedCheckoutAsync(OrderState.Success);
         var before = await ReadCheckoutAsync(checkout.CheckoutId);
@@ -52,16 +50,14 @@ public sealed class CancelCheckoutTests : MessagingTest
 
         var after = await ReadCheckoutAsync(checkout.CheckoutId);
         Assert.Equal(PaymentOrderStatus.Success, after.Order(checkout.OrderId(0)).Status);
-        Assert.True(after.IsPaymentDone);
         Assert.Equal(before.Version, after.Version);
-        Assert.Empty(Outbox.Published);
-        Assert.Contains(_logs.Lines, line => line.StartsWith("Warning")
-                                             && line.Contains(checkout.BookingId.ToString())
-                                             && line.Contains("refund"));
+        var published = Assert.Single(Outbox.Published);
+        Assert.Equal(new CheckoutRefundDue(checkout.BookingId), published.Event);
+        Assert.NotNull(published.TransactionId);
     }
 
     [Fact]
-    public async Task Cancelling_a_partly_paid_booking_fails_the_rest_and_flags_the_paid_order()
+    public async Task Cancelling_a_partly_paid_booking_fails_the_rest_and_stages_a_refund_of_the_paid_order()
     {
         var checkout = await SeedCheckoutAsync(OrderState.Success, OrderState.Executing);
 
@@ -71,7 +67,7 @@ public sealed class CancelCheckoutTests : MessagingTest
         Assert.Equal(PaymentOrderStatus.Success, stored.Order(checkout.OrderId(0)).Status);
         Assert.Equal(PaymentOrderStatus.Failed, stored.Order(checkout.OrderId(1)).Status);
         Assert.Equal(checkout.BookingId, Assert.Single(Outbox.OfType<BookingPaymentFailedIntegrationEvent>()).BookingId);
-        Assert.Contains(_logs.Lines, line => line.StartsWith("Warning") && line.Contains("refund"));
+        Assert.Equal(checkout.BookingId, Assert.Single(Outbox.OfType<CheckoutRefundDue>()).BookingId);
     }
 
     // The cancellation overtook PaymentRequested, or the booking never reached payment. Either way it is kept,
