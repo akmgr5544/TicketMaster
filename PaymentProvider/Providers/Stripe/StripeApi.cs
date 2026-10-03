@@ -63,6 +63,39 @@ internal sealed class StripeApi(IOptions<StripeOptions> options) : IStripeApi
         return intent is null ? null : ToContract(intent);
     }
 
+    public async Task<StripeRefund> CreateRefundAsync(StripeCreateRefund request, CancellationToken cancellationToken)
+    {
+        var createOptions = new RefundCreateOptions
+        {
+            PaymentIntent = request.PaymentIntentId,
+            Amount = request.Amount,
+            Metadata = new Dictionary<string, string> { [PaymentOrderIdKey] = request.PaymentOrderId },
+        };
+        var requestOptions = new RequestOptions { IdempotencyKey = request.IdempotencyKey };
+
+        try
+        {
+            var refund = await CallAsync(
+                () => _client.V1.Refunds.CreateAsync(createOptions, requestOptions, cancellationToken),
+                cancellationToken);
+            return ToContract(refund);
+        }
+        // The idempotency key only lasts 24 hours. Past that, a second request for the same intent is refused as
+        // already refunded, and the refund that did that is the answer.
+        catch (PaymentProviderException exception)
+            when (exception.InnerException is StripeException { StripeError.Code: "charge_already_refunded" })
+        {
+            var refunds = await CallAsync(
+                () => _client.V1.Refunds.ListAsync(
+                    new RefundListOptions { PaymentIntent = request.PaymentIntentId }, cancellationToken: cancellationToken),
+                cancellationToken);
+            var latest = refunds.Data.MaxBy(refund => refund.Created)
+                         ?? throw new PaymentProviderException(PaymentProviderKind.Stripe, PaymentProviderErrorKind.Unknown,
+                             $"Payment intent {request.PaymentIntentId} is refunded but lists no refund.", exception);
+            return ToContract(latest);
+        }
+    }
+
     public StripeEvent ParseEvent(string body, string signatureHeader)
     {
         // Verified with the version check off first, so a forgery and a version mismatch are told
@@ -107,6 +140,20 @@ internal sealed class StripeApi(IOptions<StripeOptions> options) : IStripeApi
             intent.ClientSecret,
             intent.Metadata.GetValueOrDefault(PaymentOrderIdKey),
             intent.LastPaymentError?.Message);
+
+    private static StripeRefund ToContract(Refund refund) =>
+        new(refund.Id, ToRefundStatus(refund.Status), refund.FailureReason);
+
+    private static StripeRefundStatus ToRefundStatus(string status) =>
+        status switch
+        {
+            "pending" => StripeRefundStatus.Pending,
+            "requires_action" => StripeRefundStatus.RequiresAction,
+            "succeeded" => StripeRefundStatus.Succeeded,
+            "failed" => StripeRefundStatus.Failed,
+            "canceled" => StripeRefundStatus.Canceled,
+            _ => StripeRefundStatus.Unknown,
+        };
 
     private static StripePaymentIntentStatus ToStatus(string status) =>
         status switch

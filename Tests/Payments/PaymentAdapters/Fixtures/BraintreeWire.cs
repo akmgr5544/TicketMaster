@@ -13,7 +13,9 @@ public static class BraintreeWire
         DateTime? createdAt = null,
         string? processorResponseText = null,
         string? gatewayRejectionReason = null,
-        string? settlementResponseText = null)
+        string? settlementResponseText = null,
+        string type = "sale",
+        params string[] refundIds)
     {
         var created = (createdAt ?? new DateTime(2026, 9, 30, 10, 0, 0, DateTimeKind.Utc))
             .ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
@@ -22,7 +24,8 @@ public static class BraintreeWire
             <transaction>
               <id>{id}</id>
               <status>{status}</status>
-              <type>sale</type>
+              <type>{type}</type>
+              <refund-ids type="array">{string.Concat(refundIds.Select(refundId => $"<item>{refundId}</item>"))}</refund-ids>
               <amount>10.00</amount>
               <currency-iso-code>EUR</currency-iso-code>
               {Element("order-id", orderId)}

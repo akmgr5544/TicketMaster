@@ -15,6 +15,10 @@ public interface IPaymentGateway
     // Null when the provider has no payment for the order yet.
     Task<PaymentResult?> LookupAsync(PaymentLookupRequest request, CancellationToken cancellationToken = default);
 
+    // Idempotent per payment order: asking again for an order already refunded returns that refund, never a
+    // second one. Throws InvalidRequest when the provider holds no successful payment for the order.
+    Task<RefundResult> RefundAsync(RefundRequest request, CancellationToken cancellationToken = default);
+
     // Verifies the signature before reading anything; throws PaymentProviderException with
     // InvalidSignature if it fails. Null for a verified event that is not about a pay-in.
     WebhookEvent? ParseWebhook(WebhookRequest request);

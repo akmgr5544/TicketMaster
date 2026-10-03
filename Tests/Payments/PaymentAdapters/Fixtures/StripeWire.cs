@@ -45,6 +45,23 @@ public static class StripeWire
         });
     }
 
+    public static string Refund(string id = "re_1", string status = "succeeded", long created = 1_700_000_100,
+        string? failureReason = null) =>
+        JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["id"] = id,
+            ["object"] = "refund",
+            ["amount"] = 1099,
+            ["currency"] = "usd",
+            ["payment_intent"] = "pi_1",
+            ["status"] = status,
+            ["created"] = created,
+            ["failure_reason"] = failureReason,
+        });
+
+    public static string List(params string[] items) =>
+        $$"""{"object":"list","url":"/v1/refunds","has_more":false,"data":[{{string.Join(",", items)}}]}""";
+
     public static string Search(params string[] intents) =>
         $$"""{"object":"search_result","url":"/v1/payment_intents/search","has_more":false,"data":[{{string.Join(",", intents)}}]}""";
 

@@ -60,6 +60,49 @@ internal sealed class BraintreePaymentGateway(IBraintreeApi api, IOptions<Braint
         return transaction is null ? null : ToResult(transaction);
     }
 
+    public async Task<RefundResult> RefundAsync(RefundRequest request, CancellationToken cancellationToken = default)
+    {
+        RequestGuard.PaymentOrderId(Kind, request.PaymentOrderId);
+        RequestGuard.Amount(Kind, request.Amount);
+
+        var sale = request.ProviderReference is { } reference
+            ? await api.FindAsync(reference)
+            : await api.FindLatestByOrderIdAsync(request.PaymentOrderId.ToString());
+        if (sale is null)
+            throw RequestGuard.Invalid(Kind, $"Payment order {request.PaymentOrderId} has no payment to refund.");
+
+        // Braintree has no idempotency key, so a repeated request is answered from what the sale already shows.
+        if (sale.Status == BraintreeTransactionStatus.Voided)
+            return new RefundResult(sale.Id, RefundStatus.Succeeded);
+        if (sale.RefundIds is [.., var latestRefundId] && await api.FindAsync(latestRefundId) is { } issued)
+            return ToRefundResult(issued);
+
+        // An unsettled sale cannot be refunded, only voided — which returns all of it, so only a full refund
+        // may take that path.
+        switch (sale.Status)
+        {
+            case BraintreeTransactionStatus.Authorizing
+                or BraintreeTransactionStatus.Authorized
+                or BraintreeTransactionStatus.SubmittedForSettlement:
+                if (request.Amount != sale.Amount)
+                    throw RequestGuard.Invalid(Kind,
+                        $"Sale {sale.Id} has not settled, so it can only be voided in full, not refunded in part.");
+                var voided = await api.VoidAsync(sale.Id);
+                return voided.Status == BraintreeTransactionStatus.Voided
+                    ? new RefundResult(voided.Id, RefundStatus.Succeeded)
+                    : new RefundResult(voided.Id, RefundStatus.Failed, voided.FailureReason);
+
+            case BraintreeTransactionStatus.Settling
+                or BraintreeTransactionStatus.SettlementConfirmed
+                or BraintreeTransactionStatus.Settled:
+                return ToRefundResult(await api.RefundAsync(sale.Id, request.Amount));
+
+            default:
+                throw RequestGuard.Invalid(Kind,
+                    $"Payment order {request.PaymentOrderId} has no successful payment to refund (sale is {sale.Status}).");
+        }
+    }
+
     public WebhookEvent? ParseWebhook(WebhookRequest request)
     {
         var form = HttpUtility.ParseQueryString(request.Body);
@@ -89,6 +132,16 @@ internal sealed class BraintreePaymentGateway(IBraintreeApi api, IOptions<Braint
             ? merchantAccountId
             : throw new PaymentProviderException(
                 Kind, PaymentProviderErrorKind.InvalidRequest, $"No Braintree merchant account is configured for {currency}.");
+
+    // A refund is a credit transaction with the same lifecycle as a sale, and is treated the same way: once
+    // submitted for settlement it counts as done.
+    private RefundResult ToRefundResult(BraintreeTransaction refund) =>
+        ToStatus(refund) switch
+        {
+            PaymentStatus.Succeeded => new RefundResult(refund.Id, RefundStatus.Succeeded),
+            PaymentStatus.Failed or PaymentStatus.Canceled => new RefundResult(refund.Id, RefundStatus.Failed, refund.FailureReason),
+            _ => new RefundResult(refund.Id, RefundStatus.Pending),
+        };
 
     private PaymentResult ToResult(BraintreeTransaction transaction) =>
         new(transaction.Id, ToStatus(transaction), transaction.FailureReason);

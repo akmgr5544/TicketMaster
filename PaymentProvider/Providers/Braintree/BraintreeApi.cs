@@ -72,6 +72,12 @@ internal sealed class BraintreeApi(IOptions<BraintreeOptions> options) : IBraint
         return latest is null ? null : ToContract(latest);
     }
 
+    public async Task<BraintreeTransaction> RefundAsync(string transactionId, decimal amount) =>
+        ToContract(Outcome(await CallAsync(() => _gateway.Transaction.RefundAsync(transactionId, amount))));
+
+    public async Task<BraintreeTransaction> VoidAsync(string transactionId) =>
+        ToContract(Outcome(await CallAsync(() => _gateway.Transaction.VoidAsync(transactionId))));
+
     public BraintreeWebhook ParseWebhook(string signature, string payload)
     {
         WebhookNotification notification;
@@ -100,8 +106,18 @@ internal sealed class BraintreeApi(IOptions<BraintreeOptions> options) : IBraint
             _ => null,
         };
 
-        return new BraintreeTransaction(transaction.Id, status, transaction.OrderId, failureReason);
+        return new BraintreeTransaction(transaction.Id, status, transaction.OrderId, failureReason, transaction.RefundIds,
+            transaction.Amount);
     }
+
+    // A refused refund or void comes back without a transaction; the message says why (already refunded,
+    // amount too large, wrong status).
+    private static Transaction Outcome(Result<Transaction> result) =>
+        result.IsSuccess()
+            ? result.Target
+            : result.Transaction
+              ?? throw new PaymentProviderException(
+                  PaymentProviderKind.Braintree, PaymentProviderErrorKind.InvalidRequest, result.Message);
 
     private static BraintreeTransactionStatus ToStatus(TransactionStatus status) =>
         status switch

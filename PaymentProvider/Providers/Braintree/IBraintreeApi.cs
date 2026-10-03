@@ -12,5 +12,9 @@ internal interface IBraintreeApi
 
     Task<BraintreeTransaction?> FindLatestByOrderIdAsync(string orderId);
 
+    Task<BraintreeTransaction> RefundAsync(string transactionId, decimal amount);
+
+    Task<BraintreeTransaction> VoidAsync(string transactionId);
+
     BraintreeWebhook ParseWebhook(string signature, string payload);
 }

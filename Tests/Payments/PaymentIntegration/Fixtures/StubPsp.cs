@@ -56,6 +56,13 @@ public sealed class StubGateway(PaymentProviderKind kind) : IPaymentGateway
 
     public Func<PaymentLookupRequest, PaymentResult?> OnLookup { get; set; } = null!;
 
+    public ConcurrentQueue<RefundRequest> Refunds { get; } = new();
+
+    public Func<RefundRequest, RefundResult> OnRefund { get; set; } = null!;
+
+    // Stable per order, the way the real adapters answer a repeated refund with the first.
+    public static string RefundReferenceFor(Guid paymentOrderId) => $"re_{paymentOrderId:N}";
+
     // Distinct per call, so a test can tell a replayed client token from the first.
     public static string ClientTokenFor(Guid paymentOrderId, int call) => $"client_secret_{paymentOrderId:N}_{call}";
 
@@ -67,8 +74,10 @@ public sealed class StubGateway(PaymentProviderKind kind) : IPaymentGateway
         Checkouts.Clear();
         Submissions.Clear();
         Lookups.Clear();
+        Refunds.Clear();
         // The provider has no payment for the order until a test says otherwise.
         OnLookup = _ => null;
+        OnRefund = request => new RefundResult(RefundReferenceFor(request.PaymentOrderId), RefundStatus.Succeeded);
         OnCheckout = request => new CheckoutSession(
             kind == PaymentProviderKind.Braintree ? null : ReferenceFor(request.PaymentOrderId),
             ClientTokenFor(request.PaymentOrderId, Checkouts.Count));
@@ -94,6 +103,12 @@ public sealed class StubGateway(PaymentProviderKind kind) : IPaymentGateway
     {
         Lookups.Enqueue(request);
         return Task.FromResult(OnLookup(request));
+    }
+
+    public Task<RefundResult> RefundAsync(RefundRequest request, CancellationToken cancellationToken = default)
+    {
+        Refunds.Enqueue(request);
+        return Task.FromResult(OnRefund(request));
     }
 
     // Signed by a header, as the real ones are: anything but the valid signature is refused before the body is read.

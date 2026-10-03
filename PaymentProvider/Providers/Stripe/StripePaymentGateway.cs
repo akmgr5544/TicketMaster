@@ -41,6 +41,30 @@ internal sealed class StripePaymentGateway(IStripeApi api) : IPaymentGateway
         return intent is null ? null : ToResult(intent);
     }
 
+    public async Task<RefundResult> RefundAsync(RefundRequest request, CancellationToken cancellationToken = default)
+    {
+        RequestGuard.PaymentOrderId(Kind, request.PaymentOrderId);
+        var currency = RequestGuard.Currency(Kind, request.Currency);
+
+        var intent = request.ProviderReference is { } reference
+            ? await api.GetPaymentIntentAsync(reference, cancellationToken)
+            : await api.FindPaymentIntentAsync(request.PaymentOrderId.ToString(), cancellationToken);
+        if (intent is not { Status: StripePaymentIntentStatus.Succeeded })
+            throw RequestGuard.Invalid(Kind, $"Payment order {request.PaymentOrderId} has no successful payment to refund.");
+
+        var paymentOrderId = request.PaymentOrderId.ToString();
+        var refund = await api.CreateRefundAsync(
+            new StripeCreateRefund(
+                intent.Id,
+                StripeAmount.ToMinorUnits(request.Amount, currency),
+                paymentOrderId,
+                // Keyed on the order, as checkout is, so a redelivered refund replays the first instead of a second.
+                IdempotencyKey: $"refund:{paymentOrderId}"),
+            cancellationToken);
+
+        return new RefundResult(refund.Id, ToStatus(refund), refund.FailureReason);
+    }
+
     public WebhookEvent? ParseWebhook(WebhookRequest request)
     {
         var signature = request.GetHeader(SignatureHeader)
@@ -60,6 +84,16 @@ internal sealed class StripePaymentGateway(IStripeApi api) : IPaymentGateway
 
     private PaymentResult ToResult(StripePaymentIntent intent) =>
         new(intent.Id, ToStatus(intent), intent.LastPaymentError);
+
+    private RefundStatus ToStatus(StripeRefund refund) =>
+        refund.Status switch
+        {
+            StripeRefundStatus.Pending or StripeRefundStatus.RequiresAction => RefundStatus.Pending,
+            StripeRefundStatus.Succeeded => RefundStatus.Succeeded,
+            StripeRefundStatus.Failed or StripeRefundStatus.Canceled => RefundStatus.Failed,
+            _ => throw new PaymentProviderException(
+                Kind, PaymentProviderErrorKind.Unknown, $"Refund {refund.Id} has an unrecognised status."),
+        };
 
     private PaymentStatus ToStatus(StripePaymentIntent intent) =>
         intent.Status switch
