@@ -1,647 +1,371 @@
 using PaymentSystem.Domain;
-using PaymentSystem.Domain.Events;
 using PaymentSystem.Domain.Exceptions;
+using PaymentSystem.Domain.Shared;
 using PaymentSystem.Enums;
-using static PaymentDomain.Checkouts;
 
 namespace PaymentDomain;
 
-public class PaymentEventTests
+public sealed class PaymentEventTests
 {
-    private static readonly PaymentOrderStatus[] AllStatuses =
-        [PaymentOrderStatus.NotStarted, PaymentOrderStatus.Executing, PaymentOrderStatus.Success, PaymentOrderStatus.Failed];
+    private const string Provider = "Stripe";
+    private const string Reference = "pi_123";
 
-    private static PaymentEvent ThreeSellers() => WithLines(Line(10m), Line(20m), Line(30m, "EUR"));
-
-    // --- Creation ---
-
-    [Fact]
-    public void A_new_checkout_is_not_paid()
+    private static PaymentEvent NewCheckout(params decimal[] amounts)
     {
-        var checkoutId = Guid.NewGuid();
-        var buyerId = Guid.NewGuid();
+        var checkout = PaymentEvent.Create(42, Guid.NewGuid(), "USD");
+        foreach (var amount in amounts)
+            checkout.AddPaymentOrder(Guid.NewGuid(), amount);
+        return checkout;
+    }
 
-        var paymentEvent = NewCheckout(checkoutId, buyerId).WithOrders(Line());
+    private static Guid OnlyOrder(PaymentEvent checkout) => checkout.PaymentOrders.Single().PaymentOrderId;
 
-        Assert.Equal(checkoutId, paymentEvent.CheckoutId);
-        Assert.Equal(buyerId, paymentEvent.BuyerId);
-        Assert.False(paymentEvent.IsPaymentDone);
-        Assert.Empty(paymentEvent.DomainEvents);
+    private static PaymentEvent CheckoutWithOrderIn(PaymentOrderStatus status)
+    {
+        var checkout = NewCheckout(100m);
+        var id = OnlyOrder(checkout);
+        if (status == PaymentOrderStatus.Init)
+            return checkout;
+
+        checkout.StartOrder(id, Provider, Reference);
+        switch (status)
+        {
+            case PaymentOrderStatus.Success:
+                checkout.SucceedOrder(id, Reference);
+                break;
+            case PaymentOrderStatus.Failed:
+                checkout.FailOrder(id);
+                break;
+            case PaymentOrderStatus.Refunded:
+                checkout.SucceedOrder(id, Reference);
+                checkout.MarkOrderRefunded(id);
+                break;
+        }
+        return checkout;
+    }
+
+    // C1
+    [Fact]
+    public void A_new_checkout_owes_nothing_yet()
+    {
+        var buyer = Guid.NewGuid();
+
+        var checkout = PaymentEvent.Create(42, buyer, "usd");
+
+        Assert.Equal(42, checkout.BookingId);
+        Assert.Equal(buyer, checkout.BuyerId);
+        Assert.Equal(Money.Zero("USD"), checkout.TotalAmount);
+        Assert.False(checkout.IsPaymentDone);
+        Assert.Null(checkout.PaymentMethodId);
+        Assert.Empty(checkout.PaymentOrders);
     }
 
     [Fact]
-    public void Refuses_an_empty_checkout_or_buyer()
+    public void A_checkout_in_an_invalid_currency_is_refused() =>
+        Assert.Throws<PaymentDomainException>(() => PaymentEvent.Create(42, Guid.NewGuid(), "DOLLARS"));
+
+    // C2
+    [Fact]
+    public void An_order_is_kept_in_the_checkouts_currency_and_starts_in_init()
     {
-        Assert.Throws<PaymentDomainException>(() => PaymentEvent.Create(Guid.Empty, Random.Shared.NextInt64(1, long.MaxValue), Guid.NewGuid()));
-        Assert.Throws<PaymentDomainException>(() => PaymentEvent.Create(Guid.NewGuid(), Random.Shared.NextInt64(1, long.MaxValue), Guid.Empty));
-        Assert.Throws<PaymentDomainException>(() => PaymentEvent.Create(Guid.Empty, Random.Shared.NextInt64(1, long.MaxValue), Guid.Empty));
+        var checkout = PaymentEvent.Create(42, Guid.NewGuid(), "USD");
+        var seller = Guid.NewGuid();
+
+        checkout.AddPaymentOrder(seller, 25.50m);
+
+        var order = checkout.PaymentOrders.Single();
+        Assert.Equal(seller, order.SellerId);
+        Assert.Equal(Money.Create(25.50m, "USD"), order.Amount);
+        Assert.Equal(PaymentOrderStatus.Init, order.Status);
+        Assert.Equal(checkout.CheckoutId, order.CheckoutId);
     }
 
     [Fact]
-    public void Refuses_a_checkout_for_no_booking() =>
-        Assert.Throws<PaymentDomainException>(() => PaymentEvent.Create(Guid.NewGuid(), 0, Guid.NewGuid()));
+    public void The_total_is_the_sum_of_its_orders() =>
+        Assert.Equal(Money.Create(35.75m, "USD"), NewCheckout(25.50m, 10.25m).TotalAmount);
 
-    // TrueForAll holds over an empty list; a checkout with nothing in it must never read as paid.
     [Fact]
-    public void A_checkout_with_no_orders_yet_is_not_paid()
-    {
-        var paymentEvent = NewCheckout();
+    public void An_order_for_nothing_is_refused() =>
+        Assert.Throws<PaymentDomainException>(() => NewCheckout(0m));
 
-        Assert.Empty(paymentEvent.PaymentOrders);
-        Assert.Equal(0, paymentEvent.OrderCount);
-        Assert.False(paymentEvent.IsPaymentDone);
+    [Fact]
+    public void A_negative_order_is_refused() =>
+        Assert.Throws<PaymentDomainException>(() => NewCheckout(-5m));
+
+    [Fact]
+    public void An_order_finer_than_a_cent_is_refused() =>
+        Assert.Throws<PaymentDomainException>(() => NewCheckout(10.001m));
+
+    [Fact]
+    public void A_refused_order_leaves_the_checkout_unchanged()
+    {
+        var checkout = NewCheckout(10m);
+
+        Assert.Throws<PaymentDomainException>(() => checkout.AddPaymentOrder(Guid.NewGuid(), 0m));
+
+        Assert.Single(checkout.PaymentOrders);
+        Assert.Equal(Money.Create(10m, "USD"), checkout.TotalAmount);
     }
 
     [Fact]
-    public void Adding_an_order_counts_it()
+    public void No_order_can_be_added_once_the_checkout_is_paid()
     {
-        var paymentEvent = NewCheckout().WithOrders(Line(), Line());
+        var checkout = CheckoutWithOrderIn(PaymentOrderStatus.Success);
+        Assert.True(checkout.IsPaymentDone);
 
-        Assert.Equal(2, paymentEvent.OrderCount);
+        Assert.Throws<PaymentDomainException>(() => checkout.AddPaymentOrder(Guid.NewGuid(), 5m));
+    }
+
+    // C3
+    [Fact]
+    public void A_checkout_with_no_orders_cannot_be_completed() =>
+        Assert.Throws<PaymentDomainException>(() => PaymentEvent.Create(42, Guid.NewGuid(), "USD").MarkAsComplete());
+
+    // C4
+    [Theory]
+    [InlineData(PaymentOrderStatus.Init)]
+    [InlineData(PaymentOrderStatus.Executing)]
+    public void Cancelling_fails_an_order_still_waiting_on_the_buyer(PaymentOrderStatus status)
+    {
+        var checkout = CheckoutWithOrderIn(status);
+
+        var failed = checkout.Cancel();
+
+        Assert.Equal(1, failed);
+        Assert.Equal(PaymentOrderStatus.Failed, checkout.PaymentOrders.Single().Status);
     }
 
     [Theory]
-    [InlineData(PaymentOrderStatus.Executing)]
     [InlineData(PaymentOrderStatus.Success)]
     [InlineData(PaymentOrderStatus.Failed)]
-    public void Refuses_a_new_order_once_payment_has_begun(PaymentOrderStatus status)
+    [InlineData(PaymentOrderStatus.Refunded)]
+    public void Cancelling_leaves_a_settled_order_alone(PaymentOrderStatus status)
     {
-        var paymentEvent = SingleOrderIn(status);
-        var before = Capture(paymentEvent);
+        var checkout = CheckoutWithOrderIn(status);
 
-        var thrown = Record.Exception(() => paymentEvent.WithOrders(Line()));
+        var failed = checkout.Cancel();
 
-        Assert.IsType<PaymentDomainException>(thrown);
-        Assert.Equal(before, Capture(paymentEvent));
-    }
-
-    public static TheoryData<OrderLine> BadLines => new()
-    {
-        new OrderLine(Guid.Empty, 10m, "USD"),
-        new OrderLine(Guid.NewGuid(), 0m, "USD"),
-        new OrderLine(Guid.NewGuid(), -1m, "USD"),
-        new OrderLine(Guid.NewGuid(), 0.001m, "USD"),
-        new OrderLine(Guid.NewGuid(), 10_000_000_000_000_000m, "USD"),
-        new OrderLine(Guid.NewGuid(), 10m, "usd"),
-        new OrderLine(Guid.NewGuid(), 10m, null!),
-    };
-
-    // A refused order must leave nothing behind, or the checkout would count an order it never got.
-    [Theory]
-    [MemberData(nameof(BadLines))]
-    public void A_bad_order_is_refused_and_leaves_the_checkout_as_it_was(OrderLine bad)
-    {
-        var paymentEvent = WithLines(Line());
-        var before = Capture(paymentEvent);
-
-        var thrown = Record.Exception(() => paymentEvent.WithOrders(bad));
-
-        Assert.IsType<PaymentDomainException>(thrown);
-        Assert.Equal(before, Capture(paymentEvent));
-        Assert.Equal(1, paymentEvent.OrderCount);
+        Assert.Equal(0, failed);
+        Assert.Equal(status, checkout.PaymentOrders.Single().Status);
     }
 
     [Fact]
-    public void Creates_one_order_per_line_carrying_the_checkout_and_buyer()
+    public void Cancelling_counts_only_the_orders_it_failed()
     {
-        var checkoutId = Guid.NewGuid();
-        var buyerId = Guid.NewGuid();
-        OrderLine[] lines = [Line(10m), Line(20.25m, "EUR"), Line(0.01m, "GBP")];
+        var checkout = NewCheckout(10m, 20m, 30m);
+        var paid = checkout.PaymentOrders.ElementAt(0).PaymentOrderId;
+        checkout.StartOrder(paid, Provider, Reference);
+        checkout.SucceedOrder(paid, Reference);
+        checkout.StartOrder(checkout.PaymentOrders.ElementAt(1).PaymentOrderId, Provider, Reference);
 
-        var paymentEvent = NewCheckout(checkoutId, buyerId).WithOrders(lines);
-
-        Assert.Equal(lines.Length, paymentEvent.PaymentOrders.Count);
-        foreach (var line in lines)
-        {
-            var order = Assert.Single(paymentEvent.PaymentOrders, order => order.MerchantId == line.MerchantId);
-            Assert.Equal(checkoutId, order.CheckoutId);
-            Assert.Equal(buyerId, order.BuyerId);
-            Assert.Equal(line.Amount, order.Amount);
-            Assert.Equal(line.Currency, order.Currency);
-            Assert.Equal(PaymentOrderStatus.NotStarted, order.Status);
-        }
+        Assert.Equal(2, checkout.Cancel());
+        Assert.Equal(PaymentOrderStatus.Success, checkout.FindOrder(paid).Status);
     }
 
     [Fact]
-    public void Order_ids_are_unique_within_a_checkout()
+    public void Cancelling_twice_fails_nothing_the_second_time()
     {
-        var paymentEvent = WithLines(Enumerable.Range(0, 200).Select(_ => Line()).ToArray());
+        var checkout = NewCheckout(10m);
+        checkout.Cancel();
 
-        var ids = paymentEvent.Ids();
-
-        Assert.DoesNotContain(Guid.Empty, ids);
-        Assert.Equal(ids.Length, ids.Distinct().Count());
+        Assert.Equal(0, checkout.Cancel());
     }
 
-    // The article's model is one payment order per seller; two orders to one seller double the PSP calls
-    // and make "which order is this callback for" ambiguous for that seller.
+    // C5
     [Fact]
-    public void Refuses_two_lines_for_the_same_seller()
+    public void Starting_an_order_records_its_provider_and_reference()
     {
-        var merchantId = Guid.NewGuid();
+        var checkout = NewCheckout(10m);
+        var id = OnlyOrder(checkout);
 
-        var thrown = Record.Exception(() => WithLines(new OrderLine(merchantId, 10m, "USD"), new OrderLine(merchantId, 5m, "USD")));
+        var update = checkout.StartOrder(id, Provider, Reference);
 
-        Assert.IsType<PaymentDomainException>(thrown);
-    }
-
-    [Fact]
-    public void Refuses_the_same_seller_twice_among_other_sellers()
-    {
-        var merchantId = Guid.NewGuid();
-
-        var thrown = Record.Exception(() => WithLines(Line(), new OrderLine(merchantId, 1m, "USD"), Line(), new OrderLine(merchantId, 2m, "EUR")));
-
-        Assert.IsType<PaymentDomainException>(thrown);
+        var order = checkout.FindOrder(id);
+        Assert.Equal(OrderUpdate.Applied, update);
+        Assert.Equal(PaymentOrderStatus.Executing, order.Status);
+        Assert.Equal(Provider, order.Provider);
+        Assert.Equal(Reference, order.PspTokenRef);
     }
 
     [Fact]
-    public void Refuses_a_buyer_who_is_one_of_several_sellers()
+    public void Starting_again_through_the_same_provider_changes_nothing()
     {
-        var buyerId = Guid.NewGuid();
+        var checkout = CheckoutWithOrderIn(PaymentOrderStatus.Executing);
+        var id = OnlyOrder(checkout);
 
-        var thrown = Record.Exception(() => NewCheckout(buyerId: buyerId).WithOrders(Line(), new OrderLine(buyerId, 1m, "USD")));
+        var update = checkout.StartOrder(id, Provider, "pi_other");
 
-        Assert.IsType<PaymentDomainException>(thrown);
+        Assert.Equal(OrderUpdate.AlreadyApplied, update);
+        Assert.Equal(Reference, checkout.FindOrder(id).PspTokenRef);
+        Assert.Equal(PaymentOrderStatus.Executing, checkout.FindOrder(id).Status);
     }
 
     [Fact]
-    public void Two_checkouts_with_the_same_caller_key_keep_it()
+    public void Starting_through_a_different_provider_is_refused()
     {
-        var checkoutId = Guid.NewGuid();
+        var checkout = CheckoutWithOrderIn(PaymentOrderStatus.Executing);
 
-        var first = NewCheckout(checkoutId).WithOrders(Line());
-        var second = NewCheckout(checkoutId).WithOrders(Line());
-
-        Assert.Equal(checkoutId, first.CheckoutId);
-        Assert.Equal(checkoutId, second.CheckoutId);
-        Assert.Empty(first.Ids().Intersect(second.Ids()));
-    }
-
-    // --- The orders collection is the root's, not the caller's ---
-
-    [Fact]
-    public void The_orders_cannot_be_added_to_or_removed_through_a_cast()
-    {
-        var paymentEvent = ThreeSellers();
-        var stranger = SingleOrder().Only();
-
-        if (paymentEvent.PaymentOrders is ICollection<PaymentOrder> collection)
-        {
-            Assert.ThrowsAny<NotSupportedException>(() => collection.Add(stranger));
-            Assert.ThrowsAny<NotSupportedException>(() => collection.Remove(collection.First()));
-            Assert.ThrowsAny<NotSupportedException>(() => collection.Clear());
-        }
-
-        Assert.Null(paymentEvent.PaymentOrders as List<PaymentOrder>);
-        Assert.Null(paymentEvent.PaymentOrders as PaymentOrder[]);
-        Assert.Equal(3, paymentEvent.PaymentOrders.Count);
-        Assert.DoesNotContain(stranger, paymentEvent.PaymentOrders);
-    }
-
-    [Fact]
-    public void The_orders_cannot_be_replaced_through_an_indexer()
-    {
-        var paymentEvent = ThreeSellers();
-        var stranger = SingleOrder().Only();
-
-        if (paymentEvent.PaymentOrders is IList<PaymentOrder> list)
-            Assert.ThrowsAny<NotSupportedException>(() => list[0] = stranger);
-
-        Assert.DoesNotContain(stranger, paymentEvent.PaymentOrders);
-    }
-
-    // --- Addressing an order the checkout does not own ---
-
-    public static TheoryData<string> Operations => new() { "start", "succeed", "fail", "wallet", "ledger" };
-
-    private static void Apply(PaymentEvent paymentEvent, Guid id, string operation)
-    {
-        switch (operation)
-        {
-            case "start": paymentEvent.StartExecuting(id, Provider, Token); break;
-            case "succeed": paymentEvent.SucceedOrder(id); break;
-            case "fail": paymentEvent.FailOrder(id); break;
-            case "wallet": paymentEvent.MarkWalletUpdated(id); break;
-            case "ledger": paymentEvent.MarkLedgerUpdated(id); break;
-        }
+        Assert.Throws<PaymentDomainException>(() => checkout.StartOrder(OnlyOrder(checkout), "Braintree", null));
+        Assert.Equal(Provider, checkout.PaymentOrders.Single().Provider);
     }
 
     [Theory]
-    [MemberData(nameof(Operations))]
-    public void An_order_from_another_checkout_is_refused_and_changes_neither_checkout(string operation)
-    {
-        var mine = ThreeSellers();
-        var theirs = SingleOrder();
-        // Put their order in a state where the operation would be legal, so only ownership can refuse it.
-        theirs.Drive(theirs.OnlyId(), operation switch
-        {
-            "start" => PaymentOrderStatus.NotStarted,
-            "succeed" or "fail" => PaymentOrderStatus.Executing,
-            _ => PaymentOrderStatus.Success
-        });
-        var mineBefore = Capture(mine);
-        var theirsBefore = Capture(theirs);
-
-        var thrown = Record.Exception(() => Apply(mine, theirs.OnlyId(), operation));
-
-        Assert.IsType<PaymentDomainException>(thrown);
-        Assert.Equal(mineBefore, Capture(mine));
-        Assert.Equal(theirsBefore, Capture(theirs));
-    }
-
-    [Theory]
-    [MemberData(nameof(Operations))]
-    public void An_empty_or_unknown_order_id_is_refused_and_changes_nothing(string operation)
-    {
-        foreach (var id in new[] { Guid.Empty, Guid.NewGuid(), Guid.CreateVersion7() })
-        {
-            var paymentEvent = ThreeSellers();
-            var before = Capture(paymentEvent);
-
-            var thrown = Record.Exception(() => Apply(paymentEvent, id, operation));
-
-            Assert.IsType<PaymentDomainException>(thrown);
-            Assert.Equal(before, Capture(paymentEvent));
-        }
-    }
-
-    // The checkout id is not an order id, even though both are Guids passed around the same handler.
-    [Theory]
-    [MemberData(nameof(Operations))]
-    public void The_checkout_id_is_not_accepted_as_an_order_id(string operation)
-    {
-        var paymentEvent = ThreeSellers();
-        var before = Capture(paymentEvent);
-
-        Assert.Throws<PaymentDomainException>(() => Apply(paymentEvent, paymentEvent.CheckoutId, operation));
-        Assert.Equal(before, Capture(paymentEvent));
-    }
-
-    [Fact]
-    public void Operating_on_one_order_leaves_the_others_untouched()
-    {
-        var paymentEvent = ThreeSellers();
-        var ids = paymentEvent.Ids();
-
-        paymentEvent.Drive(ids[1], PaymentOrderStatus.Success);
-        paymentEvent.MarkWalletUpdated(ids[1]);
-
-        foreach (var other in new[] { ids[0], ids[2] })
-        {
-            var order = paymentEvent.Order(other);
-            Assert.Equal(PaymentOrderStatus.NotStarted, order.Status);
-            Assert.Null(order.PspToken);
-            Assert.False(order.WalletUpdated);
-        }
-    }
-
-    // --- IsPaymentDone ---
-
-    [Fact]
-    public void A_single_order_checkout_is_done_when_its_order_succeeds()
-    {
-        var paymentEvent = SingleOrderIn(PaymentOrderStatus.Executing);
-        Assert.False(paymentEvent.IsPaymentDone);
-
-        paymentEvent.SucceedOrder(paymentEvent.OnlyId());
-
-        Assert.True(paymentEvent.IsPaymentDone);
-    }
-
-    [Theory]
-    [InlineData(PaymentOrderStatus.NotStarted)]
-    [InlineData(PaymentOrderStatus.Executing)]
+    [InlineData(PaymentOrderStatus.Success)]
     [InlineData(PaymentOrderStatus.Failed)]
-    public void A_single_order_checkout_is_not_done_while_its_order_has_not_succeeded(PaymentOrderStatus status) =>
-        Assert.False(SingleOrderIn(status).IsPaymentDone);
-
-    // Every combination of three order statuses: done exactly when all three succeeded.
-    [Fact]
-    public void A_checkout_is_done_exactly_when_every_order_succeeded()
+    [InlineData(PaymentOrderStatus.Refunded)]
+    public void A_settled_order_cannot_be_started(PaymentOrderStatus status)
     {
-        foreach (var a in AllStatuses)
-        foreach (var b in AllStatuses)
-        foreach (var c in AllStatuses)
-        {
-            var paymentEvent = ThreeSellers();
-            var ids = paymentEvent.Ids();
-            paymentEvent.Drive(ids[0], a);
-            paymentEvent.Drive(ids[1], b);
-            paymentEvent.Drive(ids[2], c);
+        var checkout = CheckoutWithOrderIn(status);
 
-            var allSucceeded = a == PaymentOrderStatus.Success && b == PaymentOrderStatus.Success && c == PaymentOrderStatus.Success;
-            Assert.True(allSucceeded == paymentEvent.IsPaymentDone, $"[{a}, {b}, {c}] gave IsPaymentDone={paymentEvent.IsPaymentDone}.");
-        }
+        Assert.Throws<PaymentDomainException>(() => checkout.StartOrder(OnlyOrder(checkout), Provider, Reference));
+        Assert.Equal(status, checkout.PaymentOrders.Single().Status);
     }
 
-    public static TheoryData<int[]> SettlementOrders => new()
-    {
-        new[] { 0, 1, 2 }, new[] { 0, 2, 1 }, new[] { 1, 0, 2 }, new[] { 1, 2, 0 }, new[] { 2, 0, 1 }, new[] { 2, 1, 0 }
-    };
+    [Fact]
+    public void Starting_an_order_from_another_checkout_is_refused() =>
+        Assert.Throws<PaymentDomainException>(() => NewCheckout(10m).StartOrder(Guid.NewGuid(), Provider, Reference));
 
+    // C6
+    [Fact]
+    public void A_success_on_a_started_order_pays_it()
+    {
+        var checkout = CheckoutWithOrderIn(PaymentOrderStatus.Executing);
+        var id = OnlyOrder(checkout);
+
+        var update = checkout.SucceedOrder(id, "pi_paid");
+
+        Assert.Equal(OrderUpdate.Applied, update);
+        Assert.Equal(PaymentOrderStatus.Success, checkout.FindOrder(id).Status);
+        Assert.Equal("pi_paid", checkout.FindOrder(id).PspTokenRef);
+    }
+
+    [Fact]
+    public void A_repeated_success_changes_nothing()
+    {
+        var checkout = CheckoutWithOrderIn(PaymentOrderStatus.Success);
+        var id = OnlyOrder(checkout);
+
+        var update = checkout.SucceedOrder(id, "pi_again");
+
+        Assert.Equal(OrderUpdate.AlreadyApplied, update);
+        Assert.Equal(Reference, checkout.FindOrder(id).PspTokenRef);
+        Assert.Equal(PaymentOrderStatus.Success, checkout.FindOrder(id).Status);
+    }
+
+    [Fact]
+    public void A_success_after_the_order_failed_does_not_revive_it()
+    {
+        var checkout = CheckoutWithOrderIn(PaymentOrderStatus.Failed);
+        var id = OnlyOrder(checkout);
+
+        var update = checkout.SucceedOrder(id, Reference);
+
+        Assert.Equal(OrderUpdate.Superseded, update);
+        Assert.Equal(PaymentOrderStatus.Failed, checkout.FindOrder(id).Status);
+        Assert.False(checkout.IsPaymentDone);
+    }
+
+    [Fact]
+    public void A_success_for_an_order_never_started_is_not_applied()
+    {
+        var checkout = NewCheckout(10m);
+        var id = OnlyOrder(checkout);
+
+        var update = checkout.SucceedOrder(id, Reference);
+
+        Assert.Equal(OrderUpdate.NotStarted, update);
+        Assert.Equal(PaymentOrderStatus.Init, checkout.FindOrder(id).Status);
+    }
+
+    [Fact]
+    public void A_late_success_on_a_refunded_order_is_already_applied()
+    {
+        var checkout = CheckoutWithOrderIn(PaymentOrderStatus.Refunded);
+        var id = OnlyOrder(checkout);
+
+        var update = checkout.SucceedOrder(id, Reference);
+
+        Assert.Equal(OrderUpdate.AlreadyApplied, update);
+        Assert.Equal(PaymentOrderStatus.Refunded, checkout.FindOrder(id).Status);
+    }
+
+    [Fact]
+    public void A_checkout_is_paid_only_once_every_order_is_paid()
+    {
+        var checkout = NewCheckout(10m, 20m);
+        var first = checkout.PaymentOrders.ElementAt(0).PaymentOrderId;
+        var second = checkout.PaymentOrders.ElementAt(1).PaymentOrderId;
+        checkout.StartOrder(first, Provider, Reference);
+        checkout.StartOrder(second, Provider, Reference);
+
+        checkout.SucceedOrder(first, Reference);
+        Assert.False(checkout.IsPaymentDone);
+
+        checkout.SucceedOrder(second, Reference);
+        Assert.True(checkout.IsPaymentDone);
+    }
+
+    // C7
     [Theory]
-    [MemberData(nameof(SettlementOrders))]
-    public void The_order_in_which_sellers_settle_does_not_matter(int[] sequence)
+    [InlineData(PaymentOrderStatus.Init)]
+    [InlineData(PaymentOrderStatus.Executing)]
+    public void A_failure_fails_an_unsettled_order(PaymentOrderStatus status)
     {
-        var paymentEvent = ThreeSellers();
-        var ids = paymentEvent.Ids();
-        foreach (var id in ids)
-            paymentEvent.StartExecuting(id, Provider, Token);
+        var checkout = CheckoutWithOrderIn(status);
+        var id = OnlyOrder(checkout);
 
-        for (var i = 0; i < sequence.Length; i++)
-        {
-            Assert.False(paymentEvent.IsPaymentDone, $"Done after only {i} of 3 orders succeeded.");
-            paymentEvent.SucceedOrder(ids[sequence[i]]);
-        }
+        var update = checkout.FailOrder(id);
 
-        Assert.True(paymentEvent.IsPaymentDone);
+        Assert.Equal(OrderUpdate.Applied, update);
+        Assert.Equal(PaymentOrderStatus.Failed, checkout.FindOrder(id).Status);
     }
 
     [Fact]
-    public void A_redelivered_success_does_not_complete_a_checkout_with_an_unsettled_order()
+    public void A_repeated_failure_changes_nothing()
     {
-        var paymentEvent = WithLines(Line(), Line());
-        var ids = paymentEvent.Ids();
-        paymentEvent.Drive(ids[0], PaymentOrderStatus.Success);
-        paymentEvent.StartExecuting(ids[1], Provider, Token);
+        var checkout = CheckoutWithOrderIn(PaymentOrderStatus.Failed);
 
-        paymentEvent.SucceedOrder(ids[0]);
-        paymentEvent.SucceedOrder(ids[0]);
-
-        Assert.False(paymentEvent.IsPaymentDone);
-    }
-
-    [Fact]
-    public void A_done_checkout_stays_done_through_every_later_call()
-    {
-        var paymentEvent = WithLines(Line(), Line());
-        var ids = paymentEvent.Ids();
-        foreach (var id in ids)
-            paymentEvent.Drive(id, PaymentOrderStatus.Success);
-        Assert.True(paymentEvent.IsPaymentDone);
-
-        foreach (var id in ids)
-        {
-            Record.Exception(() => paymentEvent.FailOrder(id));
-            Record.Exception(() => paymentEvent.StartExecuting(id, Provider, "another"));
-            paymentEvent.SucceedOrder(id);
-            paymentEvent.MarkWalletUpdated(id);
-            paymentEvent.MarkLedgerUpdated(id);
-            Record.Exception(() => paymentEvent.SucceedOrder(Guid.NewGuid()));
-        }
-
-        Assert.True(paymentEvent.IsPaymentDone);
-    }
-
-    [Fact]
-    public void Settling_raises_one_event_per_order_naming_that_order()
-    {
-        var paymentEvent = ThreeSellers();
-        var ids = paymentEvent.Ids();
-
-        paymentEvent.Drive(ids[0], PaymentOrderStatus.Success);
-        paymentEvent.Drive(ids[1], PaymentOrderStatus.Failed);
-        paymentEvent.Drive(ids[2], PaymentOrderStatus.Success);
-
-        Assert.Equal(
-            [
-                new PaymentOrderSucceededDomainEvent(ids[0], paymentEvent.CheckoutId),
-                new PaymentOrderFailedDomainEvent(ids[1], paymentEvent.CheckoutId),
-                new PaymentOrderSucceededDomainEvent(ids[2], paymentEvent.CheckoutId)
-            ],
-            paymentEvent.DomainEvents.ToArray());
-    }
-
-    [Fact]
-    public void Orders_and_domain_events_live_on_the_root_only()
-    {
-        Assert.False(typeof(PaymentSystem.Domain.Abstractions.Entity).IsAssignableFrom(typeof(PaymentOrder)));
-        Assert.True(typeof(PaymentSystem.Domain.Abstractions.Entity).IsAssignableFrom(typeof(PaymentEvent)));
-    }
-
-    // --- Expiry and cancellation ---
-
-    public static TheoryData<string> Abandonments => new() { "expire", "cancel" };
-
-    private static int Abandon(PaymentEvent paymentEvent, string how) =>
-        how == "expire" ? paymentEvent.Expire() : paymentEvent.Cancel();
-
-    // Every combination of three order statuses: what was unpaid fails, what was settled stays as it was.
-    [Theory]
-    [MemberData(nameof(Abandonments))]
-    public void Abandoning_fails_every_unsettled_order_and_leaves_settled_ones(string how)
-    {
-        foreach (var a in AllStatuses)
-        foreach (var b in AllStatuses)
-        foreach (var c in AllStatuses)
-        {
-            var paymentEvent = ThreeSellers();
-            var ids = paymentEvent.Ids();
-            PaymentOrderStatus[] states = [a, b, c];
-            for (var i = 0; i < ids.Length; i++)
-                paymentEvent.Drive(ids[i], states[i]);
-            paymentEvent.ClearDomainEvents();
-            var unsettled = ids.Where((_, i) => states[i] is PaymentOrderStatus.NotStarted or PaymentOrderStatus.Executing).ToArray();
-
-            var failed = Abandon(paymentEvent, how);
-
-            var label = $"[{a}, {b}, {c}]";
-            Assert.True(unsettled.Length == failed, $"{label} failed {failed}.");
-            for (var i = 0; i < ids.Length; i++)
-            {
-                var expected = unsettled.Contains(ids[i]) ? PaymentOrderStatus.Failed : states[i];
-                Assert.True(expected == paymentEvent.Order(ids[i]).Status, $"{label} left order {i} {paymentEvent.Order(ids[i]).Status}.");
-            }
-            Assert.Equal(
-                unsettled.Select(id => (object)new PaymentOrderFailedDomainEvent(id, paymentEvent.CheckoutId)),
-                paymentEvent.DomainEvents.Cast<object>());
-            Assert.True(states.All(s => s == PaymentOrderStatus.Success) == paymentEvent.IsPaymentDone, $"{label} done={paymentEvent.IsPaymentDone}.");
-        }
+        Assert.Equal(OrderUpdate.AlreadyApplied, checkout.FailOrder(OnlyOrder(checkout)));
+        Assert.Equal(PaymentOrderStatus.Failed, checkout.PaymentOrders.Single().Status);
     }
 
     [Theory]
-    [MemberData(nameof(Abandonments))]
-    public void Abandoning_again_is_a_no_op(string how)
+    [InlineData(PaymentOrderStatus.Success)]
+    [InlineData(PaymentOrderStatus.Refunded)]
+    public void A_paid_order_does_not_change_its_mind(PaymentOrderStatus status)
     {
-        var paymentEvent = ThreeSellers();
-        var ids = paymentEvent.Ids();
-        paymentEvent.Drive(ids[0], PaymentOrderStatus.Success);
-        paymentEvent.Drive(ids[1], PaymentOrderStatus.Executing);
-        Abandon(paymentEvent, how);
-        var before = Capture(paymentEvent);
+        var checkout = CheckoutWithOrderIn(status);
 
-        Assert.Equal(0, paymentEvent.Expire());
-        Assert.Equal(0, paymentEvent.Cancel());
-        Assert.Equal(before, Capture(paymentEvent));
+        Assert.Equal(OrderUpdate.Superseded, checkout.FailOrder(OnlyOrder(checkout)));
+        Assert.Equal(status, checkout.PaymentOrders.Single().Status);
     }
 
-    [Theory]
-    [MemberData(nameof(Abandonments))]
-    public void A_success_reported_after_abandoning_is_refused(string how)
+    // C8
+    [Fact]
+    public void Settling_an_order_marks_both_its_wallet_and_its_ledger_done()
     {
-        var paymentEvent = SingleOrderIn(PaymentOrderStatus.Executing);
-        Abandon(paymentEvent, how);
-        var before = Capture(paymentEvent);
+        var checkout = CheckoutWithOrderIn(PaymentOrderStatus.Success);
+        var id = OnlyOrder(checkout);
+        Assert.False(checkout.FindOrder(id).WalletUpdated);
+        Assert.False(checkout.FindOrder(id).LedgerUpdated);
 
-        Assert.Throws<PaymentDomainException>(() => paymentEvent.SucceedOrder(paymentEvent.OnlyId()));
-        Assert.Throws<PaymentDomainException>(() => paymentEvent.StartExecuting(paymentEvent.OnlyId(), Provider, Token));
-        Assert.Equal(before, Capture(paymentEvent));
-    }
+        checkout.MarkOrderSettled(id);
 
-    [Theory]
-    [MemberData(nameof(Abandonments))]
-    public void Abandoning_a_paid_checkout_changes_nothing(string how)
-    {
-        var paymentEvent = WithLines(Line(), Line());
-        foreach (var id in paymentEvent.Ids())
-            paymentEvent.Drive(id, PaymentOrderStatus.Success);
-        var before = Capture(paymentEvent);
-
-        Assert.Equal(0, Abandon(paymentEvent, how));
-        Assert.Equal(before, Capture(paymentEvent));
-        Assert.True(paymentEvent.IsPaymentDone);
-    }
-
-    // --- IsPaymentDone is derived, not remembered ---
-    // Stands in for a stale copy: a root reloaded on its own, whose stored flag lags its orders.
-
-    private static void ForgetDone(PaymentEvent paymentEvent, bool value) =>
-        typeof(PaymentEvent).GetProperty(nameof(PaymentEvent.IsPaymentDone))!.SetValue(paymentEvent, value);
-
-    public static TheoryData<string> NoOpsOnAPaidCheckout => new() { "succeed", "wallet", "ledger", "expire", "cancel" };
-
-    [Theory]
-    [MemberData(nameof(NoOpsOnAPaidCheckout))]
-    public void A_no_op_on_a_paid_checkout_restores_a_lagging_done_flag(string operation)
-    {
-        var paymentEvent = SingleOrderIn(PaymentOrderStatus.Success);
-        var id = paymentEvent.OnlyId();
-        paymentEvent.MarkWalletUpdated(id);
-        paymentEvent.MarkLedgerUpdated(id);
-        ForgetDone(paymentEvent, false);
-
-        switch (operation)
-        {
-            case "succeed": paymentEvent.SucceedOrder(id); break;
-            case "wallet": paymentEvent.MarkWalletUpdated(id); break;
-            case "ledger": paymentEvent.MarkLedgerUpdated(id); break;
-            case "expire": paymentEvent.Expire(); break;
-            case "cancel": paymentEvent.Cancel(); break;
-        }
-
-        Assert.True(paymentEvent.IsPaymentDone);
+        Assert.True(checkout.FindOrder(id).WalletUpdated);
+        Assert.True(checkout.FindOrder(id).LedgerUpdated);
     }
 
     [Fact]
-    public void A_replayed_start_clears_a_done_flag_the_orders_do_not_support()
+    public void Marking_an_order_refunded_refunds_it()
     {
-        var paymentEvent = SingleOrderIn(PaymentOrderStatus.Executing);
-        ForgetDone(paymentEvent, true);
+        var checkout = CheckoutWithOrderIn(PaymentOrderStatus.Success);
 
-        paymentEvent.StartExecuting(paymentEvent.OnlyId(), Provider, Token);
+        checkout.MarkOrderRefunded(OnlyOrder(checkout));
 
-        Assert.False(paymentEvent.IsPaymentDone);
+        Assert.Equal(PaymentOrderStatus.Refunded, checkout.PaymentOrders.Single().Status);
     }
 
     [Fact]
-    public void A_refused_call_leaves_the_done_flag_as_it_was()
-    {
-        var paymentEvent = SingleOrderIn(PaymentOrderStatus.Success);
-        ForgetDone(paymentEvent, false);
-
-        Assert.Throws<PaymentDomainException>(() => paymentEvent.FailOrder(paymentEvent.OnlyId()));
-
-        Assert.False(paymentEvent.IsPaymentDone);
-    }
-
-    // --- Version ---
-    // A save-time concurrency token: AggregateVersionInterceptor bumps it from the version as loaded. A
-    // domain-side bump broke the disconnected Update path, so the domain must never move it. The per-save
-    // increment is covered in PaymentIntegration's VersionTests.
-
-    [Fact]
-    public void A_real_change_leaves_the_version_to_the_save()
-    {
-        var paymentEvent = WithLines(Line(), Line());
-        var ids = paymentEvent.Ids();
-        var steps = new Action[]
-        {
-            () => paymentEvent.StartExecuting(ids[0], Provider, Token),
-            () => paymentEvent.SucceedOrder(ids[0]),
-            () => paymentEvent.MarkWalletUpdated(ids[0]),
-            () => paymentEvent.MarkLedgerUpdated(ids[0]),
-            () => paymentEvent.StartExecuting(ids[1], Provider, Token),
-            () => paymentEvent.FailOrder(ids[1]),
-        };
-
-        foreach (var step in steps)
-        {
-            var before = paymentEvent.Version;
-            step();
-            Assert.Equal(before, paymentEvent.Version);
-        }
-    }
-
-    [Fact]
-    public void A_redelivered_no_op_does_not_bump_the_version()
-    {
-        var paymentEvent = WithLines(Line(), Line());
-        var ids = paymentEvent.Ids();
-        paymentEvent.Drive(ids[0], PaymentOrderStatus.Success);
-        paymentEvent.MarkWalletUpdated(ids[0]);
-        paymentEvent.MarkLedgerUpdated(ids[0]);
-        paymentEvent.Drive(ids[1], PaymentOrderStatus.Failed);
-        var version = paymentEvent.Version;
-
-        paymentEvent.SucceedOrder(ids[0]);
-        paymentEvent.MarkWalletUpdated(ids[0]);
-        paymentEvent.MarkLedgerUpdated(ids[0]);
-        paymentEvent.FailOrder(ids[1]);
-
-        Assert.Equal(version, paymentEvent.Version);
-    }
-
-    [Fact]
-    public void A_refused_call_does_not_bump_the_version()
-    {
-        var paymentEvent = WithLines(Line(), Line());
-        var ids = paymentEvent.Ids();
-        paymentEvent.Drive(ids[0], PaymentOrderStatus.Success);
-        paymentEvent.Drive(ids[1], PaymentOrderStatus.Failed);
-        var version = paymentEvent.Version;
-        var refused = new Action[]
-        {
-            () => paymentEvent.StartExecuting(ids[0], Provider, "another"),
-            () => paymentEvent.StartExecuting(ids[1], Provider, " "),
-            () => paymentEvent.StartExecuting(ids[1], Provider, new string('t', 201)),
-            () => paymentEvent.FailOrder(ids[0]),
-            () => paymentEvent.SucceedOrder(ids[1]),
-            () => paymentEvent.MarkWalletUpdated(ids[1]),
-            () => paymentEvent.MarkLedgerUpdated(ids[1]),
-            () => paymentEvent.SucceedOrder(Guid.Empty),
-            () => paymentEvent.StartExecuting(Guid.NewGuid(), Provider, Token),
-        };
-
-        foreach (var call in refused)
-        {
-            Assert.Throws<PaymentDomainException>(call);
-            Assert.Equal(version, paymentEvent.Version);
-        }
-    }
-
-    [Fact]
-    public void A_new_checkout_starts_at_version_zero_and_stays_there_through_its_lifecycle()
-    {
-        var paymentEvent = ThreeSellers();
-
-        foreach (var id in paymentEvent.Ids())
-        {
-            paymentEvent.Drive(id, PaymentOrderStatus.Success);
-            paymentEvent.MarkWalletUpdated(id);
-            paymentEvent.MarkLedgerUpdated(id);
-        }
-
-        Assert.Equal(0, paymentEvent.Version);
-    }
+    public void An_order_from_another_checkout_is_not_found() =>
+        Assert.Throws<PaymentDomainException>(() => NewCheckout(10m).FindOrder(Guid.NewGuid()));
 }

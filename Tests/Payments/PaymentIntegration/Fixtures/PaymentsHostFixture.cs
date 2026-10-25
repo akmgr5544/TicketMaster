@@ -36,6 +36,13 @@ public sealed class PaymentsHostFixture : IAsyncLifetime
 
     public string ConnectionString => _postgres.GetConnectionString();
 
+    // The host runs the real Stripe adapter. Its webhook secret is known here, so a test signs a webhook exactly as
+    // Stripe would; its API key is never dialled.
+    public const string StripeWebhookSecret = "whsec_host_tests";
+
+    public HttpClient CreateClient() =>
+        (_factory ?? throw new InvalidOperationException("The host was not started.")).CreateClient();
+
     public PaymentOutcomes Outcomes { get; } = new();
 
     public async Task InitializeAsync()
@@ -57,7 +64,7 @@ public sealed class PaymentsHostFixture : IAsyncLifetime
         Environment.SetEnvironmentVariable("ConnectionStrings__RabbitMQ", _rabbit.GetConnectionString());
         // Never dialled; the provider options refuse to start without them.
         Environment.SetEnvironmentVariable("PaymentProviders__Stripe__SecretKey", "sk_test_dummy");
-        Environment.SetEnvironmentVariable("PaymentProviders__Stripe__WebhookSecret", "whsec_dummy");
+        Environment.SetEnvironmentVariable("PaymentProviders__Stripe__WebhookSecret", StripeWebhookSecret);
 
         _factory = new WebApplicationFactory<Program>();
 
@@ -107,6 +114,8 @@ public sealed class PaymentOutcomeProbe
     public void Consume(BookingPaidIntegrationEvent message, PaymentOutcomes outcomes) => outcomes.Add(message);
 
     public void Consume(BookingPaymentFailedIntegrationEvent message, PaymentOutcomes outcomes) => outcomes.Add(message);
+
+    public void Consume(BookingRefundedIntegrationEvent message, PaymentOutcomes outcomes) => outcomes.Add(message);
 }
 
 // What arrived at the probe off the broker. Every test uses its own booking id, so a test waits for the
