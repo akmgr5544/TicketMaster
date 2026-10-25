@@ -1,75 +1,44 @@
-using Microsoft.EntityFrameworkCore;
 using JasperFx.Core;
-using PaymentProvider.Exceptions;
-using PaymentSystem.Data;
-using PaymentSystem.Features.Checkouts;
-using PaymentSystem.Shared.Messaging;
+using Microsoft.EntityFrameworkCore;
 using TicketMaster.Common.IntegrationEvents;
 using Wolverine;
-using Wolverine.ErrorHandling;
 using Wolverine.EntityFrameworkCore;
+using Wolverine.ErrorHandling;
 using Wolverine.Postgresql;
 using Wolverine.RabbitMQ;
-using Wolverine.Runtime;
 
 namespace PaymentSystem.Extensions;
 
 public static class MessagingExtension
 {
-    // Kept apart from AddInfrastructureServices so a plain ServiceProvider can host the slices without
-    // Wolverine; everything that needs a running Wolverine is registered here.
     public static void ConfigureMessaging(this IHostBuilder hostBuilder, IConfiguration configuration)
     {
         var connectionString = configuration.GetConnectionString("DefaultConnection")
-                               ?? throw new InvalidOperationException(
-                                   "Connection string 'DefaultConnection' is not configured.");
+                               ?? throw new InvalidOperationException("Connection string 'DefaultConnection' is not configured.");
 
         hostBuilder.UseWolverine(options =>
         {
             // Pinned rather than inferred: under a test host the entry assembly is the test runner, and the
-            // consumers would silently go undiscovered.
+            // handlers would silently go undiscovered.
             options.ApplicationAssembly = typeof(MessagingExtension).Assembly;
 
-            // Takes the connection string *name*; Wolverine resolves it from IConfiguration itself. Only the
-            // shared contracts cross the broker; the expiry timer is this service's own business.
+            // Only the shared contracts cross the broker, routed by type the same way Bookings publishes them.
             options.UseRabbitMqUsingNamedConnection("RabbitMQ")
                 .AutoProvision()
                 .UseConventionalRouting(conventions => conventions.IncludeTypes(type =>
                     type.Namespace == typeof(PaymentRequestedIntegrationEvent).Namespace));
-            options.PublishMessage<CheckoutExpiryDue>().ToLocalQueue("checkout-expiry");
-            options.PublishMessage<CheckoutRefundDue>().ToLocalQueue("checkout-refund");
 
-            // The expiry and cancellation handlers retry a lost race once themselves; a second loss is retried
-            // later from a fresh scope, where the change tracker holds nothing stale.
-            options.OnException<DbUpdateConcurrencyException>()
-                .ScheduleRetry(1.Seconds(), 5.Seconds(), 30.Seconds());
-
-            // A provider that is down or rate-limiting is asked again, with room to recover; a refund repeated this
-            // way is answered by the provider with the first one. Anything else goes to the error queue.
-            options.OnException<PaymentProviderException>(exception => exception.Kind == PaymentProviderErrorKind.Transient)
-                .ScheduleRetry(10.Seconds(), 1.Minutes(), 5.Minutes(), 30.Minutes());
-
+            // A handler that uses PaymentDbContext runs in one transaction: Wolverine saves its changes and the
+            // messages it returns together, and sends those messages only after the commit.
             options.PersistMessagesWithPostgresql(connectionString);
             options.UseEntityFrameworkCoreTransactions();
-
-            // PersistMessagesWithPostgresql only creates the storage; these enrol the endpoints in it.
-            // Without the inbox, a crash mid-handler loses a PaymentRequested; without the outbox,
-            // BookingPaid would be sent from memory and the message store would sit unused; without durable local
-            // queues, a checkout's expiry timer would be lost on restart.
-            options.Policies.UseDurableLocalQueues();
+            options.Policies.AutoApplyTransactions();
             options.Policies.UseDurableInboxOnAllListeners();
             options.Policies.UseDurableOutboxOnAllSendingEndpoints();
 
-            options.Services.AddScoped<OutboxFlushInterceptor>();
-            options.Services.ConfigureDbContext<PaymentDbContext>((serviceProvider, dbContextOptions) =>
-                dbContextOptions.AddInterceptors(serviceProvider.GetRequiredService<OutboxFlushInterceptor>()));
-            // A factory, not a type mapping: Wolverine then resolves it from the message's own scope, the
-            // one MediatR's handlers and their DbContext come from, instead of building a second copy inline.
-            options.Services.AddScoped<IIntegrationEventPublisher>(serviceProvider =>
-                new OutboxIntegrationEventPublisher(
-                    serviceProvider.GetRequiredService<IWolverineRuntime>(),
-                    serviceProvider.GetRequiredService<PaymentDbContext>(),
-                    serviceProvider.GetRequiredService<OutboxFlushInterceptor>()));
+            // Two copies of one message racing to insert lose on a unique index; the retry finds the winner's row.
+            options.OnException<DbUpdateException>()
+                .RetryWithCooldown(100.Milliseconds(), 1.Seconds(), 5.Seconds());
         });
     }
 }

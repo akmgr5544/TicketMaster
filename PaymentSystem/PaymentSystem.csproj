@@ -42,6 +42,8 @@
 
     <ItemGroup>
       <Folder Include="Data\Configurations\" />
+      <Folder Include="Extensions\" />
+      <Folder Include="Features\" />
     </ItemGroup>
 
 </Project>

@@ -9,8 +9,6 @@ builder.Host.ConfigureMessaging(builder.Configuration);
 
 var app = builder.Build();
 
-await app.ApplyMigrationsAsync();
-
 app.UseExceptionHandler();
 app.MapFeatureEndpoints();
 
