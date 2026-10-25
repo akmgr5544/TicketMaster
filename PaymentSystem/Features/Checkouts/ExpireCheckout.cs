@@ -1,73 +1,28 @@
-using MediatR;
 using Microsoft.EntityFrameworkCore;
 using PaymentSystem.Data;
-using PaymentSystem.Enums;
-using PaymentSystem.Shared.Pipelines;
-using PaymentSystem.Shared.Results;
-using Wolverine.Attributes;
+using PaymentSystem.Shared.Messaging;
+using TicketMaster.Common.IntegrationEvents;
+using Wolverine;
 
 namespace PaymentSystem.Features.Checkouts;
 
-// Fails what is still unpaid once the payment window closes, so Bookings is told (through the Fail handler) and
-// releases the seats instead of holding them for a buyer who walked away.
-public static class ExpireCheckout
+// The checkout's time is up: fail whatever the buyer has not paid, so Bookings releases the seats. A checkout paid,
+// cancelled or already expired has nothing left to fail, and nothing is sent.
+public sealed class CheckoutExpiryDueHandler(ILogger<CheckoutExpiryDueHandler> logger)
 {
-    // A constant rather than configuration: it is how long Bookings holds the seats for, not a tuning knob.
-    public static readonly TimeSpan After = TimeSpan.FromMinutes(15);
-
-    public sealed record Command(Guid CheckoutId) : IRequest<Result<Response>>, ITransactionalRequest;
-
-    public sealed record Response(int OrdersFailed);
-
-    internal sealed class Handler(PaymentDbContext context, ILogger<Handler> logger)
-        : IRequestHandler<Command, Result<Response>>
+    public async Task<OutgoingMessages> Handle(CheckoutExpiryDue message, PaymentDbContext context,
+        CancellationToken cancellationToken)
     {
-        public async Task<Result<Response>> Handle(Command request, CancellationToken cancellationToken)
-        {
-            for (var attempt = 0;; attempt++)
-            {
-                var checkout = await context.PaymentEvents
-                    .SingleOrDefaultAsync(e => e.CheckoutId == request.CheckoutId, cancellationToken);
-                if (checkout is null)
-                {
-                    // The timer is scheduled in the transaction that inserts the checkout, so this is not a race.
-                    logger.LogWarning("Checkout {CheckoutId} expired but does not exist.", request.CheckoutId);
-                    return new Response(0);
-                }
+        var outgoing = new OutgoingMessages();
 
-                var failed = checkout.Expire();
-                if (failed == 0)
-                    return new Response(0);
+        var checkout = await context.PaymentEvents
+            .SingleOrDefaultAsync(e => e.BookingId == message.BookingId, cancellationToken);
 
-                if (checkout.PaymentOrders.Any(o => o.Status == PaymentOrderStatus.Success))
-                    logger.LogWarning(
-                        "Checkout {CheckoutId} for booking {BookingId} expired partly paid; the paid orders need reconciling.",
-                        checkout.CheckoutId, checkout.BookingId);
+        if (checkout is null || checkout.Cancel() == 0)
+            return outgoing;
 
-                try
-                {
-                    await context.SaveChangesAsync(cancellationToken);
-                    logger.LogInformation("Checkout {CheckoutId} expired; failed {Count} unpaid orders.",
-                        checkout.CheckoutId, failed);
-                    return new Response(failed);
-                }
-                // A PSP outcome for one of its orders landed first. Decided again over the fresh state, once;
-                // a second loss goes back to the message's retry policy.
-                catch (DbUpdateConcurrencyException) when (attempt == 0)
-                {
-                    context.ChangeTracker.Clear();
-                }
-            }
-        }
+        logger.LogInformation("Checkout for booking {BookingId} expired unpaid.", message.BookingId);
+        outgoing.Add(new BookingPaymentFailedIntegrationEvent(message.BookingId));
+        return outgoing;
     }
-}
-
-// Pinned: a scheduled envelope sits in the store for the whole window, and a renamed type would strand it.
-[MessageIdentity("checkout-expiry-due")]
-public sealed record CheckoutExpiryDue(Guid CheckoutId);
-
-public sealed class CheckoutExpiryDueConsumer(ISender sender)
-{
-    public async Task Consume(CheckoutExpiryDue message, CancellationToken cancellationToken) =>
-        await sender.Send(new ExpireCheckout.Command(message.CheckoutId), cancellationToken);
 }

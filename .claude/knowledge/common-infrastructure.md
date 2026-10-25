@@ -51,9 +51,11 @@ Read it, never a route or body value:
 ## Integration events and outbox
 
 - Contracts: `TicketMaster.Common/IntegrationEvents` — any cross-service message lives here.
-- Publishing: `IIntegrationEventPublisher` → `OutboxIntegrationEventPublisher` stages into
+- Publishing, Bookings: `IIntegrationEventPublisher` → `OutboxIntegrationEventPublisher` stages into
   Wolverine's `DbContextOutbox` on the open transaction; `OutboxFlushInterceptor` sends after commit.
-  Bookings (`Bookings.Sql`) and PaymentSystem (`Shared/Messaging`). Events uses a Cosmos outbox.
+- Publishing, PaymentSystem: message handlers return `OutgoingMessages` and Wolverine's EF Core middleware
+  saves them with the handler's changes; an HTTP slice that must publish invokes such a handler inline
+  (`IMessageBus.InvokeAsync`). No hand-built publisher. Events uses a Cosmos outbox.
 - Details: `messaging` skill.
 
 ## Time

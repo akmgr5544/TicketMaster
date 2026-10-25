@@ -1,165 +1,182 @@
-using PaymentSystem.Domain.Abstractions;
-using PaymentSystem.Domain.Events;
 using PaymentSystem.Domain.Exceptions;
+using PaymentSystem.Domain.Shared;
 using PaymentSystem.Enums;
 
 namespace PaymentSystem.Domain;
 
-public class PaymentEvent : Entity
+public class PaymentEvent
 {
-    private readonly List<PaymentOrder> _paymentOrders = [];
-
     public Guid CheckoutId { get; private set; }
     public long BookingId { get; private set; }
     public Guid BuyerId { get; private set; }
+    // A saved method the buyer chose to pay with; a checkout paid with a one-time token on the PSP's page has none.
+    public Guid? PaymentMethodId { get; private set; }
+    public Money TotalAmount { get; private set; } = null!;
     public bool IsPaymentDone { get; private set; }
-    public IReadOnlyCollection<PaymentOrder> PaymentOrders => _paymentOrders.AsReadOnly();
-    public int OrderCount { get; private set; }
-    public int Version { get; private set; }
     public DateTime CreatedAt { get; private set; }
-    public DateTime UpdatedAt { get; private set; }
 
-    private PaymentEvent()
+    // Bumped by every change to the checkout or any of its orders, and checked on save. Two orders settling at once
+    // would otherwise each see the other unfinished and leave the checkout never paid; with it, the second save
+    // conflicts and its retry decides over the first one's result. Safe to move here because every save loads first.
+    public int Version { get; private set; }
+
+    // Encapsulated Domain Child Entity Collection
+    private readonly List<PaymentOrder> _paymentOrders = new();
+    public IReadOnlyCollection<PaymentOrder> PaymentOrders => _paymentOrders.AsReadOnly();
+
+    private PaymentEvent() { }
+
+    private PaymentEvent(long bookingId, Guid buyerId, string currency)
     {
+        CheckoutId = Guid.NewGuid();
+        BookingId = bookingId;
+        BuyerId = buyerId;
+        TotalAmount = Money.Zero(currency);
+        IsPaymentDone = false;
+        CreatedAt = DateTime.UtcNow;
     }
 
-    // Holds no order yet; the store refuses a checkout saved without one (OrderCount > 0).
-    public static PaymentEvent Create(Guid checkoutId, long bookingId, Guid buyerId)
+    public static PaymentEvent Create(long bookingId, Guid buyerId, string currency)
     {
-        if (checkoutId == Guid.Empty)
-            throw new PaymentDomainException("A checkout needs an id.");
-        if (bookingId <= 0)
-            throw new PaymentDomainException("A checkout must pay for a booking.");
-        if (buyerId == Guid.Empty)
-            throw new PaymentDomainException("A checkout needs a buyer.");
-
-        return new PaymentEvent { CheckoutId = checkoutId, BookingId = bookingId, BuyerId = buyerId };
+        return new PaymentEvent(bookingId, buyerId, currency);
     }
 
-    public void AddOrder(Guid merchantId, decimal amount, string currency)
+    public void AddPaymentOrder(Guid sellerId, decimal amount)
     {
-        EnsureWhole();
-        // An order added once payment began would be one the buyer never saw when they started paying.
-        if (_paymentOrders.Exists(order => order.Status != PaymentOrderStatus.NotStarted))
-            throw new PaymentDomainException($"Checkout {CheckoutId} takes no new payment order once payment has begun.");
+        if (IsPaymentDone)
+            throw new PaymentDomainException("Cannot add orders to a finalized checkout sequence.");
 
-        var order = PaymentOrder.Create(CheckoutId, BuyerId, merchantId, amount, currency);
-        // One order per seller: two would double the PSP calls and make a callback ambiguous for that seller.
-        if (_paymentOrders.Exists(existing => existing.MerchantId == order.MerchantId))
-            throw new PaymentDomainException("A checkout holds one payment order per seller.");
+        // One payment order per seller: it is what the PSP is asked to pay and the wallet is credited by.
+        if (_paymentOrders.Any(order => order.SellerId == sellerId))
+            throw new PaymentDomainException($"Seller {sellerId} already has a payment order in this checkout.");
 
+        var money = Money.Create(amount, TotalAmount.Currency);
+        var order = new PaymentOrder(CheckoutId, sellerId, money);
         _paymentOrders.Add(order);
-        OrderCount = _paymentOrders.Count;
-        RefreshIsPaymentDone();
+
+        // Increment running total inside aggregate threshold safely
+        TotalAmount += money;
+        Version++;
     }
 
-    public void StartExecuting(Guid paymentOrderId, string provider, string? pspToken)
+    public void UsePaymentMethod(Guid paymentMethodId)
     {
-        OrderById(paymentOrderId).StartExecuting(provider, pspToken);
-        RefreshIsPaymentDone();
+        if (IsPaymentDone)
+            throw new PaymentDomainException("A paid checkout cannot change its payment method.");
+
+        if (PaymentMethodId == paymentMethodId)
+            return;
+
+        PaymentMethodId = paymentMethodId;
+        Version++;
     }
 
-    public void SucceedOrder(Guid paymentOrderId)
+    // Fails every order still waiting on the buyer. A settled one (paid, failed or refunded) is left alone;
+    // returns how many were failed, so a repeated cancellation reports zero.
+    public int Cancel()
     {
-        var order = OrderById(paymentOrderId);
-        if (order.Succeed())
-            AddDomainEvent(new PaymentOrderSucceededDomainEvent(order.PaymentOrderId, CheckoutId));
-        RefreshIsPaymentDone();
+        var unsettled = _paymentOrders
+            .Where(order => order.Status is PaymentOrderStatus.Init or PaymentOrderStatus.Executing)
+            .ToList();
+
+        foreach (var order in unsettled)
+            order.TransitionToFailed();
+
+        if (unsettled.Count > 0)
+            Version++;
+
+        return unsettled.Count;
     }
 
-    public void FailOrder(Guid paymentOrderId)
+    // The buyer opened the PSP's page for this order. Asking again through the same provider changes nothing;
+    // a settled order cannot be paid again.
+    public OrderUpdate StartOrder(Guid paymentOrderId, string provider, string? pspTokenRef, DateTime startedAt)
     {
-        var order = OrderById(paymentOrderId);
-        if (order.Fail())
-            AddDomainEvent(new PaymentOrderFailedDomainEvent(order.PaymentOrderId, CheckoutId));
-        RefreshIsPaymentDone();
-    }
+        var order = FindOrder(paymentOrderId);
 
-    // True only when this call made the refund; a repeat returns false so the caller reverses the money once.
-    public bool RefundOrder(Guid paymentOrderId, Guid refundId, decimal amount, string refundReference)
-    {
-        var refunded = OrderById(paymentOrderId).Refund(refundId, amount, refundReference);
-        RefreshIsPaymentDone();
-        return refunded;
-    }
-
-    // Everything that was paid has gone back, and something was paid to begin with.
-    public bool IsFullyRefunded =>
-        _paymentOrders.Exists(order => order.Status == PaymentOrderStatus.Refunded)
-        && !_paymentOrders.Exists(order => order.Status == PaymentOrderStatus.Success);
-
-    // The provider's final word on an order — a webhook, a synchronous charge or a reconciliation lookup. Reports
-    // rather than throws for a repeat, a stale answer or an early one: all three arrive in normal operation, since
-    // providers deliver at least once and out of order.
-    public OrderUpdate ApplyProviderAnswer(Guid paymentOrderId, bool succeeded)
-    {
-        var order = OrderById(paymentOrderId);
         switch (order.Status)
         {
-            case PaymentOrderStatus.NotStarted:
-                return OrderUpdate.NotStarted;
-            case PaymentOrderStatus.Executing when succeeded:
-                SucceedOrder(paymentOrderId);
+            case PaymentOrderStatus.Init:
+                order.StartExecuting(provider, pspTokenRef, startedAt);
+                Version++;
                 return OrderUpdate.Applied;
+            case PaymentOrderStatus.Executing when order.Provider == provider:
+                return OrderUpdate.AlreadyApplied;
             case PaymentOrderStatus.Executing:
-                FailOrder(paymentOrderId);
-                return OrderUpdate.Applied;
-            // The payment stays succeeded at the provider after a refund, so a late success is old news.
-            case PaymentOrderStatus.Success or PaymentOrderStatus.Refunded:
-                return succeeded ? OrderUpdate.AlreadyApplied : OrderUpdate.Superseded;
+                throw new PaymentDomainException($"Payment order {paymentOrderId} was started with {order.Provider}.");
             default:
-                return succeeded ? OrderUpdate.Superseded : OrderUpdate.AlreadyApplied;
+                throw new PaymentDomainException($"Payment order {paymentOrderId} is already {order.Status}.");
         }
     }
 
-    public PaymentOrder Order(Guid paymentOrderId) => OrderById(paymentOrderId);
-
-    public int Expire() => AbandonUnsettledOrders();
-
-    public int Cancel() => AbandonUnsettledOrders();
-
-    public void MarkWalletUpdated(Guid paymentOrderId)
+    // The PSP took the money. Reported rather than thrown: PSPs repeat themselves and answer late.
+    public OrderUpdate SucceedOrder(Guid paymentOrderId, string pspTokenRef)
     {
-        OrderById(paymentOrderId).MarkWalletUpdated();
-        RefreshIsPaymentDone();
-    }
+        var order = FindOrder(paymentOrderId);
 
-    public void MarkLedgerUpdated(Guid paymentOrderId)
-    {
-        OrderById(paymentOrderId).MarkLedgerUpdated();
-        RefreshIsPaymentDone();
-    }
-
-    private int AbandonUnsettledOrders()
-    {
-        EnsureWhole();
-        var abandoned = 0;
-        foreach (var order in _paymentOrders.Where(order => order.Abandon()))
+        var update = order.Status switch
         {
-            AddDomainEvent(new PaymentOrderFailedDomainEvent(order.PaymentOrderId, CheckoutId));
-            abandoned++;
+            PaymentOrderStatus.Executing => OrderUpdate.Applied,
+            PaymentOrderStatus.Success or PaymentOrderStatus.Refunded => OrderUpdate.AlreadyApplied,
+            PaymentOrderStatus.Failed => OrderUpdate.Superseded,
+            _ => OrderUpdate.NotStarted
+        };
+
+        if (update == OrderUpdate.Applied)
+        {
+            order.TransitionToSuccess(pspTokenRef);
+            IsPaymentDone = _paymentOrders.All(o => o.Status == PaymentOrderStatus.Success);
+            Version++;
         }
 
-        RefreshIsPaymentDone();
-        return abandoned;
+        return update;
     }
 
-    // TrueForAll is true over no orders; a checkout with nothing to pay is not paid.
-    private void RefreshIsPaymentDone() =>
-        IsPaymentDone = _paymentOrders.Count > 0
-                        && _paymentOrders.TrueForAll(order => order.Status == PaymentOrderStatus.Success);
-
-    private void EnsureWhole()
+    // The buyer cancelled on the PSP's page. A paid order does not change its mind.
+    public OrderUpdate FailOrder(Guid paymentOrderId)
     {
-        if (_paymentOrders.Count != OrderCount)
-            throw new PaymentDomainException(
-                $"Checkout {CheckoutId} was loaded with {_paymentOrders.Count} of its {OrderCount} payment orders.");
+        var order = FindOrder(paymentOrderId);
+
+        var update = order.Status switch
+        {
+            PaymentOrderStatus.Init or PaymentOrderStatus.Executing => OrderUpdate.Applied,
+            PaymentOrderStatus.Failed => OrderUpdate.AlreadyApplied,
+            _ => OrderUpdate.Superseded
+        };
+
+        if (update == OrderUpdate.Applied)
+        {
+            order.TransitionToFailed();
+            Version++;
+        }
+
+        return update;
     }
 
-    private PaymentOrder OrderById(Guid paymentOrderId)
+    public void MarkOrderSettled(Guid paymentOrderId)
     {
-        EnsureWhole();
-        return _paymentOrders.Find(order => order.PaymentOrderId == paymentOrderId)
-               ?? throw new PaymentDomainException($"Payment order {paymentOrderId} does not belong to checkout {CheckoutId}.");
+        var order = FindOrder(paymentOrderId);
+        order.CompleteWalletDistribution();
+        order.CompleteLedgerBookkeeping();
+        Version++;
+    }
+
+    public void MarkOrderRefunded(Guid paymentOrderId)
+    {
+        FindOrder(paymentOrderId).TransitionToRefunded();
+        Version++;
+    }
+
+    public PaymentOrder FindOrder(Guid paymentOrderId) =>
+        _paymentOrders.SingleOrDefault(o => o.PaymentOrderId == paymentOrderId)
+        ?? throw new PaymentDomainException($"Payment order {paymentOrderId} is not part of checkout {CheckoutId}.");
+
+    public void MarkAsComplete()
+    {
+        if (_paymentOrders.Count == 0)
+        {
+            throw new PaymentDomainException("Cannot process a zero-item checkout entry.");
+        }
+        IsPaymentDone = true;
     }
 }

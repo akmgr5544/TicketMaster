@@ -4,10 +4,12 @@ using MediatR;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using TicketMaster.Common.IntegrationEvents;
 using Users.Api.Database;
 using Users.Api.Entities;
 using Users.Api.Options;
 using Users.Api.Shared;
+using Wolverine.EntityFrameworkCore;
 
 namespace Users.Api.Features.Users.Register;
 
@@ -31,13 +33,15 @@ public static class RegisterUser
     {
         private readonly AuthOptions _authOptions;
         private readonly UsersDomainContext _dbContext;
+        private readonly IDbContextOutbox<UsersDomainContext> _outbox;
         private readonly PasswordHasher<User> _passwordHasher;
 
-        public Handler(UsersDomainContext dbContext,
+        public Handler(IDbContextOutbox<UsersDomainContext> outbox,
             IOptions<AuthOptions> authOptions)
         {
             _authOptions = authOptions.Value;
-            _dbContext = dbContext;
+            _outbox = outbox;
+            _dbContext = outbox.DbContext;
             _passwordHasher = new();
         }
 
@@ -84,9 +88,12 @@ public static class RegisterUser
             user.RefreshTokenExpires = refreshToken.Expires;
 
             _dbContext.Users.Add(user);
+            // Staged in the outbox and committed with the user: other services hear about exactly the accounts
+            // that exist, and a registration rolled back below announces nothing.
+            await _outbox.PublishAsync(new UserRegisteredIntegrationEvent(user.Id, user.Email));
             try
             {
-                await _dbContext.SaveChangesAsync(cancellationToken);
+                await _outbox.SaveChangesAndFlushMessagesAsync(cancellationToken);
             }
             catch (DbUpdateException)
             {

@@ -4,103 +4,102 @@ using PaymentProvider.Abstractions;
 using PaymentProvider.Exceptions;
 using PaymentProvider.Models;
 using PaymentSystem.Data;
-using PaymentSystem.Domain.Exceptions;
 using PaymentSystem.Enums;
 using PaymentSystem.Shared.Endpoints;
-using PaymentSystem.Shared.Pipelines;
 using PaymentSystem.Shared.Results;
 
 namespace PaymentSystem.Features.PaymentOrders;
 
+// Opens the PSP's payment page for an order. The order id is the PSP's idempotency key, so asking twice reaches the
+// same payment rather than a second one.
 public static class StartCheckout
 {
-    public sealed record Command(Guid CallerId, Guid PaymentOrderId) : IRequest<Result<Response>>, ITransactionalRequest;
+    // A saved method of the buyer's to pay with; without one the buyer enters a card on the PSP's page.
+    public sealed record Request(Guid? PaymentMethodId);
 
-    // ClientToken is the one provider secret that leaves this service: the client's payment form needs it.
-    // It is never stored and never logged.
-    public sealed record Response(Guid PaymentOrderId, string Provider, string ClientToken);
+    // Not ITransactionalRequest: the PSP call must not hold a database transaction open, and the single save
+    // afterwards is atomic on its own.
+    public sealed record Command(Guid CallerId, Guid PaymentOrderId, Guid? PaymentMethodId = null) : IRequest<Result<Response>>;
 
-    internal sealed class Handler(PaymentDbContext context, IPaymentGatewayFactory gateways, ILogger<Handler> logger)
+    // The client token goes to the payment form once; it is never stored or logged.
+    public sealed record Response(string Provider, string ClientToken);
+
+    internal sealed class Handler(PaymentDbContext context, IPaymentGatewayFactory gateways, TimeProvider clock)
         : IRequestHandler<Command, Result<Response>>
     {
         public async Task<Result<Response>> Handle(Command request, CancellationToken cancellationToken)
         {
-            // The buyer is in the predicate, so another buyer's order is indistinguishable from a missing one.
             var checkout = await context.PaymentEvents
-                .Where(e => e.BuyerId == request.CallerId
-                            && e.PaymentOrders.Any(o => o.PaymentOrderId == request.PaymentOrderId))
-                .SingleOrDefaultAsync(cancellationToken);
+                .SingleOrDefaultAsync(e => e.BuyerId == request.CallerId
+                                           && e.PaymentOrders.Any(o => o.PaymentOrderId == request.PaymentOrderId), cancellationToken);
+
             if (checkout is null)
-                return Error.NotFound("payment_order_not_found", $"No payment order {request.PaymentOrderId}.");
+                return Error.NotFound("payment_order_not_found", $"Payment order {request.PaymentOrderId} was not found.");
 
-            var order = checkout.Order(request.PaymentOrderId);
+            var order = checkout.FindOrder(request.PaymentOrderId);
             if (order.Status is PaymentOrderStatus.Success or PaymentOrderStatus.Failed or PaymentOrderStatus.Refunded)
-                return Error.Conflict("payment_order_settled", $"Payment order {order.PaymentOrderId} is already {order.Status}.");
+                return Error.Conflict("payment_order_settled", $"Payment order {request.PaymentOrderId} is already {order.Status}.");
 
-            var gateway = gateways.ForProvider(order.Provider);
+            // An order already started goes back to its own provider.
+            var gateway = order.Status == PaymentOrderStatus.Executing ? gateways.ForProvider(order.Provider) : gateways.Default;
+
+            if (request.PaymentMethodId is { } paymentMethodId)
+            {
+                var method = await context.PaymentMethods
+                    .SingleOrDefaultAsync(m => m.Id == paymentMethodId && m.UserId == request.CallerId, cancellationToken);
+
+                if (method is null)
+                    return Error.NotFound("payment_method_not_found", $"Payment method {paymentMethodId} was not found.");
+
+                // A saved token belongs to the PSP that issued it; another PSP cannot charge it.
+                if (!string.Equals(method.PspName, gateway.Kind.ToString(), StringComparison.OrdinalIgnoreCase))
+                    return Error.BadRequest("payment_method_provider_mismatch",
+                        $"Payment method {paymentMethodId} is held by {method.PspName}, but this order is paid through {gateway.Kind}.");
+
+                checkout.UsePaymentMethod(method.Id);
+            }
+
             CheckoutSession session;
             try
             {
-                // The order id is the provider's idempotency key, so asking again for an order already started
-                // replays the session it already has rather than opening a second one.
                 session = await gateway.CreateCheckoutAsync(
-                    new CheckoutRequest(order.PaymentOrderId, order.Amount, order.Currency), cancellationToken);
+                    new CheckoutRequest(order.PaymentOrderId, order.Amount.Amount, order.Amount.Currency), cancellationToken);
             }
             catch (PaymentProviderException exception) when (Error.FromProvider(exception) is { } error)
             {
                 return error;
             }
 
-            // A redelivered or reloaded checkout. The client token is never stored, so the provider is the only
-            // place to get it again; the replayed session must be the recorded one, or the provider opened a
-            // second payment (an expired idempotency key) and both could be paid — that is refused, not adopted.
-            if (order.Status == PaymentOrderStatus.Executing)
-            {
-                if (order.PspToken != session.ProviderReference)
-                {
-                    logger.LogWarning("The provider returned a different session for payment order {PaymentOrderId}.",
-                        order.PaymentOrderId);
-                    return Error.Conflict("psp_session_mismatch",
-                        $"Payment order {order.PaymentOrderId} already has a different payment session.");
-                }
-
-                return new Response(order.PaymentOrderId, gateway.Kind.ToString(), session.ClientToken);
-            }
+            checkout.StartOrder(order.PaymentOrderId, gateway.Kind.ToString(), session.ProviderReference, clock.GetUtcNow().UtcDateTime);
 
             try
             {
-                checkout.StartExecuting(order.PaymentOrderId, gateway.Kind.ToString(), session.ProviderReference);
                 await context.SaveChangesAsync(cancellationToken);
             }
-            catch (PaymentDomainException exception)
-            {
-                return Error.BadRequest("payment_order_not_startable", exception.Message);
-            }
-            // Another write to this checkout landed first — a concurrent start, or a sibling order settling. The
-            // session is idempotent, so the client simply asks again.
+            // The expiry, a cancellation or a PSP answer changed the order while the PSP was being asked.
             catch (DbUpdateConcurrencyException)
             {
-                return Error.Conflict("checkout_changed", "The checkout changed while starting. Try again.");
+                return Error.Conflict("payment_order_changed", "The payment order changed while it was being started. Try again.");
             }
 
-            logger.LogInformation("Started payment order {PaymentOrderId} with {Provider}.", order.PaymentOrderId,
-                gateway.Kind);
-            return new Response(order.PaymentOrderId, gateway.Kind.ToString(), session.ClientToken);
+            return new Response(gateway.Kind.ToString(), session.ClientToken);
         }
     }
 }
 
-public sealed class StartCheckoutEndpoints : IEndpointMarker
+public sealed class StartCheckoutEndpoint : IEndpointMarker
 {
     public void MapEndpoint(IEndpointRouteBuilder endpoints)
     {
         endpoints.MapPost("api/payments/orders/{paymentOrderId:guid}/checkout",
-            async (Guid paymentOrderId, HttpContext httpContext, ISender sender, CancellationToken cancellationToken) =>
+            async (Guid paymentOrderId, StartCheckout.Request? body, HttpContext httpContext, ISender sender,
+                CancellationToken cancellationToken) =>
             {
                 if (!httpContext.TryGetUserId(out var callerId))
                     return Results.Unauthorized();
 
-                var result = await sender.Send(new StartCheckout.Command(callerId, paymentOrderId), cancellationToken);
+                var result = await sender.Send(
+                    new StartCheckout.Command(callerId, paymentOrderId, body?.PaymentMethodId), cancellationToken);
                 return result.IsSuccess ? Results.Ok(result.Value) : result.Error!.ToProblem();
             });
     }

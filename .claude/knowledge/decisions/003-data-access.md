@@ -27,9 +27,10 @@ aggregate, return aggregates, and are the only way the Application layer reaches
 1. `AsNoTracking()` or a `Select` projection for reads.
 2. `CancellationToken` passed to every async EF call.
 3. Entity configuration in `IEntityTypeConfiguration<T>` classes.
-4. Cross-cutting work in interceptors: `DomainEventPublisherInterceptor` (Bookings, Payments),
-   `AggregateVersionInterceptor` and `AuditTimestampsInterceptor` (Payments),
-   `OutboxFlushInterceptor` (Bookings, Payments).
+4. Cross-cutting work in interceptors: `DomainEventPublisherInterceptor` and `OutboxFlushInterceptor`
+   (Bookings), `AuditTimestampsInterceptor` (Payments).
+7. Payments reads through a second, no-tracking `PaymentQueryDbContext` over plain read models in `Query/`,
+   mapped to the same tables with `ExcludeFromMigrations`; only `PaymentDbContext` owns the schema.
 5. Migrations applied at startup by `ApplyMigrationsAsync()`. Payments' test fixtures use
    `MigrateAsync`, never `EnsureCreated`, so model drift fails tests.
 6. Audit timestamps from `TimeProvider` — Payments does this; Bookings and Users do not yet (see

@@ -1,7 +1,6 @@
 using MediatR;
 using Microsoft.EntityFrameworkCore;
 using PaymentSystem.Data;
-using PaymentSystem.Domain;
 using PaymentSystem.Shared.Endpoints;
 using PaymentSystem.Shared.Results;
 
@@ -11,46 +10,36 @@ public static class GetPaymentOrder
 {
     public sealed record Query(Guid CallerId, Guid PaymentOrderId) : IRequest<Result<Response>>;
 
-    // No PspToken: it is the PSP's handle on the buyer's payment method and never leaves this service.
     public sealed record Response(
         Guid PaymentOrderId,
         Guid CheckoutId,
-        Guid BuyerId,
-        Guid MerchantId,
-        string ViewerRole,
+        Guid SellerId,
         decimal Amount,
         string Currency,
         string Status,
         bool WalletUpdated,
         bool LedgerUpdated,
-        DateTime CreatedAt,
-        DateTime UpdatedAt);
+        DateTime CreatedAt);
 
-    public const string BuyerRole = "Buyer";
-    public const string MerchantRole = "Merchant";
-
-    internal sealed class Handler(PaymentDbContext context) : IRequestHandler<Query, Result<Response>>
+    internal sealed class Handler(PaymentQueryDbContext context) : IRequestHandler<Query, Result<Response>>
     {
         public async Task<Result<Response>> Handle(Query request, CancellationToken cancellationToken)
         {
-            // Both parties are in the predicate: to anyone else the order does not exist.
-            var order = await context.Set<PaymentOrder>()
+            // Visible to its seller and to the buyer of its checkout; to anyone else it does not exist.
+            var order = await context.PaymentOrders
                 .Where(o => o.PaymentOrderId == request.PaymentOrderId
-                            && (o.BuyerId == request.CallerId || o.MerchantId == request.CallerId))
+                            && (o.SellerId == request.CallerId
+                                || context.PaymentEvents.Any(e => e.CheckoutId == o.CheckoutId && e.BuyerId == request.CallerId)))
                 .Select(o => new Response(
                     o.PaymentOrderId,
                     o.CheckoutId,
-                    o.BuyerId,
-                    o.MerchantId,
-                    // A seller buying their own ticket is answered as the buyer.
-                    o.BuyerId == request.CallerId ? BuyerRole : MerchantRole,
+                    o.SellerId,
                     o.Amount,
                     o.Currency,
-                    o.Status.ToString(),
+                    o.Status,
                     o.WalletUpdated,
                     o.LedgerUpdated,
-                    o.CreatedAt,
-                    o.UpdatedAt))
+                    o.CreatedAt))
                 .SingleOrDefaultAsync(cancellationToken);
 
             if (order is null)
@@ -61,7 +50,7 @@ public static class GetPaymentOrder
     }
 }
 
-public sealed class GetPaymentOrderEndpoints : IEndpointMarker
+public sealed class GetPaymentOrderEndpoint : IEndpointMarker
 {
     public void MapEndpoint(IEndpointRouteBuilder endpoints)
     {

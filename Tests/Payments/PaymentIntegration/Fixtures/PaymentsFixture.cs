@@ -1,17 +1,21 @@
-using MediatR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Npgsql;
 using PaymentSystem.Data;
-using PaymentSystem.Domain.Events;
 using PaymentSystem.Extensions;
 using Respawn;
 using Respawn.Graph;
 using Testcontainers.PostgreSql;
+using Wolverine;
 
 namespace PaymentIntegration.Fixtures;
 
+// The production composition — AddInfrastructureServices — against a real Postgres. Wolverine is not started here
+// (ConfigureMessaging is a host-builder extension, exactly as in Bookings), so the two hops it would own are
+// replaced: the PSP by StubPsp, and IMessageBus by a recorder. What Wolverine itself guarantees — the transaction
+// around a message handler, the outbox, the broker — is proven by PaymentsHostFixture instead.
 public sealed class PaymentsFixture : IAsyncLifetime
 {
     private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:17-alpine").Build();
@@ -23,7 +27,11 @@ public sealed class PaymentsFixture : IAsyncLifetime
 
     public ControllableTimeProvider Clock { get; } = new();
 
-    public DomainEventRecorder Events { get; } = new();
+    public StubPsp Psp => Services.GetRequiredService<StubPsp>();
+
+    public MessageBusLog Bus { get; } = new();
+
+    public LogCapture Logs => Services.GetRequiredService<LogCapture>();
 
     public async Task InitializeAsync()
     {
@@ -32,7 +40,11 @@ public sealed class PaymentsFixture : IAsyncLifetime
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["ConnectionStrings:DefaultConnection"] = _postgres.GetConnectionString()
+                ["ConnectionStrings:DefaultConnection"] = _postgres.GetConnectionString(),
+                // Never dialled: StubPsp replaces the factory. AddPaymentProviders still registers its options.
+                ["PaymentProviders:Default"] = "Stripe",
+                ["PaymentProviders:Stripe:SecretKey"] = "sk_test_unused",
+                ["PaymentProviders:Stripe:WebhookSecret"] = "whsec_unused"
             })
             .Build();
 
@@ -42,21 +54,12 @@ public sealed class PaymentsFixture : IAsyncLifetime
 
         services.AddInfrastructureServices(configuration);
 
-        // Registered after AddInfrastructureServices so it wins over TimeProvider.System; everything else
-        // is the production wiring.
+        // Registered after AddInfrastructureServices so it wins over TimeProvider.System.
         services.AddSingleton<TimeProvider>(Clock);
-
-        // The PSP is another process: only its factory is replaced.
         services.AddPspStubs();
-
-        services.AddSingleton(Events);
-        services.AddScoped<RecordingHandler>();
-        services.AddScoped<INotificationHandler<PaymentOrderSucceededDomainEvent>>(sp => sp.GetRequiredService<RecordingHandler>());
-        services.AddScoped<INotificationHandler<PaymentOrderFailedDomainEvent>>(sp => sp.GetRequiredService<RecordingHandler>());
-
-        // The production publisher is registered only with Wolverine (ConfigureMessaging); see PaymentsHostFixture.
-        services.AddSingleton<IntegrationEventLog>();
-        services.AddScoped<PaymentSystem.Shared.Messaging.IIntegrationEventPublisher, RecordingIntegrationEventPublisher>();
+        services.AddSingleton(Bus);
+        services.RemoveAll<IMessageBus>();
+        services.AddScoped(_ => RecordingMessageBus.Create(Bus));
 
         Services = services.BuildServiceProvider(new ServiceProviderOptions
         {
@@ -66,8 +69,8 @@ public sealed class PaymentsFixture : IAsyncLifetime
 
         await using (var scope = Services.CreateAsyncScope())
         {
-            // Migrations, never EnsureCreated: the schema under test is the one production gets, so a migration
-            // that drifts from the model fails here instead of at deployment.
+            // Migrations, never EnsureCreated: the schema under test is the one production gets, hand-written
+            // wallet index included.
             await scope.ServiceProvider.GetRequiredService<PaymentDbContext>().Database.MigrateAsync();
         }
 
@@ -86,7 +89,9 @@ public sealed class PaymentsFixture : IAsyncLifetime
     {
         await _respawner.ResetAsync(_respawnConnection);
         Clock.Reset();
-        Events.Reset();
+        Psp.Reset();
+        Bus.Reset();
+        Logs.Clear();
     }
 
     public async Task DisposeAsync()

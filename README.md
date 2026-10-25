@@ -63,6 +63,7 @@ flowchart TB
     bookings -- "gRPC · EventsLookup.GetEvent" --> events
 
     users --> postgres
+    users --> broker
     bookings --> postgres
     bookings --> redis
     payments --> postgres
@@ -84,9 +85,12 @@ flowchart LR
     bookings["<b>Bookings</b>"]
     payments["<b>Payments</b>"]
 
+    users["<b>Users</b>"]
+
     events -- "EventCreated<br/>EventRescheduled<br/>EventRelocated<br/>EventRepriced<br/>EventCancelled" --> bookings
     bookings -- "PaymentRequested<br/>BookingCancelled<br/>RefundRequested" --> payments
     payments -- "BookingPaid<br/>BookingPaymentFailed<br/>BookingRefunded" --> bookings
+    users -- "UserRegistered" --> payments
 ```
 
 | Message | From → To | What the consumer does |
@@ -102,6 +106,7 @@ flowchart LR
 | `BookingPaid` | Payments → Bookings | Confirms the booking |
 | `BookingPaymentFailed` | Payments → Bookings | Cancels the unpaid booking and releases its seats |
 | `BookingRefunded` | Payments → Bookings | Names the refund that landed; releases the seats it covered, and marks the booking `Refunded` once every seat's refund has |
+| `UserRegistered` | Users → Payments | Keeps Payments' own copy of the user (id and email); committed with the registration, so a refused one announces nothing |
 
 ### A booking, end to end
 
@@ -226,13 +231,25 @@ Payments exposes the checkout's payment side, also scoped to the caller; PSP web
 route the gateway leaves ungated, because the provider signs them instead:
 
 ```
-POST   /api/payments/orders/{id}/checkout        # start the PSP session → client token for the hosted page
-POST   /api/payments/orders/{id}/payment-method  # synchronous charge (Braintree); 202 when the outcome comes by webhook
+POST   /api/payments/orders/{id}/checkout        # start the PSP session → client token; optional { paymentMethodId } (a saved method)
+POST   /api/payments/orders/{id}/payment-method  # synchronous charge (Braintree), with a one-time token or the saved method;
+                                                 # 202 when the outcome comes by webhook
 POST   /api/payments/webhooks/{provider}         # PSP callback — signature-verified, no user token
 GET    /api/payments/checkouts/{bookingId}       # the buyer's checkout and its orders
 GET    /api/payments/orders/{id}                 # visible to the order's buyer or its seller
-GET    /api/payments/orders/{id}/ledger          # the order's pay-in pair and a refund pair per refund (zero once wholly refunded)
+GET    /api/payments/orders/{id}/refunds         # same visibility; oldest first
+GET    /api/payments/orders/{id}/ledger          # the order's pay-in pair and a refund pair per refund (read-only)
+
+GET    /api/payments/payment-methods/me          # the caller's saved methods, default first; the PSP token is never returned
+GET    /api/payments/payment-methods/{id}
+POST   /api/payments/payment-methods             # { pspName, pspToken, makeDefault }; the first one becomes the default
+PUT    /api/payments/payment-methods/{id}/default
+DELETE /api/payments/payment-methods/{id}        # 409 once a checkout used it
+
 GET    /api/wallets/me                           # the caller's wallets, one per currency
+GET    /api/wallets/{id}
+POST   /api/wallets                              # { currency } — an empty wallet; 409 if one exists in that currency
+DELETE /api/wallets/{id}                         # only an empty wallet; no update — balances move only by settlement and refund
 ```
 
 No request body carries a user id. Identity comes from the gateway's `X-Identity-UserId` header, and
@@ -256,7 +273,7 @@ pages by `page`/`pageSize` and returns `items`, `page`, `pageSize`, `total` and 
 | **Users.Api** | Vertical slice (`Features/Users/…`) | Postgres | Registration (the first account becomes Admin), authentication, refresh tokens, admin role assignment. Issues the JWTs and answers the gateway's introspection call. |
 | **Bookings** | `Domain` / `Application` / `Sql` / `Api` | Postgres + Redis | Reservations and bookings. Owns the whole ticket lifecycle — held in Redis, sold in Postgres, settled or released when a payment result arrives — with a distributed lock per seat guarding concurrent reservation. |
 | **Events** | `Domain` / `Application` / `Cosmos` / `Api` | Cosmos DB | The catalogue: venues and performers with full CRUD; events created, rescheduled, relocated, re-lined-up and cancelled (never deleted). Serves the `EventsLookup` gRPC service Bookings calls. Publishes `EventCreated`, `EventRescheduled`, `EventRelocated` and `EventCancelled` — the first is what causes tickets to exist in Bookings, and the rest are what keep them correct. |
-| **PaymentSystem** | Vertical slices (`Features/<Aggregate>/<Feature>.cs`) on a DDD `Domain/` | Postgres | The pay-in flow: a checkout per booking with one payment order per seller, PSP checkout and webhooks, seller wallets, a double-entry ledger, 15-minute checkout expiry, full refunds. Publishes `BookingPaid` / `BookingPaymentFailed` / `BookingRefunded`. |
+| **PaymentSystem** | Vertical slices (`Features/<Area>/<Feature>.cs`) on a DDD `Domain/`, with a separate no-tracking read side | Postgres | The pay-in flow: a checkout per booking with one payment order per seller, PSP checkout and webhooks, saved payment methods, seller wallets, a double-entry ledger, 15-minute checkout expiry, reconciliation of stuck orders, refunds whole or in part. Publishes `BookingPaid` / `BookingPaymentFailed` / `BookingRefunded`. |
 | **PaymentProvider** | Class library | — | Anti-corruption layer over the PSPs (Stripe, Braintree) behind `IPaymentGateway`. |
 | **TicketMaster.ApiGateway** | — | — | YARP routing, edge authentication, identity header propagation. |
 | **TicketMaster.Common** | — | — | Integration event contracts and the `events.proto` gRPC contract shared across service boundaries. |
@@ -266,7 +283,8 @@ pages by `page`/`pageSize` and returns `items`, `page`, `pageSize`, `total` and 
 **CQRS with MediatR.** Commands in `*.Application/Commands` (one exception: Bookings'
 `CancelBookingCommand` sits in `Queries/CustomerBookingQueries.cs`, beside the queries it is used with),
 handlers in `CommandHandlers`, with open-generic `IPipelineBehavior<,>` for cross-cutting concerns.
-PaymentSystem keeps each command, query and handler together in its feature file instead.
+PaymentSystem keeps each command, query and handler together in its feature file instead, and handles
+broker messages with plain Wolverine handlers rather than MediatR.
 
 **Two things hold a seat, at different stages (Bookings).** Reserving writes a Redis key with a TTL
 and nothing else, so a checkout abandoned before booking lapses on its own and needs no compensating
@@ -313,10 +331,11 @@ so seats are never released a second time after somebody else has taken them.
 
 **A lost outcome is asked about again (Payments).** A charge whose result failed to record, or a webhook
 that never arrived, leaves an order `Executing`. `ReconcileOrdersJob` runs every minute, asks the provider
-that started each order idle for over two minutes, and records a final answer through the same
-transactional `RecordOutcome` the synchronous charge uses — well inside the 15-minute window after which the
-expiry would fail the order over money already taken. A refund is split the same way: `RefundCheckout` calls
-the provider with no transaction open, and `RecordRefund` writes the order, the wallet debit and the ledger pair.
+that started each order executing for over two minutes, and records a final answer through the same
+`RecordPaymentOutcome` handler the webhook and the synchronous charge use — well inside the 15-minute window
+after which the expiry would fail the order over money already taken. A refund is split the same way:
+`ProcessRefund` calls the provider with no transaction open, and `RecordRefundOutcome` writes the refund, the
+wallet debit and the reversing ledger pair in its own.
 
 **A cancellation may overtake its payment request (Payments).** The two messages travel separately, so a
 `BookingCancelled` can arrive before its `PaymentRequested`. With no checkout to cancel, Payments records the
@@ -324,7 +343,7 @@ booking as cancelled, and the late request is refused rather than opening a chec
 pay. Both handlers insert a claim keyed by the booking id, so when the two arrive together the primary key
 makes the second wait for the first and then read what it decided. No lock is taken.
 
-**Domain event dispatch, two ways.** Bookings (and Payments) use a `SaveChangesInterceptor`, so persistence and
+**Domain event dispatch, two ways.** Bookings uses a `SaveChangesInterceptor`, so persistence and
 event emission cannot diverge. Dispatch runs *after* the write, so a handler that changes something
 must save that change itself — the surrounding transaction is what keeps its save atomic with the
 write that triggered it. Events are cleared before publishing rather than after: a handler that saves
@@ -376,24 +395,30 @@ serialized through a private rehydration constructor, so loading a past event ne
 creation invariants that would reject it.
 
 **One aggregate per checkout, one order per seller (Payments).** `PaymentEvent` is the root and the only
-way to change its `PaymentOrder`s, so the checkout-wide rule — done once every order has succeeded — cannot
-be bypassed. A provider's answer goes through `ApplyProviderAnswer`, which reports a repeat or a stale answer
-instead of applying it — what makes redelivered webhooks and messages safe. The domain refuses any amount `numeric(18,2)` cannot hold exactly,
-because Postgres would otherwise round it and the PSP would charge a different amount than the ledger
-records. A checkout is created empty and given its orders with `AddOrder` — none once payment has begun.
-Since nothing then forces an order in code, an empty checkout is never paid, and the database refuses to
-store one (`CHECK ("OrderCount" > 0)`).
+way to change its `PaymentOrder`s (owned, in their own table), so the checkout-wide rule — paid once every
+order has succeeded — cannot be bypassed. A provider's answer is *reported* rather than thrown (`Applied`,
+`AlreadyApplied`, `Superseded`, `NotStarted`), which is what makes redelivered webhooks and late answers safe.
+`Money` is a value object mapped as a complex property: it refuses any amount `numeric(18,2)` cannot hold
+exactly, because Postgres would otherwise round it and the PSP would charge a different amount than the ledger
+records.
 
-**A version the database checks, set at save time (Payments).** Two orders of one checkout settling at
-once would each see the other unfinished; `PaymentEvent.Version` makes the second save fail and reload. An
-interceptor sets it from the version the checkout was *loaded* with — a domain-side bump let a stale
-disconnected copy overwrite a newer row.
+**A version every change bumps (Payments).** Two orders of one checkout settling at once would each see the
+other unfinished and leave the checkout never paid; a webhook racing the expiry would overwrite one with the
+other. Every applied change to the checkout or an order bumps `PaymentEvent.Version`, a concurrency token, so
+the second save fails and Wolverine's retry decides again over the winner's state. Wallets carry Postgres'
+`xmin` for the same reason.
 
-**An outbox on the HTTP path, not only on messages (Bookings, Payments).** Both services publish through
-an `IIntegrationEventPublisher` that stages into Wolverine's `DbContextOutbox` on the transaction already
-open and sends after commit, so a webhook's settlement, its ledger pair and its `BookingPaid` commit or roll
-back together. Wolverine's own `SaveChangesAndFlushMessagesAsync` is avoided because it commits the
-transaction itself.
+**Writes and messages commit together (Bookings, Payments).** Bookings publishes through an
+`IIntegrationEventPublisher` that stages into Wolverine's `DbContextOutbox` on the transaction already open
+and sends after commit — Wolverine's own `SaveChangesAndFlushMessagesAsync` is avoided because it commits the
+transaction itself. Payments lets its message handlers return the messages and Wolverine's EF Core middleware
+save them with the handler's writes; an HTTP slice that must publish (the webhook, the synchronous charge)
+invokes such a handler inline. Either way a settlement, its ledger pair and its `BookingPaid` commit or roll
+back together — the host tests prove it by failing the write with a database trigger.
+
+**A separate read side (Payments).** Reads go through `PaymentQueryDbContext`: plain read models with no
+logic, no tracking, mapped to the same tables and excluded from migrations, so the domain model never bends
+to fit a query and a read never pays for change tracking.
 
 ## 🧪 Testing
 
@@ -458,15 +483,18 @@ relay end to end: a create-event command's `EventCreatedIntegrationEvent` reache
 consumer host. It mirrors Bookings' host fixture. See the `testing` skill for the fixtures, the
 two-scope 412 trick and the limits.
 
-Payments has `Tests/Payments/PaymentIntegration`: every slice through the production
-`AddInfrastructureServices` against real Postgres, with the schema built by the real migrations, plus
-concurrency, integrity, precision, timestamp and domain-event suites, and a `Mechanics/` collection that boots
-the real host on Postgres and RabbitMQ with a stand-in Bookings host (request → checkout, cancel, expiry,
-outbox rollback). `PaymentDomain` covers every aggregate rule, `PaymentAdapters` the PSP adapters, and
-`PaymentArchitecture` the slice rules — the domain depends on nothing but itself, `PaymentSystem.Enums`, the BCL and MediatR, no feature area
-reaches into another, `PaymentProvider` never references `PaymentSystem`, handlers are internal and sealed,
-and every writing command is transactional — except `SubmitPaymentMethod.Command` and `RefundCheckout.Command`,
-which only call the PSP and hand the write to a transactional `RecordOutcome` / `RecordRefund`.
+Payments has `Tests/Payments/PaymentIntegration`: every HTTP slice and message handler through the production
+`AddInfrastructureServices` against real Postgres, with the schema built by the real migrations — the PSP
+replaced by a stub and Wolverine's bus by a recorder, since this fixture starts no broker — plus `Persistence/`
+for the uniqueness indexes, money precision and concurrency, and a `Mechanics/` collection that boots the real
+host on Postgres and RabbitMQ with a stand-in Bookings host: messages over the broker, the durable expiry,
+Stripe-signed webhooks through the real adapter, replies reaching Bookings, and the outbox rolling back with a
+failed write. `PaymentDomain` covers every aggregate rule, `PaymentAdapters` the PSP adapters, and
+`PaymentArchitecture` the structure — the domain depends on nothing but itself, `PaymentSystem.Enums` and the
+BCL, read models never reference the domain, `PaymentProvider` never references `PaymentSystem`, MediatR
+handlers are internal and sealed, and every writing command is transactional except `StartCheckout` and
+`SubmitPaymentMethod`, which call a PSP and must not hold a transaction open. The tests were written from the
+requirements rather than the code, and the key suites were checked by breaking the code on purpose.
 
 **Needs a running Docker daemon** — every test in `BookingIntegration`, `EventsIntegration` and `PaymentIntegration` starts
 containers; with the daemon down the whole project fails at fixture initialisation. `Bookings.Sql` and
@@ -475,10 +503,11 @@ internal context, repositories and handlers; `Bookings.Application` and `Events.
 to `GrpcSeam`, and `PaymentSystem` to `PaymentIntegration`. `EventsIntegration` needs no such entry — it
 reaches everything through public interfaces (`ISender`, the repository contracts).
 
-Users.Api has `Tests/Users/UsersIntegration`: the real host on a Postgres container, driving registration,
-login and `PUT /api/users/{id}/role` over HTTP with tokens from the real endpoints. It covers the
-first-account-becomes-Admin bootstrap (including the race between two first registrations) and the admin-only
-role change. It is what found that every register, login and refresh had been answering 500 — the handlers'
+Users.Api has `Tests/Users/UsersIntegration`: the real host on Postgres and RabbitMQ containers, driving
+registration, login and `PUT /api/users/{id}/role` over HTTP with tokens from the real endpoints. It covers the
+first-account-becomes-Admin bootstrap (including the race between two first registrations), the admin-only
+role change, and `UserRegistered` reaching a stand-in subscriber — including a duplicate that loses the insert
+race announcing nothing. It is what found that every register, login and refresh had been answering 500 — the handlers'
 `IOptions<AuthOptions>` could not be constructed from a positional record — and that a numeric or
 comma-joined role string was accepted.
 
@@ -514,10 +543,11 @@ dotnet test Tests/Gateway/GatewayTests/GatewayTests.csproj
 dotnet test Tests/Rpc/GrpcSeam/GrpcSeam.csproj
 ```
 
-**Not covered, deliberately:** most Wolverine `Consume` handlers are two-line delegations to commands
+**Not covered, deliberately:** most Bookings `Consume` handlers are two-line delegations to commands
 that are already covered directly, so only a representative few are driven off a real broker by the host
-fixtures — Bookings' `BookingPaymentFailed`, and Payments' `PaymentRequested` (including a redelivery) and
-`BookingCancelled` — alongside assertions that every broker endpoint is durable. Version-based staleness
+fixtures — Bookings' `BookingPaymentFailed`, and Payments' `PaymentRequested` and `BookingCancelled` —
+alongside assertions that every broker endpoint is durable. Payments' message handlers carry their own logic,
+so each is also run directly against Postgres in the fast suite. Version-based staleness
 guards under genuine out-of-order delivery remain untested by design. See the `testing` skill's "Not
 covered, deliberately" for the rest of that list.
 
@@ -596,10 +626,10 @@ each lives in the owning service's skill under `.claude/skills/`.
 - **Events has no real transaction** (`TransactionBehavior` is a no-op), so the venue and performer delete guards are best-effort.
 - **Reservations rest entirely on the distributed locks**; a lock lost mid-operation can double-reserve a seat.
 - **After-commit work is dropped for a command sent from a message handler** — nothing does that today.
-- **A charge or settlement can lose a concurrency race** (409); a webhook or `ReconcileOrdersJob` settles it within minutes.
-- **A refund can take a seller's wallet below zero**, because the provider has already returned the money.
-- **A refund the provider refuses is logged for a person**, and one accepted as pending that fails later goes unnoticed.
+- **Starting a checkout can lose a concurrency race** (409 `payment_order_changed`) and has to be retried; message handlers retry on their own.
+- **A refund the provider refuses is logged for a person**, and one accepted as pending that fails later goes unnoticed — `PaymentProvider` has no refund lookup or refund webhook yet.
 - **A Braintree sale that has not settled cannot be refunded in part**, only voided whole, so cancelling one seat right after paying needs a person.
+- **Opening a Stripe checkout, the Braintree charge end to end and a real refund** are tested against a stubbed PSP only.
 
 ## 🗺️ Roadmap
 

@@ -6,93 +6,85 @@ using PaymentProvider.Models;
 using PaymentSystem.Data;
 using PaymentSystem.Enums;
 using PaymentSystem.Shared.Endpoints;
-using PaymentSystem.Shared.Pipelines;
+using PaymentSystem.Shared.Messaging;
 using PaymentSystem.Shared.Results;
+using Wolverine;
 
 namespace PaymentSystem.Features.PaymentOrders;
 
+// Hands a payment method to the PSP: the payment form's one-time token, or — when none is sent — the saved method the
+// buyer chose when starting the checkout. Braintree charges here and answers at once; Stripe answers by webhook.
 public static class SubmitPaymentMethod
 {
-    public sealed record Body(string PaymentMethod);
+    public sealed record Request(string? PaymentMethod);
 
-    // Deliberately not transactional — the one Command that is not (see TransactionTest). The charge is a call
-    // to another system that can take seconds, so it runs with no transaction open; only RecordOutcome writes.
-    public sealed record Command(Guid CallerId, Guid PaymentOrderId, string PaymentMethod)
-        : IRequest<Result<Response>>;
+    // Not ITransactionalRequest: the PSP is charged with no transaction open. The outcome is then recorded by
+    // RecordPaymentOutcome, the same handler a webhook uses, in its own transaction.
+    public sealed record Command(Guid CallerId, Guid PaymentOrderId, string? PaymentMethod) : IRequest<Result<Response>>;
 
-    // Pending: the provider takes the payment method from the client directly and reports by webhook
-    // (Stripe). Otherwise the charge already ran; a Failed ProviderStatus leaves the order open for another
-    // payment method.
-    public sealed record Response(
-        Guid PaymentOrderId,
-        bool Pending,
-        string? ProviderStatus,
-        string? FailureReason,
-        string OrderStatus);
+    public sealed record Response(string Status, string? FailureReason);
 
-    internal sealed class Handler(PaymentDbContext context, IPaymentGatewayFactory gateways, ISender sender)
+    internal sealed class Handler(PaymentQueryDbContext context, IPaymentGatewayFactory gateways, IMessageBus bus)
         : IRequestHandler<Command, Result<Response>>
     {
         public async Task<Result<Response>> Handle(Command request, CancellationToken cancellationToken)
         {
-            if (string.IsNullOrWhiteSpace(request.PaymentMethod))
-                return Error.BadRequest("payment_method_missing", "A payment method is required.");
+            var order = await context.PaymentOrders
+                .SingleOrDefaultAsync(o => o.PaymentOrderId == request.PaymentOrderId
+                                           && context.PaymentEvents.Any(e => e.CheckoutId == o.CheckoutId && e.BuyerId == request.CallerId),
+                    cancellationToken);
 
-            // The buyer is in the predicate, so another buyer's order is indistinguishable from a missing one.
-            var checkout = await context.PaymentEvents
-                .Where(e => e.BuyerId == request.CallerId
-                            && e.PaymentOrders.Any(o => o.PaymentOrderId == request.PaymentOrderId))
-                .SingleOrDefaultAsync(cancellationToken);
-            if (checkout is null)
-                return Error.NotFound("payment_order_not_found", $"No payment order {request.PaymentOrderId}.");
+            if (order is null)
+                return Error.NotFound("payment_order_not_found", $"Payment order {request.PaymentOrderId} was not found.");
 
-            var order = checkout.Order(request.PaymentOrderId);
-            switch (order.Status)
+            if (order.Status != nameof(PaymentOrderStatus.Executing))
+                return Error.Conflict("payment_order_not_executing", $"Payment order {request.PaymentOrderId} is {order.Status}; start its checkout first.");
+
+            var paymentMethod = request.PaymentMethod;
+            if (string.IsNullOrWhiteSpace(paymentMethod))
             {
-                case PaymentOrderStatus.NotStarted:
-                    return Error.Conflict("checkout_not_started", $"Payment order {order.PaymentOrderId} has no checkout yet.");
-                case PaymentOrderStatus.Success or PaymentOrderStatus.Failed or PaymentOrderStatus.Refunded:
-                    return Error.Conflict("payment_order_settled", $"Payment order {order.PaymentOrderId} is already {order.Status}.");
+                paymentMethod = await context.PaymentEvents
+                    .Where(e => e.CheckoutId == order.CheckoutId)
+                    .Join(context.PaymentMethods, e => e.PaymentMethodId, m => m.Id, (_, m) => m.PspToken)
+                    .SingleOrDefaultAsync(cancellationToken);
+
+                if (paymentMethod is null)
+                    return Error.BadRequest("payment_method_required",
+                        "Send the payment form's token, or choose a saved payment method when starting the checkout.");
             }
 
-            PaymentResult? payment;
+            PaymentResult? result;
             try
             {
-                payment = await gateways.ForProvider(order.Provider).SubmitPaymentMethodAsync(
-                    new SubmitPaymentMethodRequest(order.PaymentOrderId, order.Amount, order.Currency, request.PaymentMethod),
-                    cancellationToken);
+                result = await gateways.ForProvider(order.Provider).SubmitPaymentMethodAsync(
+                    new SubmitPaymentMethodRequest(order.PaymentOrderId, order.Amount, order.Currency, paymentMethod), cancellationToken);
             }
             catch (PaymentProviderException exception) when (Error.FromProvider(exception) is { } error)
             {
                 return error;
             }
 
-            if (payment is null)
-                return new Response(order.PaymentOrderId, true, null, null, order.Status.ToString());
+            // Stripe: the client pays on Stripe's page and the answer comes by webhook.
+            if (result is null)
+                return new Response("Pending", null);
 
-            // A webhook may have settled the order while the charge was in flight; the copy read above is stale.
-            context.ChangeTracker.Clear();
-            var applied = await sender.Send(new RecordOutcome.Command(order.PaymentOrderId, payment.Status),
-                cancellationToken);
+            // Only Succeeded and Canceled are final; after Failed the buyer may try another payment method.
+            if (result.Status is PaymentStatus.Succeeded or PaymentStatus.Canceled)
+                await bus.InvokeAsync(
+                    new RecordPaymentOutcome(order.PaymentOrderId, result.Status == PaymentStatus.Succeeded, result.ProviderReference),
+                    cancellationToken);
 
-            // The charge has already happened, so the buyer must not simply pay again; the order needs reconciling
-            // against the provider.
-            if (applied.Kind == RecordOutcome.Recorded.NotRecorded)
-                return Error.Conflict("payment_outcome_not_recorded",
-                    $"The payment for order {order.PaymentOrderId} was processed but could not be recorded.");
-
-            return new Response(order.PaymentOrderId, false, payment.Status.ToString(), payment.FailureReason,
-                (applied.OrderStatus ?? order.Status).ToString());
+            return new Response(result.Status.ToString(), result.FailureReason);
         }
     }
 }
 
-public sealed class SubmitPaymentMethodEndpoints : IEndpointMarker
+public sealed class SubmitPaymentMethodEndpoint : IEndpointMarker
 {
     public void MapEndpoint(IEndpointRouteBuilder endpoints)
     {
         endpoints.MapPost("api/payments/orders/{paymentOrderId:guid}/payment-method",
-            async (Guid paymentOrderId, SubmitPaymentMethod.Body body, HttpContext httpContext, ISender sender,
+            async (Guid paymentOrderId, SubmitPaymentMethod.Request body, HttpContext httpContext, ISender sender,
                 CancellationToken cancellationToken) =>
             {
                 if (!httpContext.TryGetUserId(out var callerId))
@@ -100,10 +92,12 @@ public sealed class SubmitPaymentMethodEndpoints : IEndpointMarker
 
                 var result = await sender.Send(
                     new SubmitPaymentMethod.Command(callerId, paymentOrderId, body.PaymentMethod), cancellationToken);
+
                 if (!result.IsSuccess)
                     return result.Error!.ToProblem();
 
-                return result.Value!.Pending ? Results.Accepted(value: result.Value) : Results.Ok(result.Value);
+                // Accepted, not OK: with Stripe nothing is decided until the webhook arrives.
+                return result.Value!.Status == "Pending" ? Results.Accepted(value: result.Value) : Results.Ok(result.Value);
             });
     }
 }

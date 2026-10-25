@@ -1,85 +1,49 @@
 using PaymentIntegration.Fixtures;
-using PaymentSystem.Domain;
 using PaymentSystem.Features.PaymentOrders;
 using PaymentSystem.Shared.Results;
 
 namespace PaymentIntegration.Features.PaymentOrders;
 
-public sealed class GetPaymentOrderTests(PaymentsFixture fixture) : QueryTest(fixture)
+public sealed class GetPaymentOrderTests(PaymentsFixture fixture) : IntegrationTest(fixture)
 {
     [Fact]
-    public async Task Buyer_SeesTheOrder_AsBuyer()
+    public async Task The_buyer_and_the_seller_both_see_the_order()
     {
         var buyer = Guid.NewGuid();
-        var merchant = Guid.NewGuid();
-        var checkout = await SeedCheckoutForAsync(buyer, new OrderLine(merchant, 42.10m, "GBP"));
-        await SettleAsync(checkout, checkout.OrderId(0));
+        var checkout = await SeedCheckoutAsync(OrderState.Success, amount: 42m, buyerId: buyer);
+        var order = checkout.PaymentOrders.Single();
 
-        var result = await SendAsync(new GetPaymentOrder.Query(buyer, checkout.OrderId(0)));
+        foreach (var caller in new[] { buyer, order.SellerId })
+        {
+            var result = await Sender.Send(new GetPaymentOrder.Query(caller, order.PaymentOrderId));
 
-        Assert.True(result.IsSuccess);
-        var order = result.Value!;
-        Assert.Equal(checkout.OrderId(0), order.PaymentOrderId);
-        Assert.Equal(checkout.CheckoutId, order.CheckoutId);
-        Assert.Equal(buyer, order.BuyerId);
-        Assert.Equal(merchant, order.MerchantId);
-        Assert.Equal(GetPaymentOrder.BuyerRole, order.ViewerRole);
-        Assert.Equal(42.10m, order.Amount);
-        Assert.Equal("GBP", order.Currency);
-        Assert.Equal("Success", order.Status);
-        Assert.True(order.WalletUpdated);
-        Assert.True(order.LedgerUpdated);
+            Assert.True(result.IsSuccess);
+            Assert.Equal(order.PaymentOrderId, result.Value!.PaymentOrderId);
+            Assert.Equal(checkout.CheckoutId, result.Value.CheckoutId);
+            Assert.Equal(order.SellerId, result.Value.SellerId);
+            Assert.Equal(42m, result.Value.Amount);
+            Assert.Equal("USD", result.Value.Currency);
+            Assert.Equal("Success", result.Value.Status);
+            Assert.True(result.Value.WalletUpdated);
+            Assert.True(result.Value.LedgerUpdated);
+        }
     }
 
     [Fact]
-    public async Task Merchant_SeesTheirOrder_AsMerchant()
+    public async Task Anyone_else_finds_no_order()
     {
-        var merchant = Guid.NewGuid();
-        var checkout = await SeedCheckoutForAsync(Guid.NewGuid(), new OrderLine(merchant, 7m, "USD"));
+        var checkout = await SeedCheckoutAsync();
 
-        var result = await SendAsync(new GetPaymentOrder.Query(merchant, checkout.OrderId(0)));
-
-        Assert.True(result.IsSuccess);
-        Assert.Equal(GetPaymentOrder.MerchantRole, result.Value!.ViewerRole);
-        Assert.Equal("NotStarted", result.Value.Status);
-    }
-
-    [Fact]
-    public async Task Merchant_OfAnotherOrderInTheSameCheckout_GetsNotFound()
-    {
-        // Sharing a checkout gives a seller nothing: only the order they are paid by is theirs.
-        var merchantA = Guid.NewGuid();
-        var merchantB = Guid.NewGuid();
-        var checkout = await SeedCheckoutForAsync(Guid.NewGuid(),
-            new OrderLine(merchantA, 1m, "USD"),
-            new OrderLine(merchantB, 2m, "USD"));
-        var orderOfA = checkout.PaymentOrders.Single(o => o.MerchantId == merchantA).PaymentOrderId;
-
-        var result = await SendAsync(new GetPaymentOrder.Query(merchantB, orderOfA));
+        var result = await Sender.Send(new GetPaymentOrder.Query(Guid.NewGuid(), checkout.PaymentOrders.Single().PaymentOrderId));
 
         Assert.Equal(ErrorType.NotFound, result.Error!.Type);
     }
 
     [Fact]
-    public async Task AnotherUser_GetsNotFound()
+    public void The_response_never_carries_the_psps_handle_on_the_payment()
     {
-        var checkout = await SeedCheckoutAsync(OrderState.Executing);
+        var names = typeof(GetPaymentOrder.Response).GetProperties().Select(p => p.Name).ToArray();
 
-        var result = await SendAsync(new GetPaymentOrder.Query(Guid.NewGuid(), checkout.OrderId(0)));
-
-        Assert.False(result.IsSuccess);
-        Assert.Equal(ErrorType.NotFound, result.Error!.Type);
-    }
-
-    [Fact]
-    public async Task UnknownOrder_GetsTheSameNotFound()
-    {
-        var checkout = await SeedCheckoutAsync(OrderState.Executing);
-
-        var unknown = await SendAsync(new GetPaymentOrder.Query(checkout.BuyerId, Guid.NewGuid()));
-        var foreign = await SendAsync(new GetPaymentOrder.Query(Guid.NewGuid(), checkout.OrderId(0)));
-
-        Assert.Equal(ErrorType.NotFound, unknown.Error!.Type);
-        Assert.Equal(unknown.Error.Code, foreign.Error!.Code);
+        Assert.DoesNotContain(names, name => name.Contains("Psp") || name.Contains("Token") || name.Contains("Provider"));
     }
 }

@@ -90,7 +90,15 @@ to load the assembly via its marker interface.
 
 ## Investigating the code
 
-Use `Grep`, `Glob` and `Read` directly — there is no code-intelligence MCP server configured.
+Prefer the Roslyn MCP tools (`cwm-roslyn-navigator`, from the dotnet-claude-kit plugin):
+
+```
+find_implementations(interfaceName: "IRequestHandler") → every MediatR handler, i.e. the testable surface
+get_test_coverage_map(...)                             → which types already have tests
+get_public_api(typeName: "<type>")                     → the surface a test should exercise
+```
+
+If the server isn't connected (`/mcp` shows it down), use `Grep`, `Glob` and `Read`:
 
 ```
 Grep "IRequestHandler<"          → every MediatR handler, i.e. the testable surface

@@ -1,4 +1,3 @@
-using System.Diagnostics.CodeAnalysis;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -10,9 +9,6 @@ namespace Users.Api.Features.Users.RefreshToken;
 
 public static class UserRefreshToken
 {
-    // Identity comes from the presented refresh token, never a user id in the body — a body-supplied
-    // id lets a caller nominate whose session to act on and turns the endpoint into an oracle for
-    // which ids exist.
     public sealed record Command(string RefreshToken) : IRequest<Result<Response>>;
 
     public sealed record Response(string Token, string RefreshToken);
@@ -35,8 +31,6 @@ public static class UserRefreshToken
             var user = await _dbContext.Users.FirstOrDefaultAsync(x => x.RefreshToken == tokenHash,
                 cancellationToken);
 
-            // Not found, expired, or otherwise invalid all collapse to one uniform failure so the
-            // endpoint reveals nothing about which tokens or users exist.
             if (user == null || user.RefreshTokenExpires <= DateTime.UtcNow)
             {
                 var error = new Error("invalid_refresh_token", ErrorType.Unauthorized,
@@ -47,8 +41,6 @@ public static class UserRefreshToken
             var token = TokenService.CreateToken(user, _authOptions);
             var refreshToken = TokenService.CreateRefreshToken(_authOptions);
 
-            // Rotate: a fresh access token and a fresh refresh token (new hash + expiry). user is
-            // tracked, so no Update call is needed.
             user.RefreshToken = refreshToken.Hash;
             user.RefreshTokenExpires = refreshToken.Expires;
             await _dbContext.SaveChangesAsync(cancellationToken);

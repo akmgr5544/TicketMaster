@@ -25,7 +25,7 @@ Until then, keep the swap cheap:
 - Endpoints and controllers depend on `ISender`, never `IMediator`.
 - Handlers are `internal sealed`.
 - Cross-cutting work goes in `IPipelineBehavior<,>`, not in handlers.
-- Domain events are `INotification` (`Bookings.Domain`, `PaymentSystem/Domain/Abstractions/DomainEvent`)
+- Domain events are `INotification` (`Bookings.Domain`; PaymentSystem has none)
   dispatched by an EF interceptor — one place to change.
 
 ### When to deviate

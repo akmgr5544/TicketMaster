@@ -27,8 +27,9 @@ architecture forced on all of them would fit some badly:
   handler never shares its command's namespace. `LayoutTest` guards that.
 - **Users.Api: vertical slices**, one project, `Features/Users/<Feature>/`.
 - **PaymentSystem: vertical slices on a rich domain**, one project. `Domain/` holds the model,
-  `Features/<Aggregate>/<Feature>.cs` holds one file per feature — **no per-feature folder**.
-  `PaymentArchitecture` enforces slice isolation and domain purity.
+  `Features/<Aggregate>/<Feature>.cs` holds one file per feature — **no per-feature folder**. Reads go
+  through plain read models in `Query/` on a no-tracking context. `PaymentArchitecture` enforces domain
+  purity, read models independent of the domain, and handler/endpoint visibility.
 - **ApiGateway: none.** Configuration plus `Handlers/`.
 
 ### When to deviate

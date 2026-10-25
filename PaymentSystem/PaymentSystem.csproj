@@ -32,16 +32,6 @@
 
     <ItemGroup>
         <InternalsVisibleTo Include="PaymentIntegration" />
-        <InternalsVisibleTo Include="PaymentApi" />
-    </ItemGroup>
-
-    <ItemGroup>
-      <Compile Remove="Domain\Abstractions\IAggregateRoot.cs" />
-      <Compile Remove="Domain\Abstractions\ITransactionalRequest.cs" />
-    </ItemGroup>
-
-    <ItemGroup>
-      <Folder Include="Data\Configurations\" />
     </ItemGroup>
 
 </Project>

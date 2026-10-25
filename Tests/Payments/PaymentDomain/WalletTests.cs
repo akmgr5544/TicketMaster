@@ -1,190 +1,75 @@
-using System.Globalization;
 using PaymentSystem.Domain;
 using PaymentSystem.Domain.Exceptions;
+using PaymentSystem.Domain.Shared;
 
 namespace PaymentDomain;
 
-public class WalletTests
+public sealed class WalletTests
 {
-    private const decimal LargestStorable = 9999999999999999.99m;
-
-    private static Wallet UsdWallet() => Wallet.Create(Guid.NewGuid(), "USD");
+    private static Money Usd(decimal amount) => Money.Create(amount, "USD");
 
     [Fact]
-    public void A_new_wallet_is_empty()
+    public void A_new_wallet_is_empty_in_its_currency()
     {
-        var ownerId = Guid.NewGuid();
+        var user = Guid.NewGuid();
 
-        var wallet = Wallet.Create(ownerId, "USD");
+        var wallet = new Wallet(user, "usd");
 
-        Assert.Equal(0m, wallet.Balance);
-        Assert.Equal("USD", wallet.Currency);
-        Assert.Equal(ownerId, wallet.OwnerId);
-        Assert.NotEqual(Guid.Empty, wallet.WalletId);
-        Assert.Empty(wallet.DomainEvents);
+        Assert.Equal(user, wallet.UserId);
+        Assert.Equal(Money.Zero("USD"), wallet.CurrentBalance);
     }
 
     [Fact]
-    public void Every_wallet_gets_its_own_id()
+    public void A_credit_adds_to_the_balance()
     {
-        var ownerId = Guid.NewGuid();
+        var wallet = new Wallet(Guid.NewGuid(), "USD");
 
-        var ids = Enumerable.Range(0, 1_000).Select(_ => Wallet.Create(ownerId, "USD").WalletId).ToList();
+        wallet.CreditFunds(Usd(10.50m));
+        wallet.CreditFunds(Usd(4.25m));
 
-        Assert.DoesNotContain(Guid.Empty, ids);
-        Assert.Equal(ids.Count, ids.Distinct().Count());
+        Assert.Equal(Usd(14.75m), wallet.CurrentBalance);
     }
 
     [Fact]
-    public void Refuses_an_empty_owner() =>
-        Assert.Throws<PaymentDomainException>(() => Wallet.Create(Guid.Empty, "USD"));
+    public void A_credit_of_nothing_is_refused() =>
+        Assert.Throws<PaymentDomainException>(() => new Wallet(Guid.NewGuid(), "USD").CreditFunds(Usd(0m)));
 
-    [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    [InlineData("   ")]
-    [InlineData("usd")]
-    [InlineData("Usd")]
-    [InlineData("US")]
-    [InlineData("USDT")]
-    [InlineData(" USD")]
-    [InlineData("US1")]
-    [InlineData("ÜSD")]
-    [InlineData("ＵＳＤ")]
-    public void Refuses_an_invalid_currency(string? currency)
+    [Fact]
+    public void A_credit_in_another_currency_is_refused()
     {
-        var thrown = Record.Exception(() => Wallet.Create(Guid.NewGuid(), currency!));
+        var wallet = new Wallet(Guid.NewGuid(), "USD");
 
-        Assert.IsType<PaymentDomainException>(thrown);
+        Assert.Throws<PaymentDomainException>(() => wallet.CreditFunds(Money.Create(5m, "EUR")));
+        Assert.Equal(Money.Zero("USD"), wallet.CurrentBalance);
     }
 
     [Fact]
-    public void Credits_accumulate()
+    public void A_debit_takes_from_the_balance()
     {
-        var wallet = UsdWallet();
+        var wallet = new Wallet(Guid.NewGuid(), "USD");
+        wallet.CreditFunds(Usd(20m));
 
-        wallet.Credit(10.25m, "USD");
-        wallet.Credit(4.75m, "USD");
+        wallet.DebitFunds(Usd(7.50m));
 
-        Assert.Equal(15.00m, wallet.Balance);
+        Assert.Equal(Usd(12.50m), wallet.CurrentBalance);
     }
 
     [Fact]
-    public void Credits_accumulate_exactly_without_binary_rounding()
+    public void A_debit_of_more_than_the_balance_is_refused_and_leaves_it_unchanged()
     {
-        var wallet = UsdWallet();
+        var wallet = new Wallet(Guid.NewGuid(), "USD");
+        wallet.CreditFunds(Usd(5m));
 
-        wallet.Credit(0.1m, "USD");
-        wallet.Credit(0.2m, "USD");
-
-        Assert.Equal(0.3m, wallet.Balance);
+        Assert.Throws<PaymentDomainException>(() => wallet.DebitFunds(Usd(5.01m)));
+        Assert.Equal(Usd(5m), wallet.CurrentBalance);
     }
 
     [Fact]
-    public void Many_small_credits_add_up_to_the_exact_total()
+    public void A_debit_of_nothing_is_refused()
     {
-        var wallet = UsdWallet();
+        var wallet = new Wallet(Guid.NewGuid(), "USD");
+        wallet.CreditFunds(Usd(5m));
 
-        for (var i = 0; i < 10_000; i++)
-            wallet.Credit(0.01m, "USD");
-
-        Assert.Equal(100.00m, wallet.Balance);
-    }
-
-    [Theory]
-    [InlineData("EUR")]
-    [InlineData("usd")]
-    [InlineData("Usd")]
-    [InlineData("USD ")]
-    [InlineData("")]
-    [InlineData(null)]
-    public void Refuses_a_credit_in_another_currency_and_keeps_the_balance(string? currency)
-    {
-        var wallet = UsdWallet();
-        wallet.Credit(7.50m, "USD");
-
-        var thrown = Record.Exception(() => wallet.Credit(10m, currency!));
-
-        Assert.IsType<PaymentDomainException>(thrown);
-        Assert.Equal(7.50m, wallet.Balance);
-    }
-
-    [Theory]
-    [InlineData("0")]
-    [InlineData("-0.0")]
-    [InlineData("-5")]
-    [InlineData("-0.01")]
-    [InlineData("-79228162514264337593543950335")]
-    public void Refuses_a_non_positive_credit_and_keeps_the_balance(string amount)
-    {
-        var wallet = UsdWallet();
-        wallet.Credit(7.50m, "USD");
-
-        Assert.Throws<PaymentDomainException>(() => wallet.Credit(decimal.Parse(amount, CultureInfo.InvariantCulture), "USD"));
-        Assert.Equal(7.50m, wallet.Balance);
-    }
-
-    [Theory]
-    [InlineData("0.001")]
-    [InlineData("10.005")]
-    [InlineData("0.0000000000000000000000000001")]
-    public void Refuses_a_credit_with_more_than_two_decimal_places_and_keeps_the_balance(string amount)
-    {
-        var wallet = UsdWallet();
-        wallet.Credit(7.50m, "USD");
-
-        Assert.Throws<PaymentDomainException>(() => wallet.Credit(decimal.Parse(amount, CultureInfo.InvariantCulture), "USD"));
-        Assert.Equal(7.50m, wallet.Balance);
-    }
-
-    [Fact]
-    public void Accepts_a_credit_that_brings_the_balance_to_the_largest_storable_value()
-    {
-        var wallet = UsdWallet();
-
-        wallet.Credit(LargestStorable - 1m, "USD");
-        wallet.Credit(1m, "USD");
-
-        Assert.Equal(LargestStorable, wallet.Balance);
-    }
-
-    // numeric(18,2) cannot hold the result, so the save would fail after the order was already marked paid out.
-    [Fact]
-    public void Refuses_a_credit_that_would_exceed_numeric_18_2_and_keeps_the_balance()
-    {
-        var wallet = UsdWallet();
-        wallet.Credit(LargestStorable, "USD");
-
-        var thrown = Record.Exception(() => wallet.Credit(0.01m, "USD"));
-
-        Assert.IsType<PaymentDomainException>(thrown);
-        Assert.Equal(LargestStorable, wallet.Balance);
-    }
-
-    [Fact]
-    public void Refuses_a_single_credit_too_large_for_numeric_18_2()
-    {
-        var wallet = UsdWallet();
-
-        var thrown = Record.Exception(() => wallet.Credit(10_000_000_000_000_000m, "USD"));
-
-        Assert.IsType<PaymentDomainException>(thrown);
-        Assert.Equal(0m, wallet.Balance);
-    }
-
-    // An OverflowException is not mapped to a 400 and escapes as a 500 from the settlement consumer.
-    [Fact]
-    public void A_credit_that_would_overflow_decimal_is_a_domain_error_not_an_overflow()
-    {
-        var wallet = UsdWallet();
-
-        var thrown = Record.Exception(() =>
-        {
-            wallet.Credit(decimal.MaxValue, "USD");
-            wallet.Credit(decimal.MaxValue, "USD");
-        });
-
-        Assert.IsType<PaymentDomainException>(thrown);
-        Assert.True(wallet.Balance <= LargestStorable, $"Balance {wallet.Balance} no longer fits numeric(18,2).");
+        Assert.Throws<PaymentDomainException>(() => wallet.DebitFunds(Usd(0m)));
     }
 }

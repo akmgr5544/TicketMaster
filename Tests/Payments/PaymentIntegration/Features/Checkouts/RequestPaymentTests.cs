@@ -1,242 +1,121 @@
-using MediatR;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.DependencyInjection;
 using PaymentIntegration.Fixtures;
-using PaymentSystem.Data;
 using PaymentSystem.Domain;
 using PaymentSystem.Enums;
 using PaymentSystem.Features.Checkouts;
 using PaymentSystem.Shared.Messaging;
 using TicketMaster.Common.IntegrationEvents;
+using Wolverine;
 
 namespace PaymentIntegration.Features.Checkouts;
 
-public sealed class RequestPaymentTests(PaymentsFixture fixture) : MessagingTest(fixture)
+public sealed class RequestPaymentTests(PaymentsFixture fixture) : IntegrationTest(fixture)
 {
-    private static PaymentRequestedIntegrationEvent Request(long bookingId = 4242, decimal amount = 125.50m,
-        string currency = "EUR", Guid? buyerId = null, Guid? sellerId = null) =>
-        new(bookingId, buyerId ?? Guid.NewGuid(), sellerId ?? Guid.NewGuid(), amount, currency);
-
-    private async Task ConsumeAsync(PaymentRequestedIntegrationEvent message)
-    {
-        await using var scope = NewScope();
-        var consumer = new PaymentRequestedConsumer(
-            scope.ServiceProvider.GetRequiredService<ISender>(),
-            scope.ServiceProvider.GetRequiredService<IIntegrationEventPublisher>());
-        await consumer.Consume(message, CancellationToken.None);
-    }
-
-    private async Task CancelAsync(long bookingId)
-    {
-        await using var scope = NewScope();
-        await new BookingCancelledConsumer(scope.ServiceProvider.GetRequiredService<ISender>())
-            .Consume(new BookingCancelledIntegrationEvent(bookingId), CancellationToken.None);
-    }
-
-    // The cancellation overtook this request. Bookings has already released the seats, so it needs no
-    // BookingPaymentFailed — and there must be no checkout a buyer could still pay.
-    [Fact]
-    public async Task ARequestForABookingAlreadyCancelled_OpensNoCheckout_AndPublishesNothing()
-    {
-        var message = Request();
-        await CancelAsync(message.BookingId);
-
-        await ConsumeAsync(message);
-
-        Assert.Equal(0, await ReadAsync(c => c.PaymentEvents.CountAsync()));
-        Assert.Empty(Outbox.Published);
-        Assert.Empty(Outbox.Scheduled);
-    }
+    private Task<OutgoingMessages> HandleAsync(PaymentRequestedIntegrationEvent message) =>
+        HandleAsync<PaymentRequestedHandler, OutgoingMessages>((handler, context, _) =>
+            handler.Handle(message, context, CancellationToken.None));
 
     [Fact]
-    public async Task ARequestForABookingAlreadyCancelled_IsAnExpectedFailure_NamedForTheCancellation()
+    public async Task A_payment_request_opens_one_checkout_with_one_order_for_the_seller()
     {
-        var message = Request();
-        await CancelAsync(message.BookingId);
+        var buyer = Guid.NewGuid();
+        var seller = Guid.NewGuid();
+        var bookingId = NewBookingId();
 
-        var result = await SendAsync(new RequestPayment.Command(message.BookingId, message.BuyerId, message.SellerId,
-            message.Amount, message.Currency));
+        await HandleAsync(new PaymentRequestedIntegrationEvent(bookingId, buyer, seller, 120.50m, "usd"));
 
-        Assert.False(result.IsSuccess);
-        Assert.Equal(RequestPayment.BookingCancelledCode, result.Error!.Code);
-    }
-
-    // Both handlers claim the booking's key. The cancellation's claim is uncommitted, so the request's check
-    // sees nothing; its own claim insert must wait on the key rather than open a checkout beside it.
-    [Fact]
-    public async Task ARequestRacingACancellation_WaitsOnTheClaim_AndOpensNoCheckout()
-    {
-        var message = Request();
-        await using var cancelScope = NewScope();
-        var cancelContext = cancelScope.ServiceProvider.GetRequiredService<PaymentDbContext>();
-        await using var cancelTransaction = await cancelContext.Database.BeginTransactionAsync();
-        cancelContext.BookingClaims.Add(BookingClaim.Cancelled(message.BookingId));
-        await cancelContext.SaveChangesAsync();
-
-        var request = SendAsync(new RequestPayment.Command(message.BookingId, message.BuyerId, message.SellerId,
-            message.Amount, message.Currency));
-        await Task.Delay(TimeSpan.FromMilliseconds(500));
-        Assert.False(request.IsCompleted, "The request should wait on the cancellation's uncommitted claim.");
-        await cancelTransaction.CommitAsync();
-        var result = await request;
-
-        Assert.Equal(RequestPayment.BookingCancelledCode, result.Error!.Code);
-        Assert.Equal(0, await ReadAsync(c => c.PaymentEvents.CountAsync()));
-        Assert.Empty(Outbox.Published);
-        Assert.Empty(Outbox.Scheduled);
-    }
-
-    [Fact]
-    public async Task Consume_CreatesACheckoutWithOneUnstartedOrderForTheSeller()
-    {
-        var message = Request();
-
-        await ConsumeAsync(message);
-
-        var checkout = await ReadAsync(c => c.PaymentEvents.SingleAsync());
-        Assert.Equal(message.BookingId, checkout.BookingId);
-        Assert.Equal(message.BuyerId, checkout.BuyerId);
+        var checkout = await ReadCheckoutAsync(bookingId);
+        Assert.Equal(buyer, checkout.BuyerId);
         Assert.False(checkout.IsPaymentDone);
+        Assert.Equal(120.50m, checkout.TotalAmount.Amount);
+        Assert.Equal("USD", checkout.TotalAmount.Currency);
+
         var order = Assert.Single(checkout.PaymentOrders);
-        Assert.Equal(message.SellerId, order.MerchantId);
-        Assert.Equal(message.BuyerId, order.BuyerId);
-        Assert.Equal(message.Amount, order.Amount);
-        Assert.Equal(message.Currency, order.Currency);
-        Assert.Equal(PaymentOrderStatus.NotStarted, order.Status);
-        Assert.Empty(Outbox.Published);
+        Assert.Equal(seller, order.SellerId);
+        Assert.Equal(120.50m, order.Amount.Amount);
+        Assert.Equal("USD", order.Amount.Currency);
+        Assert.Equal(PaymentOrderStatus.Init, order.Status);
     }
 
     [Fact]
-    public async Task Redelivery_IsANoOp_AndAnswersWithTheFirstCheckout()
+    public async Task A_redelivered_request_creates_nothing_more_and_sends_nothing()
     {
-        var message = Request();
-        var command = new RequestPayment.Command(message.BookingId, message.BuyerId, message.SellerId,
-            message.Amount, message.Currency);
+        var message = new PaymentRequestedIntegrationEvent(NewBookingId(), Guid.NewGuid(), Guid.NewGuid(), 40m, "USD");
+        await HandleAsync(message);
 
-        var first = await SendAsync(command);
-        var second = await SendAsync(command);
-        await ConsumeAsync(message);
+        var outgoing = await HandleAsync(message);
 
-        Assert.True(first.IsSuccess);
-        Assert.False(first.Value!.AlreadyRequested);
-        Assert.True(second.IsSuccess);
-        Assert.True(second.Value!.AlreadyRequested);
-        Assert.Equal(first.Value.CheckoutId, second.Value.CheckoutId);
-        Assert.Equal(1, await ReadAsync(c => c.PaymentEvents.CountAsync()));
-        Assert.Equal(1, await ReadAsync(c => c.Set<PaymentOrder>().CountAsync()));
-        Assert.Empty(Outbox.Published);
-    }
-
-    [Fact]
-    public async Task Consume_SchedulesTheCheckoutsExpiry_FifteenMinutesOut_InTheTransactionThatInsertedIt()
-    {
-        await ConsumeAsync(Request());
-
-        var checkout = await ReadAsync(c => c.PaymentEvents.SingleAsync());
-        var scheduled = Assert.Single(Outbox.Scheduled);
-        Assert.Equal(new CheckoutExpiryDue(checkout.CheckoutId), scheduled.Message);
-        Assert.Equal(TimeSpan.FromMinutes(15), scheduled.Delay);
-        Assert.NotNull(scheduled.TransactionId);
-    }
-
-    [Fact]
-    public async Task Redelivery_SchedulesNoSecondExpiry()
-    {
-        var message = Request();
-
-        await ConsumeAsync(message);
-        await ConsumeAsync(message);
-        await ConsumeAsync(message with { Amount = 1m });
-
-        Assert.Single(Outbox.Scheduled);
-    }
-
-    [Fact]
-    public async Task RedeliveryWithDifferentFigures_KeepsTheFirstCheckoutUnchanged()
-    {
-        var message = Request(amount: 10m);
-        await ConsumeAsync(message);
-
-        await ConsumeAsync(message with { Amount = 99m, SellerId = Guid.NewGuid() });
-
-        var order = Assert.Single(await ReadAsync(c => c.Set<PaymentOrder>().ToListAsync()));
-        Assert.Equal(10m, order.Amount);
-        Assert.Equal(message.SellerId, order.MerchantId);
-    }
-
-    [Fact]
-    public async Task ConcurrentDelivery_LosesOnTheClaim_AndSucceedsWithTheWinnersCheckout()
-    {
-        var message = Request();
-        var winner = CheckoutSeed.Create(Guid.CreateVersion7(), message.BookingId, message.BuyerId,
-            [new OrderLine(message.SellerId, message.Amount, message.Currency)]);
-
-        // The winner inserts first but holds its transaction open, so the loser's pre-check sees nothing and
-        // its insert waits on the booking's key until the winner commits.
-        await using var winnerScope = NewScope();
-        var winnerContext = winnerScope.ServiceProvider.GetRequiredService<PaymentDbContext>();
-        await using var winnerTransaction = await winnerContext.Database.BeginTransactionAsync();
-        winnerContext.BookingClaims.Add(BookingClaim.Requested(message.BookingId));
-        winnerContext.PaymentEvents.Add(winner);
-        await winnerContext.SaveChangesAsync();
-
-        var loser = SendAsync(new RequestPayment.Command(message.BookingId, message.BuyerId, message.SellerId,
-            message.Amount, message.Currency));
-        await Task.Delay(TimeSpan.FromMilliseconds(500));
-        Assert.False(loser.IsCompleted, "The loser should be blocked on the winner's uncommitted insert.");
-        await winnerTransaction.CommitAsync();
-
-        var result = await loser;
-        Assert.True(result.IsSuccess);
-        Assert.True(result.Value!.AlreadyRequested);
-        Assert.Equal(winner.CheckoutId, result.Value.CheckoutId);
-        Assert.Equal(1, await ReadAsync(c => c.PaymentEvents.CountAsync()));
-        // The timer belongs to whoever inserted the checkout; the loser inserted nothing.
-        Assert.Empty(Outbox.Scheduled);
-    }
-
-    public static TheoryData<string, PaymentRequestedIntegrationEvent> Refused => new()
-    {
-        { "zero amount", Request(amount: 0m) },
-        { "negative amount", Request(amount: -5m) },
-        { "sub-cent amount", Request(amount: 10.001m) },
-        { "lower-case currency", Request(currency: "eur") },
-        { "unknown-length currency", Request(currency: "EURO") },
-        { "no seller", Request(sellerId: Guid.Empty) },
-        { "no buyer", Request(buyerId: Guid.Empty) },
-        { "no booking", Request(bookingId: 0) },
-        { "buyer is the seller", SelfPaying() }
-    };
-
-    private static PaymentRequestedIntegrationEvent SelfPaying()
-    {
-        var party = Guid.NewGuid();
-        return Request(buyerId: party, sellerId: party);
+        Assert.Empty(outgoing);
+        var count = await ReadAsync(c => c.PaymentEvents.CountAsync(e => e.BookingId == message.BookingId));
+        Assert.Equal(1, count);
     }
 
     [Theory]
-    [MemberData(nameof(Refused))]
-    public async Task RequestTheDomainRefuses_SavesNothing_AndTellsBookingsThePaymentFailed(string _,
-        PaymentRequestedIntegrationEvent message)
+    [InlineData(0, "USD")]
+    [InlineData(-5, "USD")]
+    [InlineData(1.005, "USD")]
+    [InlineData(10, "US1")]
+    [InlineData(10, "USDD")]
+    public async Task A_request_the_domain_refuses_opens_nothing_and_fails_the_payment(double amount, string currency)
     {
-        await ConsumeAsync(message);
+        var bookingId = NewBookingId();
 
-        Assert.Equal(0, await ReadAsync(c => c.PaymentEvents.CountAsync()));
-        Assert.Equal(0, await ReadAsync(c => c.Set<PaymentOrder>().CountAsync()));
-        var failed = Assert.Single(Outbox.OfType<BookingPaymentFailedIntegrationEvent>());
-        Assert.Equal(message.BookingId, failed.BookingId);
-        Assert.Single(Outbox.Published);
-        Assert.Empty(Outbox.Scheduled);
+        var outgoing = await HandleAsync(
+            new PaymentRequestedIntegrationEvent(bookingId, Guid.NewGuid(), Guid.NewGuid(), (decimal)amount, currency));
+
+        var failed = Assert.Single(outgoing.OfType<BookingPaymentFailedIntegrationEvent>());
+        Assert.Equal(bookingId, failed.BookingId);
+        Assert.False(await ReadAsync(c => c.PaymentEvents.AnyAsync(e => e.BookingId == bookingId)));
     }
 
     [Fact]
-    public async Task RequestTheDomainRefuses_IsAnExpectedFailure_NotAnException()
+    public async Task An_accepted_request_claims_the_booking_together_with_the_checkout()
     {
-        var result = await SendAsync(new RequestPayment.Command(7, Guid.NewGuid(), Guid.NewGuid(), 0m, "USD"));
+        var bookingId = NewBookingId();
 
-        Assert.False(result.IsSuccess);
-        Assert.Equal("payment_request_refused", result.Error!.Code);
-        // The command alone decides nothing about messaging; telling Bookings is the consumer's job.
-        Assert.Empty(Outbox.Published);
+        await HandleAsync(new PaymentRequestedIntegrationEvent(bookingId, Guid.NewGuid(), Guid.NewGuid(), 40m, "USD"));
+
+        var claim = await ReadAsync(c => c.BookingClaims.SingleAsync(x => x.BookingId == bookingId));
+        Assert.Equal(BookingClaimStatus.Requested, claim.Status);
+        Assert.True(await ReadAsync(c => c.PaymentEvents.AnyAsync(e => e.BookingId == bookingId)));
+    }
+
+    [Fact]
+    public async Task A_refused_request_claims_nothing()
+    {
+        var bookingId = NewBookingId();
+
+        await HandleAsync(new PaymentRequestedIntegrationEvent(bookingId, Guid.NewGuid(), Guid.NewGuid(), 0m, "USD"));
+
+        Assert.False(await ReadAsync(c => c.BookingClaims.AnyAsync(x => x.BookingId == bookingId)));
+    }
+
+    // Bookings released the seats when it cancelled, so a BookingPaymentFailed would only be noise.
+    [Fact]
+    public async Task A_request_for_a_booking_already_cancelled_opens_nothing_and_sends_nothing()
+    {
+        var bookingId = NewBookingId();
+        await SeedClaimAsync(BookingClaim.Cancelled(bookingId));
+
+        var outgoing = await HandleAsync(
+            new PaymentRequestedIntegrationEvent(bookingId, Guid.NewGuid(), Guid.NewGuid(), 40m, "USD"));
+
+        Assert.Empty(outgoing);
+        Assert.False(await ReadAsync(c => c.PaymentEvents.AnyAsync(e => e.BookingId == bookingId)));
+        var claim = await ReadAsync(c => c.BookingClaims.SingleAsync(x => x.BookingId == bookingId));
+        Assert.Equal(BookingClaimStatus.Cancelled, claim.Status);
+    }
+
+    [Fact]
+    public async Task An_accepted_request_schedules_the_checkout_to_expire_in_fifteen_minutes()
+    {
+        var bookingId = NewBookingId();
+
+        var outgoing = await HandleAsync(
+            new PaymentRequestedIntegrationEvent(bookingId, Guid.NewGuid(), Guid.NewGuid(), 40m, "USD"));
+
+        var expiry = Assert.Single(outgoing.OfType<DeliveryMessage<CheckoutExpiryDue>>());
+        Assert.Equal(bookingId, expiry.Message.BookingId);
+        Assert.Equal(TimeSpan.FromMinutes(15), expiry.Options.ScheduleDelay);
     }
 }

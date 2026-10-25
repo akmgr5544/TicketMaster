@@ -2,7 +2,7 @@ namespace PaymentSystem.Enums;
 
 public enum PaymentOrderStatus
 {
-    NotStarted,
+    Init,
     Executing,
     Success,
     Failed,

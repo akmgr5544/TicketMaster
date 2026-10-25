@@ -1,105 +1,84 @@
-using MediatR;
 using Microsoft.EntityFrameworkCore;
 using PaymentProvider.Abstractions;
 using PaymentProvider.Exceptions;
 using PaymentProvider.Models;
 using PaymentSystem.Data;
-using PaymentSystem.Domain;
 using PaymentSystem.Enums;
+using PaymentSystem.Shared.Messaging;
+using Wolverine;
 
 namespace PaymentSystem.Features.PaymentOrders;
 
-// Asks the provider about orders that have sat Executing too long: a charge whose outcome failed to record, or a
-// webhook that never came. Without it such an order waits for the 15-minute expiry, which fails it over money the
-// provider may already have taken.
-public static class ReconcileOrders
+// A webhook can be lost, and a buyer can leave the PSP's page mid-payment. An order still executing a while after the
+// buyer was sent to the PSP is asked about directly, and a final answer is recorded exactly as a webhook's would be.
+public sealed class OrderReconciler(
+    PaymentQueryDbContext context,
+    IPaymentGatewayFactory gateways,
+    IMessageBus bus,
+    TimeProvider clock,
+    ILogger<OrderReconciler> logger)
 {
-    public sealed record Query(DateTime UpdatedBefore, int Limit) : IRequest<IReadOnlyList<StaleOrder>>;
+    // Long enough that a webhook on its way normally lands first.
+    public static readonly TimeSpan StuckAfter = TimeSpan.FromMinutes(2);
 
-    public sealed record StaleOrder(Guid PaymentOrderId, string? Provider, string? PspToken);
-
-    internal sealed class Handler(PaymentDbContext context) : IRequestHandler<Query, IReadOnlyList<StaleOrder>>
+    // Returns how many orders it recorded an outcome for.
+    public async Task<int> RunOnceAsync(CancellationToken cancellationToken)
     {
-        public async Task<IReadOnlyList<StaleOrder>> Handle(Query request, CancellationToken cancellationToken) =>
-            await context.Set<PaymentOrder>().AsNoTracking()
-                .Where(o => o.Status == PaymentOrderStatus.Executing && o.UpdatedAt < request.UpdatedBefore)
-                .OrderBy(o => o.UpdatedAt)
-                .Take(request.Limit)
-                .Select(o => new StaleOrder(o.PaymentOrderId, o.Provider, o.PspToken))
-                .ToListAsync(cancellationToken);
+        var cutoff = clock.GetUtcNow().UtcDateTime - StuckAfter;
+
+        var stuck = await context.PaymentOrders
+            .Where(o => o.Status == nameof(PaymentOrderStatus.Executing) && o.ExecutingSince < cutoff)
+            .OrderBy(o => o.ExecutingSince)
+            .ToListAsync(cancellationToken);
+
+        var recorded = 0;
+        foreach (var order in stuck)
+        {
+            PaymentResult? result;
+            try
+            {
+                result = await gateways.ForProvider(order.Provider)
+                    .LookupAsync(new PaymentLookupRequest(order.PaymentOrderId, order.PspTokenRef), cancellationToken);
+            }
+            // One order's provider being unreachable must not stop the others; it is asked again next run.
+            catch (PaymentProviderException exception)
+            {
+                logger.LogWarning(exception, "Could not reconcile payment order {PaymentOrderId}.", order.PaymentOrderId);
+                continue;
+            }
+
+            // Not final yet (or nothing at the PSP): the expiry fails it if the buyer never finishes.
+            if (result?.Status is not (PaymentStatus.Succeeded or PaymentStatus.Canceled))
+                continue;
+
+            await bus.InvokeAsync(
+                new RecordPaymentOutcome(order.PaymentOrderId, result.Status == PaymentStatus.Succeeded, result.ProviderReference),
+                cancellationToken);
+            recorded++;
+        }
+
+        return recorded;
     }
 }
 
-// Every instance runs it; that is safe because recording an outcome already reached is a no-op, and two instances
-// recording at once settle through the checkout's version check like any other pair of writers.
-public sealed class ReconcileOrdersJob(
-    IServiceScopeFactory scopes,
-    TimeProvider clock,
-    ILogger<ReconcileOrdersJob> logger) : BackgroundService
+public sealed class ReconcileOrdersJob(IServiceScopeFactory scopes, ILogger<ReconcileOrdersJob> logger) : BackgroundService
 {
-    public static readonly TimeSpan Interval = TimeSpan.FromMinutes(1);
-
-    // Long enough that a buyer still on the provider's page is not asked about on every pass, and short enough that
-    // a lost outcome is found well inside the checkout's 15-minute window.
-    public static readonly TimeSpan StaleAfter = TimeSpan.FromMinutes(2);
-
-    private const int BatchSize = 100;
+    private static readonly TimeSpan Every = TimeSpan.FromMinutes(1);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        using var timer = new PeriodicTimer(Interval, clock);
+        using var timer = new PeriodicTimer(Every);
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
             try
             {
-                await RunOnceAsync(stoppingToken);
+                await using var scope = scopes.CreateAsyncScope();
+                await scope.ServiceProvider.GetRequiredService<OrderReconciler>().RunOnceAsync(stoppingToken);
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
-                logger.LogError(exception, "Reconciling stale payment orders failed; the next pass will try again.");
+                logger.LogError(exception, "Reconciling payment orders failed; it runs again in {Every}.", Every);
             }
         }
-    }
-
-    public async Task RunOnceAsync(CancellationToken cancellationToken)
-    {
-        IReadOnlyList<ReconcileOrders.StaleOrder> stale;
-        await using (var scope = scopes.CreateAsyncScope())
-        {
-            stale = await scope.ServiceProvider.GetRequiredService<ISender>().Send(
-                new ReconcileOrders.Query(clock.GetUtcNow().UtcDateTime - StaleAfter, BatchSize), cancellationToken);
-        }
-
-        foreach (var order in stale)
-            await ReconcileAsync(order, cancellationToken);
-    }
-
-    // A scope per order: each outcome is its own unit of work, and one order's failure leaves the rest untouched.
-    private async Task ReconcileAsync(ReconcileOrders.StaleOrder order, CancellationToken cancellationToken)
-    {
-        await using var scope = scopes.CreateAsyncScope();
-        var gateways = scope.ServiceProvider.GetRequiredService<IPaymentGatewayFactory>();
-
-        PaymentResult? payment;
-        try
-        {
-            payment = await gateways.ForProvider(order.Provider)
-                .LookupAsync(new PaymentLookupRequest(order.PaymentOrderId, order.PspToken), cancellationToken);
-        }
-        catch (PaymentProviderException exception)
-        {
-            logger.LogWarning(exception, "Could not look up payment order {PaymentOrderId}; it stays Executing.",
-                order.PaymentOrderId);
-            return;
-        }
-
-        if (payment is null)
-            return;
-
-        var applied = await scope.ServiceProvider.GetRequiredService<ISender>()
-            .Send(new RecordOutcome.Command(order.PaymentOrderId, payment.Status), cancellationToken);
-        if (applied.Kind == RecordOutcome.Recorded.Applied)
-            logger.LogInformation("Reconciled payment order {PaymentOrderId} as {Status}.", order.PaymentOrderId,
-                applied.OrderStatus);
     }
 }

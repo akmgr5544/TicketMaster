@@ -1,6 +1,5 @@
 using Bookings.Api.Abstractions;
 using Bookings.Api.Requests;
-using Bookings.Application.Commands;
 using Bookings.Application.Dtos;
 using Bookings.Application.Queries;
 using MediatR;

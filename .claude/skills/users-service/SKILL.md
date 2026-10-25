@@ -140,6 +140,13 @@ Implemented:
 - **Register handles the unique-constraint race** by catching `DbUpdateException` from the insert and
   returning 400, rather than letting the loser of two concurrent registrations surface as a 500
   (`efcore` rule 4).
+- **Register announces the user: `UserRegisteredIntegrationEvent(UserId, Email)`**, which PaymentSystem
+  consumes to keep its own copy. It is staged through Wolverine's `IDbContextOutbox<UsersDomainContext>` and
+  committed with the insert (`SaveChangesAndFlushMessagesAsync`), so other services hear about exactly the
+  accounts that exist — the loser of the race above rolls back its message with its row. Users has no
+  `TransactionBehavior`, which is what makes that call safe here; do not use it where one is open. Messaging is
+  `Extensions/MessagingExtension.ConfigureMessaging`: publish-only, RabbitMQ with conventional routing, the
+  message store in the users database, durable outbox. Users needs `ConnectionStrings:RabbitMQ` to start.
 - **The signing key is not committed.** `AuthConfigs:Token` is empty in `appsettings.json`; supply it
   via user-secrets locally or the `AuthConfigs__Token` environment variable. `Program.cs` throws at
   startup if it is missing, so the service never boots with an unusable empty key.
@@ -170,7 +177,9 @@ Implemented:
   `Microsoft.IdentityModel.JsonWebTokens` is the current one and does not rewrite claim types into
   long URIs. Migrating means rebuilding token creation around `SecurityTokenDescriptor`, so it is
   deferred rather than done as a drop-in.
-- Role paths are covered by `Tests/Users/UsersIntegration` (real host, real JWTs over HTTP, Postgres). The
+- Role paths and `UserRegistered` are covered by `Tests/Users/UsersIntegration` (real host, real JWTs over
+  HTTP, Postgres, and RabbitMQ with a stand-in subscriber — including the duplicate that loses the insert
+  race announcing nothing, forced with the same table-lock technique). The
   bootstrap race is pinned by `Two_first_registrations_that_both_see_an_empty_table_both_become_Admin`;
   a guard would turn it red, and it should then be flipped to assert exactly one Admin.
 - **`AuthOptions` is a positional record, so never `Configure<AuthOptions>`** — the options factory needs a

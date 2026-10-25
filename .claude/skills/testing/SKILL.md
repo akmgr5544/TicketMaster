@@ -54,12 +54,16 @@ Tests/Events/
     DeleteGuards/         the cross-partition delete guards, through ISender
     HostFixtures/         the real Events host (Wolverine + Cosmos outbox) proving the relay
 Tests/Payments/ PaymentArchitecture  PaymentDomain  PaymentAdapters
-  PaymentIntegration/     Postgres fixture (schema via MigrateAsync) + Mechanics/ real host on RabbitMQ;
-                           Features/<Aggregate>/ per slice — see the `payments-service` skill
+  PaymentIntegration/     Postgres fixture (schema via MigrateAsync; StubPsp + a recording IMessageBus) +
+                           Mechanics/ real host on RabbitMQ; Features/<Area>/ per slice and message handler,
+                           Persistence/ for indexes, precision, concurrency — see the `payments-service` skill.
+                           Written from requirements, not the code; the key suites were mutation-checked.
 Tests/Users/    UsersApi  UsersArchitecture
-  UsersIntegration/       one host fixture (WebApplicationFactory<Program> + Postgres), Respawn per test
-    Fixtures/             UsersHostFixture, UsersTest base (register/login/PUT-role helpers, fresh-scope reads)
-    Features/<Slice>/     Register/FirstAdminTests, SetRole/SetRoleTests
+  UsersIntegration/       one host fixture (WebApplicationFactory<Program> + Postgres + RabbitMQ), Respawn per
+                           test (public schema only — Wolverine's envelope tables live in their own)
+    Fixtures/             UsersHostFixture (+ a stand-in Wolverine subscriber recording UserRegistered),
+                           UsersTest base (register/login/PUT-role helpers, fresh-scope reads)
+    Features/<Slice>/     Register/FirstAdminTests, Register/UserRegisteredTests, SetRole/SetRoleTests
     Mechanics/            AuthOptionsTests
 Tests/Rpc/      GrpcSeam — the one cross-service test: the Bookings↔Events gRPC error round-trip,
                 in-process (TestServer), no containers. See the `rpc` skill.

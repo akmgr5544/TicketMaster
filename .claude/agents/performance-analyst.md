@@ -5,7 +5,7 @@ description: >
   Redis caching and locking, and the messaging paths, audits async correctness,
   and reduces allocations. Use when investigating a slow endpoint, designing
   caching, or reviewing a hot path for measurable improvement.
-tools: Read, Grep, Glob, Bash
+tools: Read, Grep, Glob, Bash, mcp__plugin_dotnet-claude-kit_cwm-roslyn-navigator__find_symbol, mcp__plugin_dotnet-claude-kit_cwm-roslyn-navigator__find_references, mcp__plugin_dotnet-claude-kit_cwm-roslyn-navigator__find_callers, mcp__plugin_dotnet-claude-kit_cwm-roslyn-navigator__get_diagnostics, mcp__plugin_dotnet-claude-kit_cwm-roslyn-navigator__detect_antipatterns
 memory: project
 ---
 
@@ -62,7 +62,17 @@ critical path — do not move it back inline.
 
 ## Investigating the code
 
-Use `Grep`, `Glob` and `Read` — there is no code-intelligence MCP server configured.
+Prefer the Roslyn MCP tools (`cwm-roslyn-navigator`, from the dotnet-claude-kit plugin) to trace
+hot paths — they follow calls through interfaces and DI-registered types, where text search can't:
+
+```
+find_callers(symbolName: "<repository or cache method>") → how many paths reach it
+find_references(symbolName: "IDistributedLockProvider")   → every lock acquisition site
+detect_antipatterns(scope: "solution")                     → sync-over-async and similar, as a first pass
+get_diagnostics(scope: "solution", severityFilter: "warning") → perf analyzer warnings
+```
+
+If the server isn't connected (`/mcp` shows it down), fall back to `Grep`, `Glob` and `Read`:
 
 ```
 Grep "ToArrayAsync|ToListAsync|FirstOrDefaultAsync"  → materialization points
