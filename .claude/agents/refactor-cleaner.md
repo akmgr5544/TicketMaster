@@ -59,8 +59,21 @@ Read `CLAUDE.md` for build and test commands before you start.
 
 ## Finding cleanup candidates
 
-There is no code-intelligence MCP server configured, so dead code is found by search plus the
-compiler, not by a tool that answers it directly.
+Start with the Roslyn MCP tools (`cwm-roslyn-navigator`, from the dotnet-claude-kit plugin):
+
+```
+find_dead_code(scope: "project", path: "<Project>")  → candidate unused types and members
+find_references(symbolName: "<symbol>")              → confirm zero references before removing
+get_test_coverage_map(...)                           → whether the candidate has tests
+get_diagnostics(scope: "solution")                   → new warnings after each batch
+```
+
+`find_dead_code` only sees compile-time references, and much of this solution is reached by
+reflection: MediatR handlers, Wolverine message handlers (`Handle`/`Consume` by convention), EF
+configurations, ArchUnit marker interfaces, controllers. A "dead" type in any of those roles is
+almost certainly live — treat it as a candidate to verify, never as proof.
+
+If the server isn't connected (`/mcp` shows it down), dead code is found by search plus the compiler:
 
 ```
 Grep "^using " glob:*.cs              → candidate unused usings (confirm per file)

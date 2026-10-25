@@ -5,7 +5,7 @@ description: >
   downstream identity handling, authorization scoping in queries, secrets in
   configuration, and input validation. Use when adding or reviewing auth, auditing
   a service's exposure, or hardening before production.
-tools: Read, Grep, Glob, Bash
+tools: Read, Grep, Glob, Bash, mcp__plugin_dotnet-claude-kit_cwm-roslyn-navigator__find_symbol, mcp__plugin_dotnet-claude-kit_cwm-roslyn-navigator__find_references, mcp__plugin_dotnet-claude-kit_cwm-roslyn-navigator__find_callers, mcp__plugin_dotnet-claude-kit_cwm-roslyn-navigator__get_public_api, mcp__plugin_dotnet-claude-kit_cwm-roslyn-navigator__get_diagnostics
 memory: project
 ---
 
@@ -67,7 +67,17 @@ cluster addresses are empty strings.
 
 ## Investigating the code
 
-Use `Grep`, `Glob` and `Read` — there is no code-intelligence MCP server configured.
+Prefer the Roslyn MCP tools (`cwm-roslyn-navigator`, from the dotnet-claude-kit plugin) for
+semantic questions — they resolve symbols, so they don't miss the call that a text search misses:
+
+```
+get_diagnostics(scope: "solution", severityFilter: "warning") → security analyzer warnings
+find_references(symbolName: "TryGetUserId")   → every action that resolves identity
+get_public_api(typeName: "<Controller>")      → the endpoint surface to check for scoping
+find_callers(symbolName: "<auth handler method>") → who reaches an auth path
+```
+
+If the server isn't connected (`/mcp` shows it down), fall back to `Grep`, `Glob` and `Read`:
 
 ```
 Grep "TryGetUserId"                       → actions that resolve identity, and by omission those that do not
