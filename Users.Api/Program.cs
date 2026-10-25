@@ -21,6 +21,7 @@ builder.Services.AddProblemDetails();
 var configuration = builder.Configuration;
 builder.Services.AddDatabase(configuration);
 builder.Services.AddBusinessServices(configuration);
+builder.Host.ConfigureMessaging(configuration);
 
 var section = configuration.GetSection("AuthConfigs");
 var authOptions = section.Get<AuthOptions>()!;

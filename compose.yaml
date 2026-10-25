@@ -69,6 +69,7 @@ services:
       dockerfile: Users.Api/Dockerfile
     environment:
       ConnectionStrings__UsersDatabase: "Host=postgres;Port=5432;Database=users_db;Username=postgres;Password=${POSTGRES_PASSWORD}"
+      ConnectionStrings__RabbitMQ: "amqp://guest:guest@rabbitmq:5672"
       # Secrets come from .env (gitignored); see .env.example. The service fails fast without a token.
       # The first account registered becomes admin, so no admin credential is seeded here.
       AuthConfigs__Token: "${USERS_AUTH_TOKEN}"
@@ -76,6 +77,8 @@ services:
       - "5054:8080"
     depends_on:
       postgres:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
 
   events-api:

@@ -113,6 +113,17 @@ public sealed class PaymentsHostTests(PaymentsHostFixture fixture)
         await fixture.Outcomes.WaitForAsync<BookingPaymentFailedIntegrationEvent>(failed => failed.BookingId == bookingId, Wait);
     }
 
+    [Fact]
+    public async Task A_user_registered_over_the_broker_is_kept_by_Payments()
+    {
+        var userId = Guid.NewGuid();
+
+        await fixture.Bookings.PublishAsync(new UserRegisteredIntegrationEvent(userId, $"{userId:N}@example.com"));
+
+        await Eventually(async () =>
+            await ScalarAsync<long>("select count(*) from \"Users\" where \"UserId\" = @id", ("id", userId)) == 1);
+    }
+
     // The outbox's whole promise: what a handler sends commits or rolls back with what it writes. A trigger makes
     // this one booking's insert fail inside the handler's transaction, after the expiry has been scheduled. It counts
     // each attempt in a sequence first — a sequence is not rolled back with the transaction — so the test knows when

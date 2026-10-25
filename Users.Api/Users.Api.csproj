@@ -18,6 +18,14 @@
         <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
         <PackageReference Include="Scrutor" />
         <PackageReference Include="System.IdentityModel.Tokens.Jwt" />
+        <PackageReference Include="WolverineFx" />
+        <PackageReference Include="WolverineFx.RabbitMQ" />
+        <PackageReference Include="WolverineFx.Postgresql" />
+        <PackageReference Include="WolverineFx.EntityFrameworkCore" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\TicketMaster.Common\TicketMaster.Common.csproj" />
     </ItemGroup>
 
     <ItemGroup>
