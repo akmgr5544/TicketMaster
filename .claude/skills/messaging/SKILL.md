@@ -29,10 +29,12 @@ Bookings consumes **eight** contracts in `Bookings.Application/IntegrationEventH
 
 The three payment outcomes are produced by **PaymentSystem**, which in turn consumes `PaymentRequested`
 (published by Bookings' `MakeBooking`), `BookingCancelled` (published on every booking cancellation) and
-`RefundRequested` (published when a relocation voids a paid booking). Its own `CheckoutRefundDue` stays on
-a durable local queue, like `CheckoutExpiryDue`.
-Both services publish through an `IIntegrationEventPublisher` that stages into Wolverine's
-`DbContextOutbox` on the open transaction and flushes after commit — see the `payments-service` skill.
+`RefundRequested` (published when a relocation voids a paid booking or a customer cancels paid seats). Its own
+steps — `CheckoutExpiryDue`, `ProcessRefund`, `RecordRefundOutcome` — stay on durable local queues.
+Bookings publishes through an `IIntegrationEventPublisher` that stages into Wolverine's `DbContextOutbox` on
+the open transaction and flushes after commit. PaymentSystem's message handlers return `OutgoingMessages`
+and let Wolverine's EF Core middleware (`AutoApplyTransactions`) save them with the handler's writes — see
+the `payments-service` skill.
 
 **Both sides now have a durable outbox** — Bookings on Postgres, Events on Cosmos via
 `WolverineFx.CosmosDb` (see the Events subsection below). Both are now proven at runtime; Events',

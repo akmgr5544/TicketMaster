@@ -24,8 +24,8 @@
 | Package refs | `Directory.Packages.props` (drop `MediatR`, add `Mediator.Abstractions` + `Mediator.SourceGenerator`); csprojs: `Bookings.Domain`, `Bookings.Application`, `Events.Application`, `Users.Api`, `PaymentSystem` |
 | Registration | each service's `Extensions/ServiceCollectionExtension.cs` (`AddApplicationServices` / `AddBusinessServices` / `AddInfrastructureServices`) |
 | Pipeline behaviors | `Bookings.Sql/Pipelines/TransactionBehavior.cs`; `Events.Application/Pipelines/` `ConcurrencyRetryBehavior` (outermost) then a no-op `TransactionBehavior`; `PaymentSystem/Shared/Pipelines/TransactionBehavior.cs` |
-| Domain events | `Bookings.Domain/Abstractions/DomainEvent.cs`, `PaymentSystem/Domain/Abstractions/DomainEvent.cs` (`: INotification`); the `DomainEventPublisherInterceptor` in each that publishes them |
-| Notification handlers | `Bookings.Application/DomainEventHandlers/*`, `PaymentSystem/Features/PaymentOrders/{Settle,Fail}.cs` |
+| Domain events | `Bookings.Domain/Abstractions/DomainEvent.cs` (`: INotification`) and the `DomainEventPublisherInterceptor` that publishes them. PaymentSystem has none |
+| Notification handlers | `Bookings.Application/DomainEventHandlers/*` |
 | Test-only behavior | `Tests/Bookings/BookingIntegration/Fixtures/BookingsFixture.cs` registers `AfterHandlerFailureBehavior<,>` |
 
 ## Repo-specific risks

@@ -11,8 +11,8 @@ Never, outside event handlers. None in the repo.
 ### Blocking on async (`.Result`, `.Wait()`, `.GetAwaiter().GetResult()`)
 Await all the way.
 
-**Allowed exception:** `OutboxFlushInterceptor.TransactionCommitted` in `Bookings.Sql/Interceptors`
-and `PaymentSystem/Shared/Messaging`. It is the *synchronous* EF interceptor override; nothing
+**Allowed exception:** `OutboxFlushInterceptor.TransactionCommitted` in `Bookings.Sql/Interceptors`.
+It is the *synchronous* EF interceptor override; nothing
 commits synchronously today, and if something does the staged messages must still be sent. Leave it.
 
 ### `new HttpClient()`

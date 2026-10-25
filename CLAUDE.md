@@ -30,11 +30,11 @@ dotnet test Tests/Events/EventsApi/EventsApi.csproj                  # exception
 dotnet test Tests/Events/EventsCosmos/EventsCosmos.csproj            # Cosmos document serialization
 dotnet test Tests/Events/EventsIntegration/EventsIntegration.csproj  # repositories + 412 + delete guards (Cosmos emulator); outbox relay host fixture (+ RabbitMQ). Needs Docker
 dotnet test Tests/Users/UsersApi/UsersApi.csproj                 # Error-to-status mapping
-dotnet test Tests/Users/UsersIntegration/UsersIntegration.csproj  # first-user-Admin + PUT role, real host + JWTs over HTTP (Postgres). Needs Docker
+dotnet test Tests/Users/UsersIntegration/UsersIntegration.csproj  # first-user-Admin + PUT role + UserRegistered, real host + JWTs over HTTP (Postgres + RabbitMQ). Needs Docker
 dotnet test Tests/Users/UsersArchitecture/UsersArchitecture.csproj
-dotnet test Tests/Payments/PaymentArchitecture/PaymentArchitecture.csproj  # slice isolation, domain purity, visibility, layout
-dotnet test Tests/Payments/PaymentDomain/PaymentDomain.csproj          # checkout/order/wallet/ledger rules
-dotnet test Tests/Payments/PaymentIntegration/PaymentIntegration.csproj  # slices, interceptors, concurrency, outbox (Postgres); Mechanics/ boots the host (+ RabbitMQ). Needs Docker
+dotnet test Tests/Payments/PaymentArchitecture/PaymentArchitecture.csproj  # domain purity, read side independent of domain, visibility, transactional commands
+dotnet test Tests/Payments/PaymentDomain/PaymentDomain.csproj          # checkout/order/wallet/ledger/Money rules
+dotnet test Tests/Payments/PaymentIntegration/PaymentIntegration.csproj  # slices, message handlers, reconciliation, indexes, concurrency (Postgres); Mechanics/ boots the host (+ RabbitMQ). Needs Docker
 dotnet test Tests/Payments/PaymentAdapters/PaymentAdapters.csproj    # Stripe/Braintree adapters in PaymentProvider
 dotnet test Tests/Rpc/GrpcSeam/GrpcSeam.csproj                       # Bookings↔Events gRPC error round-trip (in-process, no Docker)
 dotnet test Tests/Gateway/GatewayTests/GatewayTests.csproj           # gateway routing/edge-auth/identity headers (in-process, no Docker)
@@ -74,11 +74,12 @@ Five .NET services plus a shared kernel, wired together at runtime by a YARP API
               ▼                      ▼                      ▼                   ▼
         Users.Api            Bookings.Api             Events.Api          PaymentSystem
         (Postgres+EF,       (Postgres+EF,             (Cosmos DB,        (Postgres+EF,
-         JWT issuer)         Wolverine outbox,         Cosmos outbox)     Wolverine outbox,
-                             Redis cache/locks)                           PSPs via PaymentProvider)
-                                     │                                          │
-                                     └──────────► RabbitMQ (Wolverine) ◄────────┘
+         JWT issuer,         Wolverine outbox,         Cosmos outbox)     Wolverine outbox,
+         Wolverine outbox)   Redis cache/locks)                           PSPs via PaymentProvider)
+              │                      │                                          │
+              └──────────────────────┴───► RabbitMQ (Wolverine) ◄────────────────┘
         PaymentRequested, BookingCancelled, RefundRequested ──►   ◄── BookingPaid, BookingPaymentFailed, BookingRefunded
+        UserRegistered (Users ──► Payments)
 ```
 
 ### Per-service layering
@@ -92,15 +93,19 @@ Five .NET services plus a shared kernel, wired together at runtime by a YARP API
 
 Each project has a marker interface (`IApiAssemblyMarker`, `IApplicationAssemblyMarker`, `IDomainAssemblyMarker`, `ISqlAssemblyMarker` in Bookings.Sql and `ICosmosAssemblyMarker` in Events.Cosmos). Architecture tests load assemblies via these markers.
 
-**Users.Api** is a single-project **vertical slice** design (feature folders under `Features/Users/{Authenticate,RefreshToken,Register}`), not the layered layout above. It is the JWT issuer for the system.
+**Users.Api** is a single-project **vertical slice** design (feature folders under `Features/Users/{Authenticate,RefreshToken,Register}`), not the layered layout above. It is the JWT issuer for the system, and publishes `UserRegistered` through a Wolverine EF Core outbox committed with the new user (PaymentSystem keeps a copy). It therefore needs `ConnectionStrings:RabbitMQ` to start.
 
 **PaymentSystem** is vertical slices on a rich DDD domain, in one project: `Domain/` (the `PaymentEvent`
-checkout is the aggregate root owning one `PaymentOrder` per seller; `Wallet`; double-entry `LedgerEntry`),
-`Data/`, `Shared/{Endpoints,Pipelines,Results,Messaging}`, and `Features/<Aggregate>/<Feature>.cs` — one
-file per feature, **no per-feature folder** (`Checkouts/`, `PaymentOrders/`, `Webhooks/`, `Wallets/`).
-Handlers return `Result<T>` like Users. It takes pay-ins and gives them back as refunds, whole or in part;
-there is no pay-out to sellers. `PaymentProvider` is the PSP anti-corruption library (Stripe, Braintree). See the
-`payments-service` skill for the rules, the flow and the known gaps.
+checkout is the aggregate root owning one `PaymentOrder` per seller; `RefundOrder`; `Wallet`; double-entry
+`LedgerEntry`; `PaymentMethod`; `BookingClaim`; `Money` mapped as a complex property), `Query/` (plain read
+models), `Data/` (`PaymentDbContext` for writes, a no-tracking `PaymentQueryDbContext` for reads, configurations
+split `Domain/` and `Query/`), `Shared/{Endpoints,Pipelines,Results,Messaging}`, and
+`Features/<Area>/<Feature>.cs` — one file per feature, **no per-feature folder** (`Checkouts/`,
+`PaymentOrders/`, `RefundOrders/`, `PaymentMethods/`, `Wallets/`, `LedgerEntries/`, `Webhooks/`). HTTP slices
+are MediatR and return `Result<T>` like Users; messages are handled by plain Wolverine handlers. It takes pay-ins
+and gives them back as refunds, whole or in part; there is no pay-out to sellers. `PaymentProvider` is the PSP
+anti-corruption library (Stripe, Braintree). See the `payments-service` skill for the rules, the flow and the
+known gaps.
 
 ### Cross-cutting patterns
 
@@ -115,9 +120,12 @@ there is no pay-out to sellers. `PaymentProvider` is the PSP anti-corruption lib
   `RefundRequested` with no amount, and PaymentSystem refunds whatever is still paid — as it does for a booking
   cancelled after it was paid. A customer cancelling seats of a paid booking (until the event starts) publishes
   it with those seats' amount, and PaymentSystem refunds that much. Every refund carries a `RefundId`;
-  `BookingRefunded` echoes it and releases the seats that refund covered — they stay held until then. Both services publish through an
-  `IIntegrationEventPublisher` that stages into Wolverine's `DbContextOutbox` on the open transaction and
-  sends after commit — never `SaveChangesAndFlushMessagesAsync`, which commits the transaction itself.
+  `BookingRefunded` echoes it and releases the seats that refund covered — they stay held until then. A
+  cancellation that overtakes its `PaymentRequested` is remembered (`BookingClaims`), so the late request is
+  refused. Bookings publishes through an `IIntegrationEventPublisher` that stages into Wolverine's
+  `DbContextOutbox` on the open transaction and sends after commit — never `SaveChangesAndFlushMessagesAsync`,
+  which commits the transaction itself. PaymentSystem's message handlers return `OutgoingMessages` and let
+  Wolverine's EF Core middleware commit them with the handler's writes; a PSP is never called inside a transaction.
 - **Outbox / messaging**: `Bookings.Application.Extensions.ConfigureRabbitMq` sets up **WolverineFx** with RabbitMQ transport, Postgres-backed outbox (`PersistMessagesWithPostgresql`), EF Core transactions, and all three durability policies — `UseDurableLocalQueues`, `UseDurableInboxOnAllListeners` and `UseDurableOutboxOnAllSendingEndpoints`. Uses conventional routing and auto-provisioning.
 - **Caching / distributed locks**: Redis via `StackExchange.Redis` + `Medallion.Threading.Redis`. `ICacheService` (`Bookings.Application.Services`) is the abstraction; `IDistributedLockProvider` is registered for cross-instance coordination.
 - **Shared integration contracts**: `TicketMaster.Common/IntegrationEvents` — any message crossing service boundaries lives here so producers and consumers share the type.
