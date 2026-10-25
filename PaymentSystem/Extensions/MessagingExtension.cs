@@ -1,5 +1,7 @@
 using JasperFx.Core;
 using Microsoft.EntityFrameworkCore;
+using PaymentProvider.Exceptions;
+using PaymentSystem.Shared.Messaging;
 using TicketMaster.Common.IntegrationEvents;
 using Wolverine;
 using Wolverine.EntityFrameworkCore;
@@ -28,17 +30,30 @@ public static class MessagingExtension
                 .UseConventionalRouting(conventions => conventions.IncludeTypes(type =>
                     type.Namespace == typeof(PaymentRequestedIntegrationEvent).Namespace));
 
+            // This service's own steps stay in process, on queues stored in Postgres: a scheduled expiry or a refund
+            // waiting for the PSP survives a restart.
+            options.PublishMessage<CheckoutExpiryDue>().ToLocalQueue("checkout-expiry");
+            options.PublishMessage<ProcessRefund>().ToLocalQueue("refunds");
+            options.PublishMessage<RecordRefundOutcome>().ToLocalQueue("refunds");
+
             // A handler that uses PaymentDbContext runs in one transaction: Wolverine saves its changes and the
             // messages it returns together, and sends those messages only after the commit.
             options.PersistMessagesWithPostgresql(connectionString);
             options.UseEntityFrameworkCoreTransactions();
             options.Policies.AutoApplyTransactions();
+            options.Policies.UseDurableLocalQueues();
             options.Policies.UseDurableInboxOnAllListeners();
             options.Policies.UseDurableOutboxOnAllSendingEndpoints();
 
-            // Two copies of one message racing to insert lose on a unique index; the retry finds the winner's row.
+            // Two copies of one message racing to insert lose on a unique index, and two writers racing on one order
+            // or wallet lose on its row version; the retry starts from a fresh scope and decides over the winner's state.
             options.OnException<DbUpdateException>()
                 .RetryWithCooldown(100.Milliseconds(), 1.Seconds(), 5.Seconds());
+
+            // A PSP that is down or rate-limiting is asked again, with room to recover. A repeated refund is answered
+            // by the PSP with the first one, since the request id is its idempotency key.
+            options.OnException<PaymentProviderException>(exception => exception.Kind == PaymentProviderErrorKind.Transient)
+                .ScheduleRetry(10.Seconds(), 1.Minutes(), 5.Minutes(), 30.Minutes());
         });
     }
 }

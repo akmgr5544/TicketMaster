@@ -44,6 +44,11 @@ internal sealed class PaymentEventConfiguration : IEntityTypeConfiguration<Payme
 
             orders.Property(order => order.Status).HasConversion<string>().HasMaxLength(20);
             orders.Property(order => order.PspTokenRef).HasMaxLength(255);
+            orders.Property(order => order.Provider).HasMaxLength(20);
+
+            // Postgres' row version: a PSP answer racing the expiry or a cancellation on the same order conflicts
+            // instead of overwriting, and the retry decides again over the winner's state.
+            orders.Property<uint>("xmin").IsRowVersion();
 
             orders.HasIndex(order => order.SellerId);
         });

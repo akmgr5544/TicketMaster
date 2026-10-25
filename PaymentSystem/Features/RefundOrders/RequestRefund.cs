@@ -1,28 +1,32 @@
 using Microsoft.EntityFrameworkCore;
-using PaymentProvider.Models;
 using PaymentSystem.Data;
 using PaymentSystem.Domain;
 using PaymentSystem.Domain.Exceptions;
 using PaymentSystem.Domain.Shared;
 using PaymentSystem.Enums;
+using PaymentSystem.Shared.Messaging;
 using TicketMaster.Common.IntegrationEvents;
+using Wolverine;
 
 namespace PaymentSystem.Features.RefundOrders;
 
 // Bookings wants money back for a paid booking. With no amount it is the whole booking; with one, that much off the
-// booking's single paid order. Each refund is recorded as Pending; sending it to the PSP is a separate step.
+// booking's single paid order. Each refund is recorded as Pending, and ProcessRefund sends it to the PSP once the
+// record has committed.
 public sealed class RefundRequestedHandler(ILogger<RefundRequestedHandler> logger)
 {
-    public async Task Handle(RefundRequestedIntegrationEvent message, PaymentDbContext context,
+    public async Task<OutgoingMessages> Handle(RefundRequestedIntegrationEvent message, PaymentDbContext context,
         CancellationToken cancellationToken)
     {
+        var outgoing = new OutgoingMessages();
+
         var checkout = await context.PaymentEvents
             .SingleOrDefaultAsync(e => e.BookingId == message.BookingId, cancellationToken);
 
         if (checkout is null)
         {
             logger.LogWarning("Refund requested for booking {BookingId}, which has no checkout.", message.BookingId);
-            return;
+            return outgoing;
         }
 
         var paidOrders = checkout.PaymentOrders.Where(o => o.Status == PaymentOrderStatus.Success).ToList();
@@ -33,13 +37,15 @@ public sealed class RefundRequestedHandler(ILogger<RefundRequestedHandler> logge
             .ToListAsync(cancellationToken);
 
         if (message.Amount is null)
-            RefundWholeBooking(message, paidOrders, refunds, context);
+            RefundWholeBooking(message, paidOrders, refunds, context, outgoing);
         else
-            RefundPart(message, message.Amount.Value, paidOrders, refunds, context);
+            RefundPart(message, message.Amount.Value, paidOrders, refunds, context, outgoing);
+
+        return outgoing;
     }
 
     private static void RefundWholeBooking(RefundRequestedIntegrationEvent message, List<PaymentOrder> paidOrders,
-        List<RefundOrder> refunds, PaymentDbContext context)
+        List<RefundOrder> refunds, PaymentDbContext context, OutgoingMessages outgoing)
     {
         foreach (var order in paidOrders)
         {
@@ -52,13 +58,15 @@ public sealed class RefundRequestedHandler(ILogger<RefundRequestedHandler> logge
             if (remaining <= 0)
                 continue;
 
-            context.RefundOrders.Add(RefundOrder.Create(
-                order.PaymentOrderId, requestId, Money.Create(remaining, order.Amount.Currency), "Booking refunded"));
+            var refund = RefundOrder.Create(
+                order.PaymentOrderId, requestId, Money.Create(remaining, order.Amount.Currency), "Booking refunded");
+            context.RefundOrders.Add(refund);
+            outgoing.Add(new ProcessRefund(refund.RefundOrderId));
         }
     }
 
     private void RefundPart(RefundRequestedIntegrationEvent message, decimal amount, List<PaymentOrder> paidOrders,
-        List<RefundOrder> refunds, PaymentDbContext context)
+        List<RefundOrder> refunds, PaymentDbContext context, OutgoingMessages outgoing)
     {
         // Each case below is logged rather than thrown: retrying would not change the answer, so a person has to look.
         if (message.RefundId is not { } requestId)
@@ -95,8 +103,10 @@ public sealed class RefundRequestedHandler(ILogger<RefundRequestedHandler> logge
 
         try
         {
-            context.RefundOrders.Add(RefundOrder.Create(
-                order.PaymentOrderId, requestId, Money.Create(amount, order.Amount.Currency), "Seats cancelled"));
+            var refund = RefundOrder.Create(
+                order.PaymentOrderId, requestId, Money.Create(amount, order.Amount.Currency), "Seats cancelled");
+            context.RefundOrders.Add(refund);
+            outgoing.Add(new ProcessRefund(refund.RefundOrderId));
         }
         catch (PaymentDomainException exception)
         {
@@ -111,6 +121,6 @@ public sealed class RefundRequestedHandler(ILogger<RefundRequestedHandler> logge
     // A failed refund gave nothing back, so it does not count against what is left.
     private static decimal RefundedSoFar(List<RefundOrder> refunds, PaymentOrder order) =>
         refunds
-            .Where(r => r.PaymentOrderId == order.PaymentOrderId && r.Status != RefundStatus.Failed)
+            .Where(r => r.PaymentOrderId == order.PaymentOrderId && r.Status != RefundOrderStatus.Failed)
             .Sum(r => r.RefundAmount.Amount);
 }

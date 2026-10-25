@@ -2,7 +2,6 @@ using PaymentSystem.Extensions;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddProblemDetails();
 builder.Services.AddInfrastructureServices(builder.Configuration);
 builder.Services.AddFeatureEndpoints();
 builder.Host.ConfigureMessaging(builder.Configuration);

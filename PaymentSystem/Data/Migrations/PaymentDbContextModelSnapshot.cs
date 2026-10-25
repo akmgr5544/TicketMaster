@@ -247,6 +247,12 @@ namespace PaymentSystem.Data.Migrations
                     b.Property<Guid>("UserId")
                         .HasColumnType("uuid");
 
+                    b.Property<uint>("xmin")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
                     b.ComplexProperty(typeof(Dictionary<string, object>), "CurrentBalance", "PaymentSystem.Domain.Wallet.CurrentBalance#Money", b1 =>
                         {
                             b1.IsRequired();
@@ -289,6 +295,10 @@ namespace PaymentSystem.Data.Migrations
                             b1.Property<bool>("LedgerUpdated")
                                 .HasColumnType("boolean");
 
+                            b1.Property<string>("Provider")
+                                .HasMaxLength(20)
+                                .HasColumnType("character varying(20)");
+
                             b1.Property<string>("PspTokenRef")
                                 .HasMaxLength(255)
                                 .HasColumnType("character varying(255)");
@@ -303,6 +313,12 @@ namespace PaymentSystem.Data.Migrations
 
                             b1.Property<bool>("WalletUpdated")
                                 .HasColumnType("boolean");
+
+                            b1.Property<uint>("xmin")
+                                .IsConcurrencyToken()
+                                .ValueGeneratedOnAddOrUpdate()
+                                .HasColumnType("xid")
+                                .HasColumnName("xmin");
 
                             b1.HasKey("PaymentOrderId");
 

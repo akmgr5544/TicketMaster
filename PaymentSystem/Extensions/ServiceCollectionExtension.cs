@@ -1,5 +1,6 @@
 using MediatR;
 using Microsoft.EntityFrameworkCore;
+using PaymentProvider.Extensions;
 using PaymentSystem.Data;
 using PaymentSystem.Data.Interceptors;
 using PaymentSystem.Shared.Endpoints;
@@ -15,6 +16,7 @@ public static class ServiceCollectionExtension
         services.AddMediatR(cf => cf.RegisterServicesFromAssembly(typeof(ServiceCollectionExtension).Assembly));
         // Constrained to ITransactionalRequest, so DI skips it for queries.
         services.AddTransient(typeof(IPipelineBehavior<,>), typeof(TransactionBehavior<,>));
+        services.AddProblemDetails();
         services.AddExceptionHandler<DomainExceptionHandler>();
 
         services.AddSingleton(TimeProvider.System);
@@ -34,6 +36,9 @@ public static class ServiceCollectionExtension
         });
 
         services.AddDbContext<PaymentQueryDbContext>(options => options.UseNpgsql(connectionString));
+
+        // Validated at startup: the service does not boot without its PSP secrets.
+        services.AddPaymentProviders(configuration);
 
         return services;
     }

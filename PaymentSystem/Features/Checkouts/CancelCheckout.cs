@@ -1,9 +1,9 @@
 using Microsoft.EntityFrameworkCore;
-using PaymentProvider.Models;
 using PaymentSystem.Data;
 using PaymentSystem.Domain;
 using PaymentSystem.Domain.Shared;
 using PaymentSystem.Enums;
+using PaymentSystem.Shared.Messaging;
 using TicketMaster.Common.IntegrationEvents;
 using Wolverine;
 
@@ -44,15 +44,17 @@ public sealed class BookingCancelledHandler(ILogger<BookingCancelledHandler> log
                 continue;
 
             var refunded = refunds
-                .Where(r => r.PaymentOrderId == order.PaymentOrderId && r.Status != RefundStatus.Failed)
+                .Where(r => r.PaymentOrderId == order.PaymentOrderId && r.Status != RefundOrderStatus.Failed)
                 .Sum(r => r.RefundAmount.Amount);
 
             var remaining = order.Amount.Amount - refunded;
             if (remaining <= 0)
                 continue;
 
-            context.RefundOrders.Add(RefundOrder.Create(
-                order.PaymentOrderId, requestId, Money.Create(remaining, order.Amount.Currency), "Booking cancelled"));
+            var refund = RefundOrder.Create(
+                order.PaymentOrderId, requestId, Money.Create(remaining, order.Amount.Currency), "Booking cancelled");
+            context.RefundOrders.Add(refund);
+            outgoing.Add(new ProcessRefund(refund.RefundOrderId));
         }
 
         return outgoing;

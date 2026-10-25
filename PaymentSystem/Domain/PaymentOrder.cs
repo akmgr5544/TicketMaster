@@ -12,6 +12,8 @@ public class PaymentOrder
     public Money Amount { get; private set; } = null!;
     public PaymentOrderStatus Status { get; private set; }
     public string? PspTokenRef { get; private set; } // Outward transaction receipt tracing string from PSP
+    // The PSP that took the order, so a refund goes back to the same one.
+    public string? Provider { get; private set; }
     public bool WalletUpdated { get; private set; }
     public bool LedgerUpdated { get; private set; }
     public DateTime CreatedAt { get; private set; }
@@ -30,6 +32,13 @@ public class PaymentOrder
         WalletUpdated = false;
         LedgerUpdated = false;
         CreatedAt = DateTime.UtcNow;
+    }
+
+    internal void StartExecuting(string provider, string? pspTokenRef)
+    {
+        Status = PaymentOrderStatus.Executing;
+        Provider = provider;
+        PspTokenRef = pspTokenRef;
     }
 
     public void TransitionToSuccess(string pspTokenRef)

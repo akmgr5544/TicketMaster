@@ -19,6 +19,9 @@ internal sealed class WalletConfiguration : IEntityTypeConfiguration<Wallet>
             money.Property(m => m.Currency).HasColumnName("Currency").HasMaxLength(3);
         });
 
+        // Two settlements crediting one seller at once conflict instead of one overwriting the other's credit.
+        builder.Property<uint>("xmin").IsRowVersion();
+
         // One wallet per user per currency is a unique (UserId, Currency) index, but EF Core 10 cannot index a
         // complex property's column, so it is not declared here: InitialCreate creates it by hand. It also serves
         // lookups by UserId alone. Move it here once on EF Core 11.

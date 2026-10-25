@@ -63,6 +63,79 @@ namespace PaymentSystem.Domain;
             return unsettled.Count;
         }
 
+        // The buyer opened the PSP's page for this order. Asking again through the same provider changes nothing;
+        // a settled order cannot be paid again.
+        public OrderUpdate StartOrder(Guid paymentOrderId, string provider, string? pspTokenRef)
+        {
+            var order = FindOrder(paymentOrderId);
+
+            switch (order.Status)
+            {
+                case PaymentOrderStatus.Init or PaymentOrderStatus.NotStarted:
+                    order.StartExecuting(provider, pspTokenRef);
+                    return OrderUpdate.Applied;
+                case PaymentOrderStatus.Executing when order.Provider == provider:
+                    return OrderUpdate.AlreadyApplied;
+                case PaymentOrderStatus.Executing:
+                    throw new PaymentDomainException($"Payment order {paymentOrderId} was started with {order.Provider}.");
+                default:
+                    throw new PaymentDomainException($"Payment order {paymentOrderId} is already {order.Status}.");
+            }
+        }
+
+        // The PSP took the money. Reported rather than thrown: PSPs repeat themselves and answer late.
+        public OrderUpdate SucceedOrder(Guid paymentOrderId, string pspTokenRef)
+        {
+            var order = FindOrder(paymentOrderId);
+
+            var update = order.Status switch
+            {
+                PaymentOrderStatus.Executing => OrderUpdate.Applied,
+                PaymentOrderStatus.Success or PaymentOrderStatus.Refunded => OrderUpdate.AlreadyApplied,
+                PaymentOrderStatus.Failed => OrderUpdate.Superseded,
+                _ => OrderUpdate.NotStarted
+            };
+
+            if (update == OrderUpdate.Applied)
+            {
+                order.TransitionToSuccess(pspTokenRef);
+                IsPaymentDone = _paymentOrders.All(o => o.Status == PaymentOrderStatus.Success);
+            }
+
+            return update;
+        }
+
+        // The buyer cancelled on the PSP's page. A paid order does not change its mind.
+        public OrderUpdate FailOrder(Guid paymentOrderId)
+        {
+            var order = FindOrder(paymentOrderId);
+
+            var update = order.Status switch
+            {
+                PaymentOrderStatus.Init or PaymentOrderStatus.NotStarted or PaymentOrderStatus.Executing => OrderUpdate.Applied,
+                PaymentOrderStatus.Failed => OrderUpdate.AlreadyApplied,
+                _ => OrderUpdate.Superseded
+            };
+
+            if (update == OrderUpdate.Applied)
+                order.TransitionToFailed();
+
+            return update;
+        }
+
+        public void MarkOrderSettled(Guid paymentOrderId)
+        {
+            var order = FindOrder(paymentOrderId);
+            order.CompleteWalletDistribution();
+            order.CompleteLedgerBookkeeping();
+        }
+
+        public void MarkOrderRefunded(Guid paymentOrderId) => FindOrder(paymentOrderId).TransitionToRefunded();
+
+        public PaymentOrder FindOrder(Guid paymentOrderId) =>
+            _paymentOrders.SingleOrDefault(o => o.PaymentOrderId == paymentOrderId)
+            ?? throw new PaymentDomainException($"Payment order {paymentOrderId} is not part of checkout {CheckoutId}.");
+
         public void MarkAsComplete()
         {
             if (_paymentOrders.Count == 0)
