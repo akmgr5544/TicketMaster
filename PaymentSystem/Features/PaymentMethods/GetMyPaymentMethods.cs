@@ -15,11 +15,8 @@ public static class GetMyPaymentMethods
     {
         public async Task<IReadOnlyList<Response>> Handle(Query request, CancellationToken cancellationToken)
         {
-            // PaymentMethod.UserId is a string column, so the caller's id is compared in its text form.
-            var callerId = request.CallerId.ToString();
-
             return await context.PaymentMethods
-                .Where(m => m.UserId == callerId)
+                .Where(m => m.UserId == request.CallerId)
                 .OrderByDescending(m => m.IsDefault)
                 .Select(m => new Response(m.Id, m.PspName, m.IsDefault))
                 .ToListAsync(cancellationToken);

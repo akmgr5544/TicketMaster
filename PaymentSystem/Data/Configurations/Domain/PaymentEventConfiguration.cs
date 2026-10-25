@@ -19,6 +19,10 @@ internal sealed class PaymentEventConfiguration : IEntityTypeConfiguration<Payme
             money.Property(m => m.Currency).HasColumnName("Currency").HasMaxLength(3);
         });
 
+        // Every change to the checkout or one of its orders bumps it (see PaymentEvent.Version), so two writers on one
+        // checkout conflict instead of one overwriting the other; the message retry then decides over the winner's state.
+        builder.Property(paymentEvent => paymentEvent.Version).IsConcurrencyToken();
+
         // One checkout per booking: a redelivered PaymentRequested cannot create a second one.
         builder.HasIndex(paymentEvent => paymentEvent.BookingId).IsUnique();
         builder.HasIndex(paymentEvent => paymentEvent.BuyerId);
@@ -46,11 +50,11 @@ internal sealed class PaymentEventConfiguration : IEntityTypeConfiguration<Payme
             orders.Property(order => order.PspTokenRef).HasMaxLength(255);
             orders.Property(order => order.Provider).HasMaxLength(20);
 
-            // Postgres' row version: a PSP answer racing the expiry or a cancellation on the same order conflicts
-            // instead of overwriting, and the retry decides again over the winner's state.
-            orders.Property<uint>("xmin").IsRowVersion();
-
+            // Backs the domain's one-order-per-seller rule against any writer that skips the root.
+            orders.HasIndex(order => new { order.CheckoutId, order.SellerId }).IsUnique();
             orders.HasIndex(order => order.SellerId);
+            // Reconciliation's query: orders still executing, oldest first.
+            orders.HasIndex(order => new { order.Status, order.ExecutingSince });
         });
     }
 }

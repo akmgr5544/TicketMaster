@@ -94,12 +94,29 @@ public sealed class CancelCheckoutTests(PaymentsFixture fixture) : IntegrationTe
         Assert.Single(await ReadAsync(c => c.RefundOrders.ToListAsync()));
     }
 
+    // The cancellation overtook the payment request; the claim is what makes the request refuse when it lands.
     [Fact]
-    public async Task Cancelling_a_booking_that_has_no_checkout_does_nothing()
+    public async Task Cancelling_a_booking_that_has_no_checkout_claims_it_cancelled_and_sends_nothing()
     {
-        var outgoing = await CancelAsync(NewBookingId());
+        var bookingId = NewBookingId();
+
+        var outgoing = await CancelAsync(bookingId);
 
         Assert.Empty(outgoing);
         Assert.Empty(await ReadAsync(c => c.PaymentEvents.ToListAsync()));
+        var claim = await ReadAsync(c => c.BookingClaims.SingleAsync(x => x.BookingId == bookingId));
+        Assert.Equal(BookingClaimStatus.Cancelled, claim.Status);
+    }
+
+    [Fact]
+    public async Task A_redelivered_early_cancellation_records_nothing_more_and_sends_nothing()
+    {
+        var bookingId = NewBookingId();
+        await CancelAsync(bookingId);
+
+        var outgoing = await CancelAsync(bookingId);
+
+        Assert.Empty(outgoing);
+        Assert.Equal(1, await ReadAsync(c => c.BookingClaims.CountAsync(x => x.BookingId == bookingId)));
     }
 }

@@ -18,7 +18,7 @@ public static class SetDefaultPaymentMethod
     {
         public async Task<Result> Handle(Command request, CancellationToken cancellationToken)
         {
-            var userId = request.CallerId.ToString();
+            var userId = request.CallerId;
 
             var methods = await context.PaymentMethods
                 .Where(m => m.UserId == userId)

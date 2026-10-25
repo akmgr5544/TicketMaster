@@ -6,10 +6,33 @@ using PaymentSystem.Domain.Shared;
 
 namespace PaymentIntegration.Persistence;
 
-// The row version (xmin) is what turns a PSP answer racing the expiry, or two settlements crediting one seller, into a
-// conflict the message retry resolves — instead of the later writer silently overwriting the earlier one.
+// A checkout's Version, and a wallet's row version (xmin), turn two writers into a conflict the message retry resolves —
+// instead of the later writer silently overwriting the earlier one.
 public sealed class ConcurrencyTests(PaymentsFixture fixture) : IntegrationTest(fixture)
 {
+    // Two different orders settling at once: without a conflict each would see the other still unpaid, and the
+    // checkout would end with both orders paid but never itself paid — so BookingPaid would never go out.
+    [Fact]
+    public async Task Two_orders_of_one_checkout_settling_at_once_cannot_both_win()
+    {
+        var checkout = await SeedCheckoutWithOrdersAsync(Guid.NewGuid(), NewBookingId(),
+            (OrderState.Executing, 40m), (OrderState.Executing, 60m));
+        var orderIds = checkout.PaymentOrders.Select(o => o.PaymentOrderId).ToArray();
+
+        await using var first = NewScope();
+        await using var second = NewScope();
+        var firstContext = first.ServiceProvider.GetRequiredService<PaymentDbContext>();
+        var secondContext = second.ServiceProvider.GetRequiredService<PaymentDbContext>();
+        var one = await firstContext.PaymentEvents.SingleAsync(e => e.CheckoutId == checkout.CheckoutId);
+        var two = await secondContext.PaymentEvents.SingleAsync(e => e.CheckoutId == checkout.CheckoutId);
+
+        one.SucceedOrder(orderIds[0], "pi_one");
+        two.SucceedOrder(orderIds[1], "pi_two");
+        await firstContext.SaveChangesAsync();
+
+        await Assert.ThrowsAsync<DbUpdateConcurrencyException>(() => secondContext.SaveChangesAsync());
+    }
+
     [Fact]
     public async Task Two_writers_changing_one_order_cannot_both_win()
     {

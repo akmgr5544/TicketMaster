@@ -23,6 +23,24 @@ namespace PaymentSystem.Data.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.Entity("PaymentSystem.Domain.BookingClaim", b =>
+                {
+                    b.Property<long>("BookingId")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.HasKey("BookingId");
+
+                    b.ToTable("BookingClaims", (string)null);
+                });
+
             modelBuilder.Entity("PaymentSystem.Domain.LedgerEntry", b =>
                 {
                     b.Property<long>("EntryId")
@@ -95,6 +113,10 @@ namespace PaymentSystem.Data.Migrations
                     b.Property<Guid?>("PaymentMethodId")
                         .HasColumnType("uuid");
 
+                    b.Property<int>("Version")
+                        .IsConcurrencyToken()
+                        .HasColumnType("integer");
+
                     b.ComplexProperty(typeof(Dictionary<string, object>), "TotalAmount", "PaymentSystem.Domain.PaymentEvent.TotalAmount#Money", b1 =>
                         {
                             b1.IsRequired();
@@ -141,10 +163,8 @@ namespace PaymentSystem.Data.Migrations
                         .HasMaxLength(255)
                         .HasColumnType("character varying(255)");
 
-                    b.Property<string>("UserId")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
 
                     b.HasKey("Id");
 
@@ -292,6 +312,9 @@ namespace PaymentSystem.Data.Migrations
                             b1.Property<DateTime>("CreatedAt")
                                 .HasColumnType("timestamp with time zone");
 
+                            b1.Property<DateTime?>("ExecutingSince")
+                                .HasColumnType("timestamp with time zone");
+
                             b1.Property<bool>("LedgerUpdated")
                                 .HasColumnType("boolean");
 
@@ -314,17 +337,14 @@ namespace PaymentSystem.Data.Migrations
                             b1.Property<bool>("WalletUpdated")
                                 .HasColumnType("boolean");
 
-                            b1.Property<uint>("xmin")
-                                .IsConcurrencyToken()
-                                .ValueGeneratedOnAddOrUpdate()
-                                .HasColumnType("xid")
-                                .HasColumnName("xmin");
-
                             b1.HasKey("PaymentOrderId");
 
-                            b1.HasIndex("CheckoutId");
-
                             b1.HasIndex("SellerId");
+
+                            b1.HasIndex("CheckoutId", "SellerId")
+                                .IsUnique();
+
+                            b1.HasIndex("Status", "ExecutingSince");
 
                             b1.ToTable("PaymentOrders", (string)null);
 

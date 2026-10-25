@@ -9,6 +9,7 @@ public sealed class PaymentEventTests
 {
     private const string Provider = "Stripe";
     private const string Reference = "pi_123";
+    private static readonly DateTime Started = new(2026, 1, 15, 10, 0, 0, DateTimeKind.Utc);
 
     private static PaymentEvent NewCheckout(params decimal[] amounts)
     {
@@ -27,7 +28,7 @@ public sealed class PaymentEventTests
         if (status == PaymentOrderStatus.Init)
             return checkout;
 
-        checkout.StartOrder(id, Provider, Reference);
+        checkout.StartOrder(id, Provider, Reference, Started);
         switch (status)
         {
             case PaymentOrderStatus.Success:
@@ -154,9 +155,9 @@ public sealed class PaymentEventTests
     {
         var checkout = NewCheckout(10m, 20m, 30m);
         var paid = checkout.PaymentOrders.ElementAt(0).PaymentOrderId;
-        checkout.StartOrder(paid, Provider, Reference);
+        checkout.StartOrder(paid, Provider, Reference, Started);
         checkout.SucceedOrder(paid, Reference);
-        checkout.StartOrder(checkout.PaymentOrders.ElementAt(1).PaymentOrderId, Provider, Reference);
+        checkout.StartOrder(checkout.PaymentOrders.ElementAt(1).PaymentOrderId, Provider, Reference, Started);
 
         Assert.Equal(2, checkout.Cancel());
         Assert.Equal(PaymentOrderStatus.Success, checkout.FindOrder(paid).Status);
@@ -178,7 +179,7 @@ public sealed class PaymentEventTests
         var checkout = NewCheckout(10m);
         var id = OnlyOrder(checkout);
 
-        var update = checkout.StartOrder(id, Provider, Reference);
+        var update = checkout.StartOrder(id, Provider, Reference, Started);
 
         var order = checkout.FindOrder(id);
         Assert.Equal(OrderUpdate.Applied, update);
@@ -193,7 +194,7 @@ public sealed class PaymentEventTests
         var checkout = CheckoutWithOrderIn(PaymentOrderStatus.Executing);
         var id = OnlyOrder(checkout);
 
-        var update = checkout.StartOrder(id, Provider, "pi_other");
+        var update = checkout.StartOrder(id, Provider, "pi_other", Started.AddMinutes(5));
 
         Assert.Equal(OrderUpdate.AlreadyApplied, update);
         Assert.Equal(Reference, checkout.FindOrder(id).PspTokenRef);
@@ -205,7 +206,7 @@ public sealed class PaymentEventTests
     {
         var checkout = CheckoutWithOrderIn(PaymentOrderStatus.Executing);
 
-        Assert.Throws<PaymentDomainException>(() => checkout.StartOrder(OnlyOrder(checkout), "Braintree", null));
+        Assert.Throws<PaymentDomainException>(() => checkout.StartOrder(OnlyOrder(checkout), "Braintree", null, Started));
         Assert.Equal(Provider, checkout.PaymentOrders.Single().Provider);
     }
 
@@ -217,13 +218,13 @@ public sealed class PaymentEventTests
     {
         var checkout = CheckoutWithOrderIn(status);
 
-        Assert.Throws<PaymentDomainException>(() => checkout.StartOrder(OnlyOrder(checkout), Provider, Reference));
+        Assert.Throws<PaymentDomainException>(() => checkout.StartOrder(OnlyOrder(checkout), Provider, Reference, Started));
         Assert.Equal(status, checkout.PaymentOrders.Single().Status);
     }
 
     [Fact]
     public void Starting_an_order_from_another_checkout_is_refused() =>
-        Assert.Throws<PaymentDomainException>(() => NewCheckout(10m).StartOrder(Guid.NewGuid(), Provider, Reference));
+        Assert.Throws<PaymentDomainException>(() => NewCheckout(10m).StartOrder(Guid.NewGuid(), Provider, Reference, Started));
 
     // C6
     [Fact]
@@ -295,8 +296,8 @@ public sealed class PaymentEventTests
         var checkout = NewCheckout(10m, 20m);
         var first = checkout.PaymentOrders.ElementAt(0).PaymentOrderId;
         var second = checkout.PaymentOrders.ElementAt(1).PaymentOrderId;
-        checkout.StartOrder(first, Provider, Reference);
-        checkout.StartOrder(second, Provider, Reference);
+        checkout.StartOrder(first, Provider, Reference, Started);
+        checkout.StartOrder(second, Provider, Reference, Started);
 
         checkout.SucceedOrder(first, Reference);
         Assert.False(checkout.IsPaymentDone);
@@ -368,4 +369,124 @@ public sealed class PaymentEventTests
     [Fact]
     public void An_order_from_another_checkout_is_not_found() =>
         Assert.Throws<PaymentDomainException>(() => NewCheckout(10m).FindOrder(Guid.NewGuid()));
+
+    // D1
+    [Fact]
+    public void A_second_order_for_the_same_seller_is_refused_and_changes_nothing()
+    {
+        var checkout = PaymentEvent.Create(42, Guid.NewGuid(), "USD");
+        var seller = Guid.NewGuid();
+        checkout.AddPaymentOrder(seller, 10m);
+
+        Assert.Throws<PaymentDomainException>(() => checkout.AddPaymentOrder(seller, 5m));
+
+        Assert.Single(checkout.PaymentOrders);
+        Assert.Equal(Money.Create(10m, "USD"), checkout.TotalAmount);
+    }
+
+    // D2 — every applied change moves the version
+    public static TheoryData<string, Action<PaymentEvent>, Func<PaymentEvent>> AppliedChanges => new()
+    {
+        { "AddPaymentOrder", c => c.AddPaymentOrder(Guid.NewGuid(), 5m), () => NewCheckout(10m) },
+        { "StartOrder", c => c.StartOrder(OnlyOrder(c), Provider, Reference, Started), () => NewCheckout(10m) },
+        { "SucceedOrder", c => c.SucceedOrder(OnlyOrder(c), Reference), () => CheckoutWithOrderIn(PaymentOrderStatus.Executing) },
+        { "FailOrder", c => c.FailOrder(OnlyOrder(c)), () => CheckoutWithOrderIn(PaymentOrderStatus.Executing) },
+        { "Cancel", c => c.Cancel(), () => NewCheckout(10m) },
+        { "MarkOrderSettled", c => c.MarkOrderSettled(OnlyOrder(c)), () => CheckoutWithOrderIn(PaymentOrderStatus.Success) },
+        { "MarkOrderRefunded", c => c.MarkOrderRefunded(OnlyOrder(c)), () => CheckoutWithOrderIn(PaymentOrderStatus.Success) },
+        { "UsePaymentMethod", c => c.UsePaymentMethod(Guid.NewGuid()), () => NewCheckout(10m) },
+    };
+
+    [Theory]
+    [MemberData(nameof(AppliedChanges))]
+    public void An_applied_change_moves_the_version(string change, Action<PaymentEvent> act, Func<PaymentEvent> arrange)
+    {
+        var checkout = arrange();
+        var before = checkout.Version;
+
+        act(checkout);
+
+        Assert.True(checkout.Version > before, $"{change} did not move the version.");
+    }
+
+    // D2 — a no-op leaves it, so a redelivered message does not conflict with a real writer
+    public static TheoryData<string, Action<PaymentEvent>, Func<PaymentEvent>> NoOps => new()
+    {
+        { "StartOrder again", c => c.StartOrder(OnlyOrder(c), Provider, "pi_other", Started), () => CheckoutWithOrderIn(PaymentOrderStatus.Executing) },
+        { "SucceedOrder again", c => c.SucceedOrder(OnlyOrder(c), Reference), () => CheckoutWithOrderIn(PaymentOrderStatus.Success) },
+        { "SucceedOrder after failure", c => c.SucceedOrder(OnlyOrder(c), Reference), () => CheckoutWithOrderIn(PaymentOrderStatus.Failed) },
+        { "SucceedOrder never started", c => c.SucceedOrder(OnlyOrder(c), Reference), () => NewCheckout(10m) },
+        { "FailOrder again", c => c.FailOrder(OnlyOrder(c)), () => CheckoutWithOrderIn(PaymentOrderStatus.Failed) },
+        { "FailOrder after success", c => c.FailOrder(OnlyOrder(c)), () => CheckoutWithOrderIn(PaymentOrderStatus.Success) },
+        { "Cancel failing nothing", c => c.Cancel(), () => CheckoutWithOrderIn(PaymentOrderStatus.Success) },
+    };
+
+    [Theory]
+    [MemberData(nameof(NoOps))]
+    public void A_no_op_leaves_the_version(string change, Action<PaymentEvent> act, Func<PaymentEvent> arrange)
+    {
+        var checkout = arrange();
+        var before = checkout.Version;
+
+        act(checkout);
+
+        Assert.True(checkout.Version == before, $"{change} moved the version.");
+    }
+
+    [Fact]
+    public void Choosing_the_same_payment_method_again_leaves_the_version()
+    {
+        var checkout = NewCheckout(10m);
+        var method = Guid.NewGuid();
+        checkout.UsePaymentMethod(method);
+        var before = checkout.Version;
+
+        checkout.UsePaymentMethod(method);
+
+        Assert.Equal(before, checkout.Version);
+    }
+
+    // D3
+    [Fact]
+    public void Starting_an_order_records_when_it_started()
+    {
+        var checkout = NewCheckout(10m);
+        var id = OnlyOrder(checkout);
+
+        checkout.StartOrder(id, Provider, Reference, Started);
+
+        Assert.Equal(Started, checkout.FindOrder(id).ExecutingSince);
+    }
+
+    [Fact]
+    public void Starting_again_does_not_move_when_it_started()
+    {
+        var checkout = CheckoutWithOrderIn(PaymentOrderStatus.Executing);
+        var id = OnlyOrder(checkout);
+
+        checkout.StartOrder(id, Provider, Reference, Started.AddMinutes(10));
+
+        Assert.Equal(Started, checkout.FindOrder(id).ExecutingSince);
+    }
+
+    // D4
+    [Fact]
+    public void A_chosen_payment_method_is_recorded()
+    {
+        var checkout = NewCheckout(10m);
+        var method = Guid.NewGuid();
+
+        checkout.UsePaymentMethod(method);
+
+        Assert.Equal(method, checkout.PaymentMethodId);
+    }
+
+    [Fact]
+    public void A_paid_checkout_cannot_change_its_payment_method()
+    {
+        var checkout = CheckoutWithOrderIn(PaymentOrderStatus.Success);
+
+        Assert.Throws<PaymentDomainException>(() => checkout.UsePaymentMethod(Guid.NewGuid()));
+        Assert.Null(checkout.PaymentMethodId);
+    }
 }

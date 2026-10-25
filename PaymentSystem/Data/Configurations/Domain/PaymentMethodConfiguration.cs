@@ -12,7 +12,7 @@ internal sealed class PaymentMethodConfiguration : IEntityTypeConfiguration<Paym
         builder.HasKey(method => method.Id);
         builder.Property(method => method.Id).ValueGeneratedNever();
 
-        builder.Property(method => method.UserId).HasMaxLength(64).IsRequired();
+        builder.Property(method => method.UserId).IsRequired();
         builder.Property(method => method.PspName).HasMaxLength(50).IsRequired();
         builder.Property(method => method.PspToken).HasMaxLength(255).IsRequired();
 

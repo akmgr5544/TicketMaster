@@ -35,10 +35,7 @@ public sealed class DeletePaymentMethodTests(PaymentsFixture fixture) : Integrat
     {
         var user = Guid.NewGuid();
         var method = await SeedPaymentMethodAsync(user);
-        var checkout = await SeedCheckoutAsync(buyerId: user);
-        // No domain operation records a checkout's method yet, so the link is set the way the column holds it.
-        await InScopeAsync(c => c.Database.ExecuteSqlRawAsync(
-            "update \"PaymentEvents\" set \"PaymentMethodId\" = {0} where \"CheckoutId\" = {1}", method.Id, checkout.CheckoutId));
+        await SeedCheckoutAsync(buyerId: user, paymentMethodId: method.Id);
 
         var result = await Sender.Send(new DeletePaymentMethod.Command(user, method.Id));
 

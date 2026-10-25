@@ -26,6 +26,39 @@ public sealed class SubmitPaymentMethodTests(PaymentsFixture fixture) : Integrat
     }
 
     [Fact]
+    public async Task Without_a_token_the_checkouts_saved_method_is_charged()
+    {
+        var buyer = Guid.NewGuid();
+        var method = await SeedPaymentMethodAsync(buyer, pspName: "Braintree", pspToken: "bt_saved_token");
+        var checkout = await SeedCheckoutAsync(OrderState.Executing, amount: 20m, buyerId: buyer, provider: "Braintree",
+            paymentMethodId: method.Id);
+        var orderId = checkout.PaymentOrders.Single().PaymentOrderId;
+
+        var result = await Sender.Send(new SubmitPaymentMethod.Command(buyer, orderId, null));
+
+        Assert.True(result.IsSuccess);
+        Assert.True(Psp.Braintree.Submissions.TryPeek(out var request));
+        Assert.Equal(new SubmitPaymentMethodRequest(orderId, 20m, "USD", "bt_saved_token"), request);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task Without_a_token_or_a_saved_method_nothing_is_charged(string? token)
+    {
+        var buyer = Guid.NewGuid();
+        var checkout = await SeedCheckoutAsync(OrderState.Executing, buyerId: buyer, provider: "Braintree");
+
+        var result = await Sender.Send(new SubmitPaymentMethod.Command(buyer, checkout.PaymentOrders.Single().PaymentOrderId, token));
+
+        Assert.Equal(ErrorType.BadRequest, result.Error!.Type);
+        Assert.Equal("payment_method_required", result.Error.Code);
+        Assert.Empty(Psp.Braintree.Submissions);
+        Assert.Empty(Bus.Invoked);
+    }
+
+    [Fact]
     public async Task A_braintree_charge_that_succeeds_is_recorded_as_paid()
     {
         var buyer = Guid.NewGuid();

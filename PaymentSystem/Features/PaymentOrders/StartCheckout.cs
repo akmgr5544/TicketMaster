@@ -14,14 +14,17 @@ namespace PaymentSystem.Features.PaymentOrders;
 // same payment rather than a second one.
 public static class StartCheckout
 {
+    // A saved method of the buyer's to pay with; without one the buyer enters a card on the PSP's page.
+    public sealed record Request(Guid? PaymentMethodId);
+
     // Not ITransactionalRequest: the PSP call must not hold a database transaction open, and the single save
     // afterwards is atomic on its own.
-    public sealed record Command(Guid CallerId, Guid PaymentOrderId) : IRequest<Result<Response>>;
+    public sealed record Command(Guid CallerId, Guid PaymentOrderId, Guid? PaymentMethodId = null) : IRequest<Result<Response>>;
 
     // The client token goes to the payment form once; it is never stored or logged.
     public sealed record Response(string Provider, string ClientToken);
 
-    internal sealed class Handler(PaymentDbContext context, IPaymentGatewayFactory gateways)
+    internal sealed class Handler(PaymentDbContext context, IPaymentGatewayFactory gateways, TimeProvider clock)
         : IRequestHandler<Command, Result<Response>>
     {
         public async Task<Result<Response>> Handle(Command request, CancellationToken cancellationToken)
@@ -40,6 +43,22 @@ public static class StartCheckout
             // An order already started goes back to its own provider.
             var gateway = order.Status == PaymentOrderStatus.Executing ? gateways.ForProvider(order.Provider) : gateways.Default;
 
+            if (request.PaymentMethodId is { } paymentMethodId)
+            {
+                var method = await context.PaymentMethods
+                    .SingleOrDefaultAsync(m => m.Id == paymentMethodId && m.UserId == request.CallerId, cancellationToken);
+
+                if (method is null)
+                    return Error.NotFound("payment_method_not_found", $"Payment method {paymentMethodId} was not found.");
+
+                // A saved token belongs to the PSP that issued it; another PSP cannot charge it.
+                if (!string.Equals(method.PspName, gateway.Kind.ToString(), StringComparison.OrdinalIgnoreCase))
+                    return Error.BadRequest("payment_method_provider_mismatch",
+                        $"Payment method {paymentMethodId} is held by {method.PspName}, but this order is paid through {gateway.Kind}.");
+
+                checkout.UsePaymentMethod(method.Id);
+            }
+
             CheckoutSession session;
             try
             {
@@ -51,7 +70,7 @@ public static class StartCheckout
                 return error;
             }
 
-            checkout.StartOrder(order.PaymentOrderId, gateway.Kind.ToString(), session.ProviderReference);
+            checkout.StartOrder(order.PaymentOrderId, gateway.Kind.ToString(), session.ProviderReference, clock.GetUtcNow().UtcDateTime);
 
             try
             {
@@ -73,12 +92,14 @@ public sealed class StartCheckoutEndpoint : IEndpointMarker
     public void MapEndpoint(IEndpointRouteBuilder endpoints)
     {
         endpoints.MapPost("api/payments/orders/{paymentOrderId:guid}/checkout",
-            async (Guid paymentOrderId, HttpContext httpContext, ISender sender, CancellationToken cancellationToken) =>
+            async (Guid paymentOrderId, StartCheckout.Request? body, HttpContext httpContext, ISender sender,
+                CancellationToken cancellationToken) =>
             {
                 if (!httpContext.TryGetUserId(out var callerId))
                     return Results.Unauthorized();
 
-                var result = await sender.Send(new StartCheckout.Command(callerId, paymentOrderId), cancellationToken);
+                var result = await sender.Send(
+                    new StartCheckout.Command(callerId, paymentOrderId, body?.PaymentMethodId), cancellationToken);
                 return result.IsSuccess ? Results.Ok(result.Value) : result.Error!.ToProblem();
             });
     }

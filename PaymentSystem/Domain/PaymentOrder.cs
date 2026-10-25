@@ -14,6 +14,8 @@ public class PaymentOrder
     public string? PspTokenRef { get; private set; } // Outward transaction receipt tracing string from PSP
     // The PSP that took the order, so a refund goes back to the same one.
     public string? Provider { get; private set; }
+    // When the buyer was sent to the PSP; reconciliation asks the PSP about orders stuck here too long.
+    public DateTime? ExecutingSince { get; private set; }
     public bool WalletUpdated { get; private set; }
     public bool LedgerUpdated { get; private set; }
     public DateTime CreatedAt { get; private set; }
@@ -34,11 +36,12 @@ public class PaymentOrder
         CreatedAt = DateTime.UtcNow;
     }
 
-    internal void StartExecuting(string provider, string? pspTokenRef)
+    internal void StartExecuting(string provider, string? pspTokenRef, DateTime startedAt)
     {
         Status = PaymentOrderStatus.Executing;
         Provider = provider;
         PspTokenRef = pspTokenRef;
+        ExecutingSince = startedAt;
     }
 
     public void TransitionToSuccess(string pspTokenRef)

@@ -17,7 +17,7 @@ public sealed class SetDefaultPaymentMethodTests(PaymentsFixture fixture) : Inte
         var result = await Sender.Send(new SetDefaultPaymentMethod.Command(user, chosen.Id));
 
         Assert.True(result.IsSuccess);
-        var methods = await ReadAsync(c => c.PaymentMethods.Where(m => m.UserId == user.ToString()).ToListAsync());
+        var methods = await ReadAsync(c => c.PaymentMethods.Where(m => m.UserId == user).ToListAsync());
         Assert.Equal(chosen.Id, Assert.Single(methods, m => m.IsDefault).Id);
         Assert.False(methods.Single(m => m.Id == old.Id).IsDefault);
     }

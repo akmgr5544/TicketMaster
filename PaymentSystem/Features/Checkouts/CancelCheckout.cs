@@ -20,9 +20,17 @@ public sealed class BookingCancelledHandler(ILogger<BookingCancelledHandler> log
         var checkout = await context.PaymentEvents
             .SingleOrDefaultAsync(e => e.BookingId == message.BookingId, cancellationToken);
 
+        // The cancellation overtook the payment request: claim the booking, so the request is refused when it lands.
+        // A request racing this insert fails on the same key, and its retry finds the claim.
         if (checkout is null)
         {
-            logger.LogWarning("Booking {BookingId} was cancelled before its payment was requested.", message.BookingId);
+            if (!await context.BookingClaims.AnyAsync(c => c.BookingId == message.BookingId, cancellationToken))
+            {
+                context.BookingClaims.Add(BookingClaim.Cancelled(message.BookingId));
+                logger.LogInformation("Booking {BookingId} was cancelled before its payment was requested; a later request will be refused.",
+                    message.BookingId);
+            }
+
             return outgoing;
         }
 

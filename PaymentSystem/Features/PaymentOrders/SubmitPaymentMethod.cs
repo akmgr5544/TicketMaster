@@ -12,14 +12,15 @@ using Wolverine;
 
 namespace PaymentSystem.Features.PaymentOrders;
 
-// Hands the payment form's token to the PSP. Braintree charges here and answers at once; Stripe answers by webhook.
+// Hands a payment method to the PSP: the payment form's one-time token, or — when none is sent — the saved method the
+// buyer chose when starting the checkout. Braintree charges here and answers at once; Stripe answers by webhook.
 public static class SubmitPaymentMethod
 {
-    public sealed record Request(string PaymentMethod);
+    public sealed record Request(string? PaymentMethod);
 
     // Not ITransactionalRequest: the PSP is charged with no transaction open. The outcome is then recorded by
     // RecordPaymentOutcome, the same handler a webhook uses, in its own transaction.
-    public sealed record Command(Guid CallerId, Guid PaymentOrderId, string PaymentMethod) : IRequest<Result<Response>>;
+    public sealed record Command(Guid CallerId, Guid PaymentOrderId, string? PaymentMethod) : IRequest<Result<Response>>;
 
     public sealed record Response(string Status, string? FailureReason);
 
@@ -39,11 +40,24 @@ public static class SubmitPaymentMethod
             if (order.Status != nameof(PaymentOrderStatus.Executing))
                 return Error.Conflict("payment_order_not_executing", $"Payment order {request.PaymentOrderId} is {order.Status}; start its checkout first.");
 
+            var paymentMethod = request.PaymentMethod;
+            if (string.IsNullOrWhiteSpace(paymentMethod))
+            {
+                paymentMethod = await context.PaymentEvents
+                    .Where(e => e.CheckoutId == order.CheckoutId)
+                    .Join(context.PaymentMethods, e => e.PaymentMethodId, m => m.Id, (_, m) => m.PspToken)
+                    .SingleOrDefaultAsync(cancellationToken);
+
+                if (paymentMethod is null)
+                    return Error.BadRequest("payment_method_required",
+                        "Send the payment form's token, or choose a saved payment method when starting the checkout.");
+            }
+
             PaymentResult? result;
             try
             {
                 result = await gateways.ForProvider(order.Provider).SubmitPaymentMethodAsync(
-                    new SubmitPaymentMethodRequest(order.PaymentOrderId, order.Amount, order.Currency, request.PaymentMethod), cancellationToken);
+                    new SubmitPaymentMethodRequest(order.PaymentOrderId, order.Amount, order.Currency, paymentMethod), cancellationToken);
             }
             catch (PaymentProviderException exception) when (Error.FromProvider(exception) is { } error)
             {

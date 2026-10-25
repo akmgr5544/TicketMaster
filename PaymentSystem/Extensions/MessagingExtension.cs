@@ -1,6 +1,7 @@
 using JasperFx.Core;
 using Microsoft.EntityFrameworkCore;
 using PaymentProvider.Exceptions;
+using PaymentSystem.Features.PaymentOrders;
 using PaymentSystem.Shared.Messaging;
 using TicketMaster.Common.IntegrationEvents;
 using Wolverine;
@@ -45,8 +46,9 @@ public static class MessagingExtension
             options.Policies.UseDurableInboxOnAllListeners();
             options.Policies.UseDurableOutboxOnAllSendingEndpoints();
 
-            // Two copies of one message racing to insert lose on a unique index, and two writers racing on one order
-            // or wallet lose on its row version; the retry starts from a fresh scope and decides over the winner's state.
+            // Two copies of one message racing to insert lose on a unique index (a checkout, a booking claim), and two
+            // writers on one checkout or wallet lose on its version; the retry starts from a fresh scope and decides
+            // over the winner's state.
             options.OnException<DbUpdateException>()
                 .RetryWithCooldown(100.Milliseconds(), 1.Seconds(), 5.Seconds());
 
@@ -54,6 +56,9 @@ public static class MessagingExtension
             // by the PSP with the first one, since the request id is its idempotency key.
             options.OnException<PaymentProviderException>(exception => exception.Kind == PaymentProviderErrorKind.Transient)
                 .ScheduleRetry(10.Seconds(), 1.Minutes(), 5.Minutes(), 30.Minutes());
+
+            // Here rather than in AddInfrastructureServices: it records outcomes through Wolverine's bus.
+            options.Services.AddHostedService<ReconcileOrdersJob>();
         });
     }
 }

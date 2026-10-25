@@ -164,7 +164,7 @@ public sealed class PaymentsHostTests(PaymentsHostFixture fixture)
         var checkout = PaymentEvent.Create(NewBookingId(), Guid.NewGuid(), "USD");
         checkout.AddPaymentOrder(Guid.NewGuid(), 100m);
         var orderId = checkout.PaymentOrders.Single().PaymentOrderId;
-        checkout.StartOrder(orderId, "Stripe", $"pi_{orderId:N}");
+        checkout.StartOrder(orderId, "Stripe", $"pi_{orderId:N}", DateTime.UtcNow);
 
         using var scope = fixture.Services.CreateScope();
         var context = scope.ServiceProvider.GetRequiredService<PaymentDbContext>();

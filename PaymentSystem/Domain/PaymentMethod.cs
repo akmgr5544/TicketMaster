@@ -7,15 +7,15 @@ public class PaymentMethod
     public Guid Id { get; private set; }
 
     // References external aggregate by ID only
-    public string UserId { get; private set; }
+    public Guid UserId { get; private set; }
 
-    public string PspName { get; private set; }
-    public string PspToken { get; private set; } // PCI safe token
+    public string PspName { get; private set; } = null!;
+    public string PspToken { get; private set; } = null!; // PCI safe token
     public bool IsDefault { get; private set; }
 
     private PaymentMethod() { } // EF Core fallback
 
-    private PaymentMethod(string userId, string pspName, string pspToken)
+    private PaymentMethod(Guid userId, string pspName, string pspToken)
     {
         Id = Guid.NewGuid();
         UserId = userId;
@@ -23,9 +23,9 @@ public class PaymentMethod
         PspToken = pspToken;
     }
 
-    public static PaymentMethod Create(string userId, string pspName, string pspToken)
+    public static PaymentMethod Create(Guid userId, string pspName, string pspToken)
     {
-        if (string.IsNullOrWhiteSpace(userId))
+        if (userId == Guid.Empty)
             throw new PaymentDomainException("A payment method must belong to a user.");
 
         if (string.IsNullOrWhiteSpace(pspName))

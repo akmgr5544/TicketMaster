@@ -87,14 +87,17 @@ public abstract class IntegrationTest(PaymentsFixture fixture) : IAsyncLifetime
         Guid? sellerId = null,
         long? bookingId = null,
         string provider = "Stripe",
-        bool settled = true)
+        bool settled = true,
+        Guid? paymentMethodId = null)
     {
         var checkout = PaymentEvent.Create(bookingId ?? NewBookingId(), buyerId ?? Guid.NewGuid(), currency);
         checkout.AddPaymentOrder(sellerId ?? Guid.NewGuid(), amount);
         var orderId = checkout.PaymentOrders.Single().PaymentOrderId;
+        if (paymentMethodId is { } methodId)
+            checkout.UsePaymentMethod(methodId);
 
         if (state != OrderState.Init)
-            checkout.StartOrder(orderId, provider, StubGateway.ReferenceFor(orderId));
+            checkout.StartOrder(orderId, provider, StubGateway.ReferenceFor(orderId), Clock.GetUtcNow().UtcDateTime);
         if (state == OrderState.Success)
         {
             checkout.SucceedOrder(orderId, StubGateway.ReferenceFor(orderId));
@@ -125,7 +128,7 @@ public abstract class IntegrationTest(PaymentsFixture fixture) : IAsyncLifetime
         {
             var orderId = created[i].PaymentOrderId;
             if (orders[i].State != OrderState.Init)
-                checkout.StartOrder(orderId, "Stripe", StubGateway.ReferenceFor(orderId));
+                checkout.StartOrder(orderId, "Stripe", StubGateway.ReferenceFor(orderId), Clock.GetUtcNow().UtcDateTime);
             if (orders[i].State == OrderState.Success)
             {
                 checkout.SucceedOrder(orderId, StubGateway.ReferenceFor(orderId));
@@ -156,6 +159,16 @@ public abstract class IntegrationTest(PaymentsFixture fixture) : IAsyncLifetime
         return refund;
     }
 
+    protected async Task<BookingClaim> SeedClaimAsync(BookingClaim claim)
+    {
+        await InScopeAsync(async c =>
+        {
+            c.BookingClaims.Add(claim);
+            await c.SaveChangesAsync();
+        });
+        return claim;
+    }
+
     protected async Task<Wallet> SeedWalletAsync(Guid userId, decimal balance = 0m, string currency = Usd)
     {
         var wallet = new Wallet(userId, currency);
@@ -184,7 +197,7 @@ public abstract class IntegrationTest(PaymentsFixture fixture) : IAsyncLifetime
     protected async Task<PaymentMethod> SeedPaymentMethodAsync(Guid userId, bool isDefault = false,
         string pspName = "Stripe", string pspToken = "pm_seeded")
     {
-        var method = PaymentMethod.Create(userId.ToString(), pspName, pspToken);
+        var method = PaymentMethod.Create(userId, pspName, pspToken);
         if (isDefault)
             method.MarkAsDefault();
         await InScopeAsync(async c =>

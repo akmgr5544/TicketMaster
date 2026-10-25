@@ -16,7 +16,7 @@ public static class GetPaymentMethod
     {
         public async Task<Result<Response>> Handle(Query request, CancellationToken cancellationToken)
         {
-            var userId = request.CallerId.ToString();
+            var userId = request.CallerId;
 
             var method = await context.PaymentMethods
                 .Where(m => m.Id == request.PaymentMethodId && m.UserId == userId)

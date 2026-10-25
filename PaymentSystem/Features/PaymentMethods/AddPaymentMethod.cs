@@ -23,7 +23,7 @@ public static class AddPaymentMethod
     {
         public async Task<Result<Response>> Handle(Command request, CancellationToken cancellationToken)
         {
-            var userId = request.CallerId.ToString();
+            var userId = request.CallerId;
             var method = PaymentMethod.Create(userId, request.PspName, request.PspToken);
 
             var existing = await context.PaymentMethods

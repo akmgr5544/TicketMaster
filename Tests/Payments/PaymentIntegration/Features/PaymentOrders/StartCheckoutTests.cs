@@ -117,6 +117,88 @@ public sealed class StartCheckoutTests(PaymentsFixture fixture) : IntegrationTes
         Assert.Equal(StubGateway.ReferenceFor(orderId), order.PspTokenRef);
     }
 
+    // Reconciliation decides which orders are stuck by this timestamp, so it must be the moment the buyer was sent.
+    [Fact]
+    public async Task Starting_records_when_the_order_began_executing()
+    {
+        var buyer = Guid.NewGuid();
+        var checkout = await SeedCheckoutAsync(buyerId: buyer);
+        var orderId = checkout.PaymentOrders.Single().PaymentOrderId;
+        Clock.Advance(TimeSpan.FromMinutes(7));
+
+        await Sender.Send(new StartCheckout.Command(buyer, orderId));
+
+        var order = (await ReadCheckoutAsync(checkout.BookingId)).FindOrder(orderId);
+        Assert.Equal(Clock.GetUtcNow().UtcDateTime, order.ExecutingSince);
+    }
+
+    [Fact]
+    public async Task The_buyers_saved_method_is_recorded_on_the_checkout()
+    {
+        var buyer = Guid.NewGuid();
+        var method = await SeedPaymentMethodAsync(buyer, pspName: "Stripe");
+        var checkout = await SeedCheckoutAsync(buyerId: buyer);
+
+        var result = await Sender.Send(new StartCheckout.Command(buyer, checkout.PaymentOrders.Single().PaymentOrderId, method.Id));
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(method.Id, (await ReadCheckoutAsync(checkout.BookingId)).PaymentMethodId);
+    }
+
+    [Fact]
+    public async Task Someone_elses_saved_method_is_not_found_and_nothing_starts()
+    {
+        var buyer = Guid.NewGuid();
+        var method = await SeedPaymentMethodAsync(Guid.NewGuid(), pspName: "Stripe");
+        var checkout = await SeedCheckoutAsync(buyerId: buyer);
+        var orderId = checkout.PaymentOrders.Single().PaymentOrderId;
+
+        var result = await Sender.Send(new StartCheckout.Command(buyer, orderId, method.Id));
+
+        Assert.Equal(ErrorType.NotFound, result.Error!.Type);
+        Assert.Equal("payment_method_not_found", result.Error.Code);
+        Assert.Empty(Psp.Stripe.Checkouts);
+        var stored = await ReadCheckoutAsync(checkout.BookingId);
+        Assert.Equal(PaymentOrderStatus.Init, stored.FindOrder(orderId).Status);
+        Assert.Null(stored.PaymentMethodId);
+    }
+
+    // A saved token belongs to the PSP that issued it; another PSP cannot charge it.
+    [Fact]
+    public async Task A_saved_method_held_by_another_psp_is_refused_and_nothing_starts()
+    {
+        var buyer = Guid.NewGuid();
+        var method = await SeedPaymentMethodAsync(buyer, pspName: "Braintree");
+        var checkout = await SeedCheckoutAsync(buyerId: buyer);
+        var orderId = checkout.PaymentOrders.Single().PaymentOrderId;
+        Psp.DefaultKind = PaymentProviderKind.Stripe;
+
+        var result = await Sender.Send(new StartCheckout.Command(buyer, orderId, method.Id));
+
+        Assert.Equal(ErrorType.BadRequest, result.Error!.Type);
+        Assert.Equal("payment_method_provider_mismatch", result.Error.Code);
+        Assert.Empty(Psp.Stripe.Checkouts);
+        Assert.Empty(Psp.Braintree.Checkouts);
+        var stored = await ReadCheckoutAsync(checkout.BookingId);
+        Assert.Equal(PaymentOrderStatus.Init, stored.FindOrder(orderId).Status);
+        Assert.Null(stored.PaymentMethodId);
+    }
+
+    // The hand-off is the point: a method a checkout was started with is what the delete guard protects.
+    [Fact]
+    public async Task A_saved_method_a_checkout_was_started_with_cannot_then_be_removed()
+    {
+        var buyer = Guid.NewGuid();
+        var method = await SeedPaymentMethodAsync(buyer, pspName: "Stripe");
+        var checkout = await SeedCheckoutAsync(buyerId: buyer);
+        await Sender.Send(new StartCheckout.Command(buyer, checkout.PaymentOrders.Single().PaymentOrderId, method.Id));
+
+        var result = await Sender.Send(new PaymentSystem.Features.PaymentMethods.DeletePaymentMethod.Command(buyer, method.Id));
+
+        Assert.Equal("payment_method_in_use", result.Error!.Code);
+        Assert.True(await ReadAsync(c => c.PaymentMethods.AnyAsync(m => m.Id == method.Id)));
+    }
+
     [Theory]
     [InlineData(PaymentProviderErrorKind.Transient, ErrorType.Conflict, "psp_unavailable")]
     [InlineData(PaymentProviderErrorKind.InvalidRequest, ErrorType.BadRequest, "psp_rejected_request")]

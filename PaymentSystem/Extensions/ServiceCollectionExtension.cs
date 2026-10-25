@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using PaymentProvider.Extensions;
 using PaymentSystem.Data;
 using PaymentSystem.Data.Interceptors;
+using PaymentSystem.Features.PaymentOrders;
 using PaymentSystem.Shared.Endpoints;
 using PaymentSystem.Shared.Pipelines;
 
@@ -21,24 +22,21 @@ public static class ServiceCollectionExtension
 
         services.AddSingleton(TimeProvider.System);
         services.AddSingleton<AuditTimestampsInterceptor>();
-        // Scoped, not singleton: it holds an IPublisher, and one from the root container would run domain event
-        // handlers on their own DbContext, outside the transaction of the save that raised them.
-        services.AddScoped<DomainEventPublisherInterceptor>();
 
         var connectionString = configuration.GetConnectionString("DefaultConnection");
 
         services.AddDbContext<PaymentDbContext>((serviceProvider, options) =>
         {
             options.UseNpgsql(connectionString);
-            options.AddInterceptors(
-                serviceProvider.GetRequiredService<AuditTimestampsInterceptor>(),
-                serviceProvider.GetRequiredService<DomainEventPublisherInterceptor>());
+            options.AddInterceptors(serviceProvider.GetRequiredService<AuditTimestampsInterceptor>());
         });
 
         services.AddDbContext<PaymentQueryDbContext>(options => options.UseNpgsql(connectionString));
 
         // Validated at startup: the service does not boot without its PSP secrets.
         services.AddPaymentProviders(configuration);
+
+        services.AddScoped<OrderReconciler>();
 
         return services;
     }
@@ -58,5 +56,13 @@ public static class ServiceCollectionExtension
     {
         foreach (var endpoint in app.Services.GetServices<IEndpointMarker>())
             endpoint.MapEndpoint(app);
+    }
+
+    // As in Bookings and Users: each service creates and migrates its own database on first boot. EF Core takes a
+    // lock around it, so two instances booting together do not both migrate.
+    public static async Task ApplyMigrationsAsync(this WebApplication app)
+    {
+        await using var scope = app.Services.CreateAsyncScope();
+        await scope.ServiceProvider.GetRequiredService<PaymentDbContext>().Database.MigrateAsync();
     }
 }

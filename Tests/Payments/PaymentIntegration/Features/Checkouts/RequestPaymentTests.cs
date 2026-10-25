@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using PaymentIntegration.Fixtures;
+using PaymentSystem.Domain;
 using PaymentSystem.Enums;
 using PaymentSystem.Features.Checkouts;
 using PaymentSystem.Shared.Messaging;
@@ -65,6 +66,44 @@ public sealed class RequestPaymentTests(PaymentsFixture fixture) : IntegrationTe
         var failed = Assert.Single(outgoing.OfType<BookingPaymentFailedIntegrationEvent>());
         Assert.Equal(bookingId, failed.BookingId);
         Assert.False(await ReadAsync(c => c.PaymentEvents.AnyAsync(e => e.BookingId == bookingId)));
+    }
+
+    [Fact]
+    public async Task An_accepted_request_claims_the_booking_together_with_the_checkout()
+    {
+        var bookingId = NewBookingId();
+
+        await HandleAsync(new PaymentRequestedIntegrationEvent(bookingId, Guid.NewGuid(), Guid.NewGuid(), 40m, "USD"));
+
+        var claim = await ReadAsync(c => c.BookingClaims.SingleAsync(x => x.BookingId == bookingId));
+        Assert.Equal(BookingClaimStatus.Requested, claim.Status);
+        Assert.True(await ReadAsync(c => c.PaymentEvents.AnyAsync(e => e.BookingId == bookingId)));
+    }
+
+    [Fact]
+    public async Task A_refused_request_claims_nothing()
+    {
+        var bookingId = NewBookingId();
+
+        await HandleAsync(new PaymentRequestedIntegrationEvent(bookingId, Guid.NewGuid(), Guid.NewGuid(), 0m, "USD"));
+
+        Assert.False(await ReadAsync(c => c.BookingClaims.AnyAsync(x => x.BookingId == bookingId)));
+    }
+
+    // Bookings released the seats when it cancelled, so a BookingPaymentFailed would only be noise.
+    [Fact]
+    public async Task A_request_for_a_booking_already_cancelled_opens_nothing_and_sends_nothing()
+    {
+        var bookingId = NewBookingId();
+        await SeedClaimAsync(BookingClaim.Cancelled(bookingId));
+
+        var outgoing = await HandleAsync(
+            new PaymentRequestedIntegrationEvent(bookingId, Guid.NewGuid(), Guid.NewGuid(), 40m, "USD"));
+
+        Assert.Empty(outgoing);
+        Assert.False(await ReadAsync(c => c.PaymentEvents.AnyAsync(e => e.BookingId == bookingId)));
+        var claim = await ReadAsync(c => c.BookingClaims.SingleAsync(x => x.BookingId == bookingId));
+        Assert.Equal(BookingClaimStatus.Cancelled, claim.Status);
     }
 
     [Fact]

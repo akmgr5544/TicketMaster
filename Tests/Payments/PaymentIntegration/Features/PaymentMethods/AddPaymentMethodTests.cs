@@ -9,7 +9,7 @@ namespace PaymentIntegration.Features.PaymentMethods;
 public sealed class AddPaymentMethodTests(PaymentsFixture fixture) : IntegrationTest(fixture)
 {
     private Task<List<PaymentMethod>> ReadMethodsAsync(Guid userId) =>
-        ReadAsync(c => c.PaymentMethods.Where(m => m.UserId == userId.ToString()).ToListAsync());
+        ReadAsync(c => c.PaymentMethods.Where(m => m.UserId == userId).ToListAsync());
 
     [Fact]
     public async Task A_users_first_method_becomes_their_default_even_unasked()
