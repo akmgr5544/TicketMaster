@@ -35,7 +35,7 @@ dotnet test Tests/Users/UsersIntegration/UsersIntegration.csproj  # first-user-A
 dotnet test Tests/Users/UsersArchitecture/UsersArchitecture.csproj
 dotnet test Tests/Payments/PaymentArchitecture/PaymentArchitecture.csproj  # domain purity, read side independent of domain, visibility, transactional commands
 dotnet test Tests/Payments/PaymentDomain/PaymentDomain.csproj          # checkout/order/wallet/ledger/Money rules
-dotnet test Tests/Payments/PaymentIntegration/PaymentIntegration.csproj  # slices, message handlers, reconciliation, indexes, concurrency (Postgres); Mechanics/ boots the host (+ RabbitMQ). Needs Docker
+dotnet test Tests/Payments/PaymentIntegration/PaymentIntegration.csproj  # slices, message handlers, order/refund/settlement reconciliation, indexes, concurrency (Postgres); Mechanics/ boots the host (+ RabbitMQ). Needs Docker
 dotnet test Tests/Payments/PaymentAdapters/PaymentAdapters.csproj    # Stripe/Braintree adapters in PaymentProvider
 dotnet test Tests/Notifications/NotificationsIntegration/NotificationsIntegration.csproj  # outcome emails, dedupe, SMTP retry (Postgres); Mechanics/ boots the host (+ RabbitMQ + Mailpit). Needs Docker
 dotnet test Tests/Rpc/GrpcSeam/GrpcSeam.csproj                       # Bookings↔Events gRPC error round-trip (in-process, no Docker)
@@ -119,7 +119,7 @@ known gaps.
 **Notifications** is vertical slices in one project, plain Wolverine handlers, no MediatR: `Domain/`
 (`BookingBuyer`, `Recipient`, `Notification`), `Data/` (`NotificationsDbContext`, `notifications_db`), `Email/`
 (`IEmailSender`, MailKit `SmtpEmailSender`), `Features/<Area>/<Feature>.cs`. It emails a booking's buyer each
-outcome (paid, payment failed, cancelled, refunded), learning the buyer from `PaymentRequested` and the address
+outcome (paid, payment failed, cancelled, refunded, refund failed), learning the buyer from `PaymentRequested` and the address
 from `UserRegistered`. No public API (only `GET /health`), no gateway route, publishes nothing. It listens on its
 own `notifications.<Message>` queues bound to the existing exchanges — the default-named queues belong to
 Payments and Bookings. See the `notifications-service` skill.
@@ -137,8 +137,11 @@ Payments and Bookings. See the `notifications-service` skill.
   `RefundRequested`, and PaymentSystem refunds whatever is still paid — as it does for a booking cancelled
   after it was paid. A customer cancelling a paid booking (until the event starts) publishes it too; refunds
   are whole only, so a paid booking is cancelled whole (a subset of its seats is a 409) and the message carries
-  no amount. Every refund carries a `RefundId`; `BookingRefunded` echoes it once the order is fully refunded
-  and releases the booking's seats — they stay held until then. Notifications emails the buyer each
+  no amount. Every refund carries a `RefundId`; `BookingRefunded` echoes it once the order is fully refunded —
+  when the PSP has finished it, which for a pending refund means a refund webhook or the refund poller — and
+  releases the booking's seats — they stay held until then. A refund the PSP refuses, or fails after reporting
+  it done, publishes `BookingRefundFailed`: Bookings releases a waiting booking's seats (`RefundFailed`) and a
+  person returns the money; Notifications emails the buyer each
   outcome. A
   cancellation that overtakes its `PaymentRequested` is remembered (`BookingClaims`), so the late request is
   refused. Bookings publishes through an `IIntegrationEventPublisher` that stages into Wolverine's
