@@ -149,13 +149,42 @@ services:
       rabbitmq:
         condition: service_healthy
 
+  # Catches every email in development; read them at http://localhost:8025.
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "1025:1025"   # SMTP
+      - "8025:8025"   # web UI and API
+
+  notifications:
+    image: notifications
+    build:
+      context: .
+      dockerfile: Notifications/Dockerfile
+    environment:
+      ConnectionStrings__NotificationsDatabase: "Host=postgres;Port=5432;Database=notifications_db;Username=postgres;Password=${POSTGRES_PASSWORD}"
+      ConnectionStrings__RabbitMQ: "amqp://guest:guest@rabbitmq:5672"
+      Email__Host: "mailpit"
+      Email__Port: "1025"
+      Email__From: "no-reply@ticketmaster.local"
+    # No public API, so no gateway route; published only for its health endpoint while debugging.
+    ports:
+      - "5300:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+
   gateway:
     image: gateway
     build:
       context: .
       dockerfile: TicketMaster.ApiGateway/Dockerfile
     environment:
-      # The gateway is the only published port. It introspects tokens against Users directly, and
+      # The gateway is the only API entry point. It introspects tokens against Users directly, and
       # proxies each route to its cluster — both retargeted from localhost to the in-network hostnames.
       Services__Users__BaseAddress: "http://users-api:8080"
       ReverseProxy__Clusters__users-cluster__Destinations__destination1__Address: "http://users-api:8080"
