@@ -3,8 +3,8 @@
 A distributed backend for high-concurrency ticket booking, built as a showcase for Clean
 Architecture, Domain-Driven Design and event-driven communication on .NET 10.
 
-**Status: 🚧 Active development.** Parts of this are deliberately incomplete, and the gaps are
-listed honestly under [Known gaps](#-known-gaps) rather than left for you to discover.
+**Status: 🚧 Active development.** Parts of this are deliberately incomplete, and the limits are
+listed honestly under [Trade-offs and limitations](#-trade-offs-and-limitations) rather than left for you to discover.
 
 ## 🚀 Tech stack
 
@@ -668,10 +668,10 @@ strings use the password `password`.
 Central package management is enabled: add package versions to `Directory.Packages.props`, never
 `Version="…"` on an individual `<PackageReference>`.
 
-## 🗺️ Known gaps
+## ⚖️ Trade-offs and limitations
 
-Deliberate trade-offs, listed so nobody "fixes" one without knowing what it carries. The reasoning behind
-each lives in the owning service's skill under `.claude/skills/`.
+Deliberate choices, not bugs: each is a cost accepted for something else, listed so nobody "fixes" one without
+knowing what it carries. The reasoning behind each lives in the owning service's skill under `.claude/skills/`.
 
 - **The gateway trusts an introspection for 30 seconds**, so a revoked token or changed role lasts that long at the edge.
 - **Two first registrations at once both become Admin**, and **two admins demoting each other at once can leave none**.
