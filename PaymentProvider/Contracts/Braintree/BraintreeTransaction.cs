@@ -8,4 +8,13 @@ internal sealed record BraintreeTransaction(
     string? OrderId,
     string? FailureReason,
     IReadOnlyList<string>? RefundIds = null,
-    decimal? Amount = null);
+    decimal? Amount = null,
+    string? Currency = null,
+    BraintreeTransactionType Type = BraintreeTransactionType.Sale);
+
+internal enum BraintreeTransactionType
+{
+    Sale,
+    // A refund: Braintree issues one as a credit transaction against the sale.
+    Credit,
+}

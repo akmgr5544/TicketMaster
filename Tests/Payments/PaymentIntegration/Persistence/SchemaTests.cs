@@ -14,6 +14,8 @@ public sealed class SchemaTests(PaymentsFixture fixture) : IntegrationTest(fixtu
     [InlineData("Wallets", "IX_Wallets_UserId_Currency", "CREATE UNIQUE INDEX")]                        // one wallet per user per currency
     [InlineData("PaymentOrders", "IX_PaymentOrders_CheckoutId", "CREATE UNIQUE INDEX")]                 // one order per checkout
     [InlineData("BookingClaims", "PK_BookingClaims", "CREATE UNIQUE INDEX")]                            // one claim per booking
+    [InlineData("SettlementRecords", "IX_SettlementRecords_Provider_ProviderReference_Kind", "CREATE UNIQUE INDEX")] // a settled line once
+    [InlineData("SettlementDiscrepancies", "IX_SettlementDiscrepancies_Provider_Kind_Reference", "CREATE UNIQUE INDEX")] // a finding once
     public async Task The_migrated_schema_holds_each_uniqueness_rule(string table, string index, string expected)
     {
         var definition = await ReadAsync(c => c.Database

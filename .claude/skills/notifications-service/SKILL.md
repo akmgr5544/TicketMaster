@@ -5,7 +5,7 @@ description: Use when working on the Notifications service — booking outcome e
 
 # Notifications Service
 
-Emails a booking's buyer what happened to it: paid, payment failed, cancelled, refunded. It only reacts to
+Emails a booking's buyer what happened to it: paid, payment failed, cancelled, refunded, refund failed. It only reacts to
 messages — **no public API, no gateway route, publishes nothing**; `GET /health` is the one endpoint. Own
 database `notifications_db` (Postgres, EF Core, migrations at startup via `ApplyMigrationsAsync`).
 
@@ -23,7 +23,8 @@ Email/           IEmailSender + EmailDeliveryException, SmtpEmailSender (MailKit
 Extensions/      AddNotificationsServices + ApplyMigrationsAsync; MessagingExtension.ConfigureMessaging
 Features/Bookings/RecordBuyer.cs             PaymentRequested → BookingBuyer (booking id → buyer id)
 Features/Users/RecordRecipient.cs            UserRegistered   → Recipient (user id → email)
-Features/Notifications/NotifyBuyer.cs        BookingPaid / BookingPaymentFailed / BookingCancelled / BookingRefunded
+Features/Notifications/NotifyBuyer.cs        BookingPaid / BookingPaymentFailed / BookingCancelled / BookingRefunded /
+                                             BookingRefundFailed
                                              → Notification row + SendEmail
 Features/Notifications/SendEmail.cs          SendEmail → SMTP, then SentAt
 ```
@@ -76,7 +77,7 @@ SendEmail (local durable queue "emails") ─► SendEmailHandler [NonTransaction
 
 `Extensions/MessagingExtension.cs`. **No conventional routing.** For each type in `Consumed`
 (`PaymentRequested`, `UserRegistered`, `BookingPaid`, `BookingPaymentFailed`, `BookingCancelled`,
-`BookingRefunded`) it binds the type's fanout exchange (named by the type's full name, as publishers send) to
+`BookingRefunded`, `BookingRefundFailed`) it binds the type's fanout exchange (named by the type's full name, as publishers send) to
 its own queue **`notifications.<TypeName>`** and listens there. The default queue names belong to the services
 already consuming those contracts (Payments, Bookings); sharing a queue makes two services compete for its
 messages instead of each getting a copy — Payments would silently lose about half. `SendEmail` goes to the local

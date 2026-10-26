@@ -96,11 +96,11 @@ flowchart LR
 
     events -- "EventCreated<br/>EventRescheduled<br/>EventRelocated<br/>EventRepriced<br/>EventCancelled" --> bookings
     bookings -- "PaymentRequested<br/>BookingCancelled<br/>RefundRequested" --> payments
-    payments -- "BookingPaid<br/>BookingPaymentFailed<br/>BookingRefunded" --> bookings
+    payments -- "BookingPaid<br/>BookingPaymentFailed<br/>BookingRefunded<br/>BookingRefundFailed" --> bookings
     users -- "UserRegistered" --> payments
     notifications["<b>Notifications</b>"]
     bookings -- "PaymentRequested<br/>BookingCancelled" --> notifications
-    payments -- "BookingPaid<br/>BookingPaymentFailed<br/>BookingRefunded" --> notifications
+    payments -- "BookingPaid<br/>BookingPaymentFailed<br/>BookingRefunded<br/>BookingRefundFailed" --> notifications
     users -- "UserRegistered" --> notifications
 ```
 
@@ -126,6 +126,8 @@ the two services compete for messages instead of each getting a copy.
 | `BookingPaymentFailed` | Payments → Notifications | Emails the buyer (unless the cancellation already did) |
 | `BookingRefunded` | Payments → Bookings | Sent once the order is fully refunded; names the refund, releases the booking's seats and marks it `Refunded` |
 | `BookingRefunded` | Payments → Notifications | Emails the buyer, one email per refund |
+| `BookingRefundFailed` | Payments → Bookings | A booking still waiting for that refund becomes `RefundFailed` and its seats go back on sale; one already refunded or cancelled is left alone |
+| `BookingRefundFailed` | Payments → Notifications | A refund the provider refused, or failed after reporting it done: emails the buyer that a person will return the money |
 | `UserRegistered` | Users → Payments | Keeps Payments' own copy of the user (id and email); committed with the registration, so a refused one announces nothing |
 | `UserRegistered` | Users → Notifications | Remembers the user's address, so outcomes can be emailed |
 
@@ -256,7 +258,7 @@ route the gateway leaves ungated, because the provider signs them instead:
 POST   /api/payments/orders/{id}/checkout        # start the PSP session → client token; optional { paymentMethodId } (a saved method)
 POST   /api/payments/orders/{id}/payment-method  # synchronous charge (Braintree), with a one-time token or the saved method;
                                                  # 202 when the outcome comes by webhook
-POST   /api/payments/webhooks/{provider}         # PSP callback — signature-verified, no user token
+POST   /api/payments/webhooks/{provider}         # PSP callback about a payment or a refund — signature-verified, no user token
 GET    /api/payments/checkouts/{bookingId}       # the buyer's checkout and its orders
 GET    /api/payments/orders/{id}                 # visible to the order's buyer or its seller
 GET    /api/payments/orders/{id}/refunds         # same visibility; oldest first
@@ -295,7 +297,7 @@ pages by `page`/`pageSize` and returns `items`, `page`, `pageSize`, `total` and 
 | **Users.Api** | Vertical slice (`Features/Users/…`) | Postgres | Registration (the first account becomes Admin), authentication, refresh tokens, admin role assignment. Issues the JWTs and answers the gateway's introspection call. |
 | **Bookings** | `Domain` / `Application` / `Sql` / `Api` | Postgres + Redis | Reservations and bookings. Owns the whole ticket lifecycle — held in Redis, sold in Postgres, settled or released when a payment result arrives — with a distributed lock per seat guarding concurrent reservation. |
 | **Events** | `Domain` / `Application` / `Cosmos` / `Api` | Cosmos DB | The catalogue: venues and performers with full CRUD; events created, rescheduled, relocated, re-lined-up and cancelled (never deleted). Serves the `EventsLookup` gRPC service Bookings calls. Publishes `EventCreated`, `EventRescheduled`, `EventRelocated` and `EventCancelled` — the first is what causes tickets to exist in Bookings, and the rest are what keep them correct. |
-| **PaymentSystem** | Vertical slices (`Features/<Area>/<Feature>.cs`) on a DDD `Domain/`, with a separate no-tracking read side | Postgres | The pay-in flow: a checkout per booking with exactly one payment order, PSP checkout and webhooks, saved payment methods, seller wallets, a double-entry ledger, 15-minute checkout expiry, reconciliation of stuck orders, whole refunds. Publishes `BookingPaid` / `BookingPaymentFailed` / `BookingRefunded`. |
+| **PaymentSystem** | Vertical slices (`Features/<Area>/<Feature>.cs`) on a DDD `Domain/`, with a separate no-tracking read side | Postgres | The pay-in flow: a checkout per booking with exactly one payment order, PSP checkout and webhooks, saved payment methods, seller wallets, a double-entry ledger, 15-minute checkout expiry, reconciliation of stuck orders and refunds and of what each PSP settled, whole refunds. Publishes `BookingPaid` / `BookingPaymentFailed` / `BookingRefunded`. |
 | **Notifications** | Vertical slices (`Features/<Area>/<Feature>.cs`), plain Wolverine handlers | Postgres | Emails a booking's buyer each outcome — paid, payment failed, cancelled, refunded — one email per outcome, sent over SMTP (MailKit) outside any transaction and retried while the mail server is down. Learns the buyer from `PaymentRequested` and the address from `UserRegistered`. No public API (`GET /health` only), publishes nothing. |
 | **PaymentProvider** | Class library | — | Anti-corruption layer over the PSPs (Stripe, Braintree) behind `IPaymentGateway`. |
 | **TicketMaster.ApiGateway** | — | — | YARP routing, edge authentication, identity header propagation. |
@@ -359,6 +361,22 @@ that started each order executing for over two minutes, and records a final answ
 after which the expiry would fail the order over money already taken. A refund is split the same way:
 `ProcessRefund` calls the provider with no transaction open, and `RecordRefundOutcome` writes the refund, the
 wallet debit and the reversing ledger pair in its own.
+
+**A refund is done only when the provider says so (Payments).** A refund the provider accepts as pending is
+`Processing`: nothing moves and Bookings hears nothing until the final answer arrives — from a Stripe refund
+webhook, or from `ReconcileRefundsJob`, which every minute asks the provider about refunds processing for over
+two minutes (the only follow-up a Braintree refund gets). A refund that fails after it was reported done — the
+bank declining a Braintree credit at settlement, or Stripe failing a succeeded refund — puts the money back: the
+seller's wallet is credited, a second ledger pair is written the other way (the first stays; the ledger is
+append-only), the order is paid again, and a Critical log asks a person to return the buyer's money.
+
+**What the provider settled is checked against the books (Payments).** `ReconcileSettlementsJob` reads each
+provider's settled charges, refunds and refund failures for the last eight days every six hours (Stripe's balance
+transactions, Braintree's settled transactions and credits declined at settlement), keeps each line once, and
+records every difference once for a person, logged at Error: a charge for no order of ours or for one we count
+unpaid, a refund we have no record of, a different amount or currency, and — after a five-day grace period — an
+order or refund we count done that the provider never settled. Nothing is corrected, except a refund the provider
+took back, which goes through the same undo as above.
 
 **A cancellation may overtake its payment request (Payments).** The two messages travel separately, so a
 `BookingCancelled` can arrive before its `PaymentRequested`. With no checkout to cancel, Payments records the
@@ -661,14 +679,11 @@ each lives in the owning service's skill under `.claude/skills/`.
 - **Events has no real transaction** (`TransactionBehavior` is a no-op), so the venue and performer delete guards are best-effort.
 - **Reservations rest entirely on the distributed locks**; a lock lost mid-operation can double-reserve a seat.
 - **After-commit work is dropped for a command sent from a message handler** — nothing does that today.
-- **A refund the provider refuses is logged for a person**, and one accepted as pending that fails later goes unnoticed — `PaymentProvider` has no refund lookup or refund webhook yet.
+- **A failed refund is left for a person**: one the provider refuses, or one that fails after it was reported done (booked back to the seller, logged at Critical), emails the buyer that it failed and puts a waiting booking's seats back on sale, but is never retried, and nothing records the manual refund.
+- **A Braintree refund declined at settlement after it succeeded is found only by settlement reconciliation**, up to six hours after Braintree reports it.
+- **Settlement discrepancies are recorded and logged, never resolved**: there is no endpoint or workflow to read or close them.
 - **Refunds are whole only**: a paid booking cannot give back some of its seats; cancelling a subset is a 409.
 - **Opening a Stripe checkout, the Braintree charge end to end and a real refund** are tested against a stubbed PSP only.
 - **Emails are at least once**: a crash between the SMTP send and recording it sends the email again.
 - **A new consumer of `UserRegistered` learns existing users only when an admin runs `POST api/users/resync`** once after deploying it; until then Notifications skips those buyers' outcomes, and does not replay them afterwards. A repeat resync is harmless.
 - **Emails are plain text**, with no templates or localisation.
-
-## 🗺️ Roadmap
-
-- Reconciliation against PSP settlement files
-- Saga / process-manager work for the full booking flow in Wolverine

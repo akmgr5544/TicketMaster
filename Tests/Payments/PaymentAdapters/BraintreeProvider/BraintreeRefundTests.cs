@@ -127,6 +127,57 @@ public sealed class BraintreeRefundTests : IDisposable
         Assert.Contains("Refund amount is too large.", exception.Message);
     }
 
+    [Theory]
+    [InlineData("submitted_for_settlement", RefundStatus.Succeeded)]
+    [InlineData("settled", RefundStatus.Succeeded)]
+    [InlineData("settlement_pending", RefundStatus.Pending)]
+    [InlineData("settlement_declined", RefundStatus.Failed)]
+    [InlineData("processor_declined", RefundStatus.Failed)]
+    public async Task Looking_up_a_refund_reads_the_credit_by_its_reference(string braintreeStatus, RefundStatus expected)
+    {
+        _braintree.Respond(_ => BraintreeWire.Xml(200, BraintreeWire.Transaction(id: "cr_1", status: braintreeStatus, type: "credit")));
+
+        var result = await LookupRefund("cr_1");
+
+        Assert.Equal(expected, result!.Status);
+        Assert.Equal("cr_1", result.ProviderReference);
+        var request = Assert.Single(_braintree.Requests);
+        Assert.Equal(BraintreeWire.MerchantPath("transactions/cr_1"), request.Path);
+    }
+
+    [Fact]
+    public async Task A_credit_declined_at_settlement_carries_the_settlement_reason()
+    {
+        _braintree.Respond(_ => BraintreeWire.Xml(200, BraintreeWire.Transaction(
+            id: "cr_1", status: "settlement_declined", type: "credit", settlementResponseText: "Account closed")));
+
+        var result = await LookupRefund("cr_1");
+
+        Assert.Equal(new RefundResult("cr_1", RefundStatus.Failed, "Account closed"), result);
+    }
+
+    // An unsettled sale is refunded by voiding it, so the refund's reference is the sale's own id.
+    [Fact]
+    public async Task A_refund_made_by_voiding_the_sale_stays_succeeded()
+    {
+        _braintree.Respond(_ => BraintreeWire.Xml(200, BraintreeWire.Transaction(id: "tx_1", status: "voided")));
+
+        var result = await LookupRefund("tx_1");
+
+        Assert.Equal(new RefundResult("tx_1", RefundStatus.Succeeded), result);
+    }
+
+    [Fact]
+    public async Task A_refund_Braintree_does_not_know_is_no_refund_rather_than_an_error()
+    {
+        _braintree.Respond(_ => new FakeResponse(404, "", "application/xml"));
+
+        Assert.Null(await LookupRefund("cr_missing"));
+    }
+
+    private Task<RefundResult?> LookupRefund(string reference) =>
+        Gateways.Braintree(_braintree).LookupRefundAsync(new RefundLookupRequest(Guid.NewGuid(), reference));
+
     private Task<RefundResult> Refund(decimal amount, Guid? refundId = null) =>
         Gateways.Braintree(_braintree).RefundAsync(
             new RefundRequest(Guid.NewGuid(), "tx_1", amount, "EUR", refundId ?? Guid.NewGuid()));

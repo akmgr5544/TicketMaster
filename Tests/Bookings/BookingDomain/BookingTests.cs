@@ -345,6 +345,91 @@ public class BookingTests
         Assert.Empty(booking.DomainEvents);
     }
 
+    // The booking stays void whether or not the money came back, so its seats go on sale and a person settles it.
+    [Fact]
+    public void A_failed_refund_releases_every_seat_and_marks_the_booking_and_the_refund_failed()
+    {
+        var booking = APaidBooking();
+        var refundId = booking.RequestRefund();
+        booking.ClearDomainEvents();
+
+        booking.MarkRefundFailed(refundId);
+
+        Assert.Equal(BookingStatus.RefundFailed, booking.Status);
+        Assert.Equal(BookingStatus.RefundFailed, booking.BookingHistories[^1].BookingStatus);
+        Assert.Equal(BookingRefundStatus.Failed, Assert.Single(booking.Refunds).Status);
+        Assert.Equal(TwoTickets, Assert.Single(booking.DomainEvents.OfType<BookingRefundFailedDomainEvent>()).TicketIds.Order());
+    }
+
+    [Fact]
+    public void A_failed_refund_arriving_twice_releases_the_seats_once()
+    {
+        var booking = APaidBooking();
+        var refundId = booking.RequestRefund();
+        booking.MarkRefundFailed(refundId);
+        booking.ClearDomainEvents();
+
+        booking.MarkRefundFailed(refundId);
+
+        Assert.Empty(booking.DomainEvents);
+    }
+
+    // It failed after the seats were released for the refund; they may be somebody else's by now.
+    [Fact]
+    public void A_refund_failing_after_it_landed_releases_nothing_again()
+    {
+        var booking = APaidBooking();
+        var refundId = booking.RequestRefund();
+        booking.MarkRefunded(refundId);
+        booking.ClearDomainEvents();
+
+        booking.MarkRefundFailed(refundId);
+
+        Assert.Equal(BookingStatus.Refunded, booking.Status);
+        Assert.Empty(booking.DomainEvents);
+    }
+
+    [Fact]
+    public void Money_arriving_after_the_refund_failed_releases_nothing_again()
+    {
+        var booking = APaidBooking();
+        var refundId = booking.RequestRefund();
+        booking.MarkRefundFailed(refundId);
+        booking.ClearDomainEvents();
+
+        booking.MarkRefunded(refundId);
+
+        Assert.Equal(BookingStatus.RefundFailed, booking.Status);
+        Assert.Empty(booking.DomainEvents);
+    }
+
+    [Fact]
+    public void A_failure_of_a_refund_the_booking_never_asked_for_is_refused()
+    {
+        var booking = APaidBooking();
+        booking.RequestRefund();
+
+        Assert.Throws<BookingsDomainException>(() => booking.MarkRefundFailed(Guid.NewGuid()));
+    }
+
+    [Fact]
+    public void A_failed_refund_of_a_booking_not_waiting_for_one_changes_nothing()
+    {
+        var paid = APaidBooking();
+        var cancelled = ABooking();
+        cancelled.Cancel();
+        paid.ClearDomainEvents();
+        cancelled.ClearDomainEvents();
+
+        paid.MarkRefundFailed();
+        cancelled.MarkRefundFailed();
+
+        Assert.Equal(BookingStatus.Payed, paid.Status);
+        Assert.Equal(BookingStatus.Cancelled, cancelled.Status);
+        Assert.Empty(paid.DomainEvents);
+        Assert.Empty(cancelled.DomainEvents);
+    }
+
     [Fact]
     public void A_refund_the_booking_never_asked_for_is_refused()
     {

@@ -21,7 +21,8 @@ public static class MessagingExtension
         typeof(BookingPaidIntegrationEvent),
         typeof(BookingPaymentFailedIntegrationEvent),
         typeof(BookingCancelledIntegrationEvent),
-        typeof(BookingRefundedIntegrationEvent)
+        typeof(BookingRefundedIntegrationEvent),
+        typeof(BookingRefundFailedIntegrationEvent)
     ];
 
     // Its own queue for each, never the default one named after the type: PaymentSystem and Bookings already listen on those, and

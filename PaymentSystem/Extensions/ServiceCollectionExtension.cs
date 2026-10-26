@@ -4,6 +4,8 @@ using PaymentProvider.Extensions;
 using PaymentSystem.Data;
 using PaymentSystem.Data.Interceptors;
 using PaymentSystem.Features.PaymentOrders;
+using PaymentSystem.Features.RefundOrders;
+using PaymentSystem.Features.Settlements;
 using PaymentSystem.Shared.Endpoints;
 using PaymentSystem.Shared.Pipelines;
 
@@ -37,6 +39,8 @@ public static class ServiceCollectionExtension
         services.AddPaymentProviders(configuration);
 
         services.AddScoped<OrderReconciler>();
+        services.AddScoped<RefundReconciler>();
+        services.AddScoped<SettlementReconciler>();
 
         return services;
     }

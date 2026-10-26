@@ -26,4 +26,14 @@ public sealed class BookingRefund
         Status = BookingRefundStatus.Completed;
         return true;
     }
+
+    // True only on the change from Pending: a completed refund's seats were released already.
+    internal bool Fail()
+    {
+        if (Status != BookingRefundStatus.Pending)
+            return false;
+
+        Status = BookingRefundStatus.Failed;
+        return true;
+    }
 }

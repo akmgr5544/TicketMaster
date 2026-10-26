@@ -112,9 +112,10 @@ public sealed class Booking : Entity, IAggregateRoot
     // No refund id: a message from before refunds had ids, which only ever answered a whole-booking refund.
     // A Cancelled booking is the other one a refund reaches: it was cancelled before its payment's success was
     // heard, the seats are already back on sale, and only the money had to follow.
+    // RefundFailed too: its seats went back on sale when the refund failed, so money arriving later releases nothing.
     public void MarkRefunded(Guid? refundId = null)
     {
-        if (Status is BookingStatus.Refunded or BookingStatus.Cancelled)
+        if (Status is BookingStatus.Refunded or BookingStatus.Cancelled or BookingStatus.RefundFailed)
             return;
 
         // Null: this refund landed before, so its seats are already back.
@@ -134,6 +135,32 @@ public sealed class Booking : Entity, IAggregateRoot
             Status = BookingStatus.Refunded;
             BookingHistories.Add(new BookingHistory(Status, BookedTickets.Count));
         }
+    }
+
+    // The PSP would not return the money. The booking stays void — the customer asked out, or a relocation removed a
+    // seat — so its seats go back on sale now rather than waiting on a person, who returns the money another way.
+    // Only a booking still waiting for the refund changes: one already Refunded failed after its seats were released
+    // (they may be somebody else's now), and a Cancelled one never held them. No refund id fails every pending one.
+    public void MarkRefundFailed(Guid? refundId = null)
+    {
+        if (Status != BookingStatus.RefundPending)
+            return;
+
+        if (refundId is { } id)
+        {
+            var refund = _refunds.Find(candidate => candidate.Id == id)
+                         ?? throw new BookingsDomainException($"Booking {Id} never asked for refund {id}.");
+            if (!refund.Fail())
+                return;
+        }
+        else
+        {
+            _refunds.ForEach(refund => refund.Fail());
+        }
+
+        Status = BookingStatus.RefundFailed;
+        BookingHistories.Add(new BookingHistory(Status, BookedTickets.Count));
+        AddDomainEvent(new BookingRefundFailedDomainEvent(Id, BookedTickets.Select(b => b.TicketId).ToArray()));
     }
 
     private HashSet<Guid>? SettleRefund(Guid refundId)

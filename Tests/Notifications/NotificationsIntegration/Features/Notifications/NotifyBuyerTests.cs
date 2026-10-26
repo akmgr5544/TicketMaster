@@ -11,7 +11,7 @@ namespace NotificationsIntegration.Features.Notifications;
 // voided booking, however many messages announce it.
 public sealed class NotifyBuyerTests(NotificationsFixture fixture) : IntegrationTest(fixture)
 {
-    public static TheoryData<string> Outcomes => ["paid", "failed", "cancelled", "refunded"];
+    public static TheoryData<string> Outcomes => ["paid", "failed", "cancelled", "refunded", "refund-failed"];
 
     [Theory]
     [MemberData(nameof(Outcomes))]
@@ -111,6 +111,7 @@ public sealed class NotifyBuyerTests(NotificationsFixture fixture) : Integration
             "paid" => handler.Handle(new BookingPaidIntegrationEvent(bookingId), context, default),
             "failed" => handler.Handle(new BookingPaymentFailedIntegrationEvent(bookingId), context, default),
             "cancelled" => handler.Handle(new BookingCancelledIntegrationEvent(bookingId), context, default),
+            "refund-failed" => handler.Handle(new BookingRefundFailedIntegrationEvent(bookingId, RefundIdFor(bookingId)), context, default),
             _ => handler.Handle(new BookingRefundedIntegrationEvent(bookingId, RefundIdFor(bookingId)), context, default)
         });
 
@@ -122,6 +123,7 @@ public sealed class NotifyBuyerTests(NotificationsFixture fixture) : Integration
         "paid" => NotificationKind.BookingPaid,
         "failed" => NotificationKind.PaymentFailed,
         "cancelled" => NotificationKind.BookingCancelled,
+        "refund-failed" => NotificationKind.RefundFailed,
         _ => NotificationKind.BookingRefunded
     };
 }

@@ -13,5 +13,11 @@ internal interface IStripeApi
     // Returns the intent's existing refund instead of failing when it has already been refunded in full.
     Task<StripeRefund> CreateRefundAsync(StripeCreateRefund request, CancellationToken cancellationToken);
 
+    Task<StripeRefund?> GetRefundAsync(string id, CancellationToken cancellationToken);
+
+    // Every balance transaction created in [from, to), all pages.
+    Task<IReadOnlyList<StripeBalanceTransaction>> ListBalanceTransactionsAsync(DateTime from, DateTime to,
+        CancellationToken cancellationToken);
+
     StripeEvent ParseEvent(string body, string signatureHeader);
 }

@@ -2,6 +2,8 @@ using JasperFx.Core;
 using Microsoft.EntityFrameworkCore;
 using PaymentProvider.Exceptions;
 using PaymentSystem.Features.PaymentOrders;
+using PaymentSystem.Features.RefundOrders;
+using PaymentSystem.Features.Settlements;
 using PaymentSystem.Shared.Messaging;
 using TicketMaster.Common.IntegrationEvents;
 using Wolverine;
@@ -59,6 +61,8 @@ public static class MessagingExtension
 
             // Here rather than in AddInfrastructureServices: it records outcomes through Wolverine's bus.
             options.Services.AddHostedService<ReconcileOrdersJob>();
+            options.Services.AddHostedService<ReconcileRefundsJob>();
+            options.Services.AddHostedService<ReconcileSettlementsJob>();
         });
     }
 }

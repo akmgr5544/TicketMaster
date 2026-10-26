@@ -16,6 +16,10 @@ public class RefundOrder
     public string? PspRefundReference { get; private set; }
     public bool WalletReversed { get; private set; }
     public bool LedgerReversed { get; private set; }
+    // When the PSP accepted it without finishing; the refund reconciler asks again once it has waited a while.
+    public DateTime? ProcessingSince { get; private set; }
+    // When the PSP reported it done; settlement reconciliation expects the PSP to have settled it within a grace period.
+    public DateTime? SucceededAt { get; private set; }
     public DateTime CreatedAt { get; private set; }
 
     private RefundOrder()
@@ -43,13 +47,47 @@ public class RefundOrder
         return new RefundOrder(paymentOrderId, requestId, refundAmount, reason);
     }
 
-    public void MarkAsSettled(string pspRefundReference)
+    public bool IsUnanswered => Status is RefundOrderStatus.Pending or RefundOrderStatus.Processing;
+
+    public void MarkAsProcessing(string pspRefundReference, DateTime now)
     {
-        Status = RefundOrderStatus.Succeeded;
+        if (Status != RefundOrderStatus.Pending)
+            throw new PaymentDomainException($"Refund {RefundOrderId} is {Status}; only a pending refund can start processing.");
+
+        Status = RefundOrderStatus.Processing;
         PspRefundReference = pspRefundReference;
+        ProcessingSince = now;
     }
 
-    public void MarkAsFailed() => Status = RefundOrderStatus.Failed;
+    public void MarkAsSettled(string pspRefundReference, DateTime? now = null)
+    {
+        if (!IsUnanswered)
+            throw new PaymentDomainException($"Refund {RefundOrderId} is {Status} and cannot succeed now.");
+
+        Status = RefundOrderStatus.Succeeded;
+        PspRefundReference = pspRefundReference;
+        SucceededAt = now ?? DateTime.UtcNow;
+    }
+
+    public void MarkAsFailed()
+    {
+        if (!IsUnanswered)
+            throw new PaymentDomainException($"Refund {RefundOrderId} is {Status} and cannot fail now.");
+
+        Status = RefundOrderStatus.Failed;
+    }
+
+    // The PSP took back a refund it had reported done. The caller has put the money back on the seller's side, so the
+    // refund ends as if it had never moved anything: no longer reversed in the wallet or, net, in the ledger.
+    public void MarkAsFailedAfterSettlement()
+    {
+        if (Status != RefundOrderStatus.Succeeded)
+            throw new PaymentDomainException($"Refund {RefundOrderId} is {Status}; only a succeeded refund can fail after settling.");
+
+        Status = RefundOrderStatus.Failed;
+        WalletReversed = false;
+        LedgerReversed = false;
+    }
     public void ConfirmWalletReversal() => WalletReversed = true;
     public void ConfirmLedgerReversal() => LedgerReversed = true;
 }

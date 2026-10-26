@@ -22,8 +22,14 @@ internal sealed class RefundOrderConfiguration : IEntityTypeConfiguration<Refund
         builder.Property(refund => refund.RefundReason).HasMaxLength(500).IsRequired();
         builder.Property(refund => refund.PspRefundReference).HasMaxLength(255);
 
+        // A webhook and the refund reconciler can record the same answer at once; the second conflicts, and its
+        // retry finds the refund already answered instead of moving the money twice.
+        builder.Property<uint>("xmin").IsRowVersion();
+
         // PaymentOrder is owned by PaymentEvent, so no other aggregate can hold a foreign key to it. The index is
         // unique with the request id, so a redelivered refund request cannot refund the same order twice.
         builder.HasIndex(refund => new { refund.PaymentOrderId, refund.RequestId }).IsUnique();
+        // How a PSP's refund event finds its refund when it carries no request id.
+        builder.HasIndex(refund => refund.PspRefundReference);
     }
 }

@@ -27,6 +27,10 @@ public sealed class BookingOutcomeHandler(TimeProvider clock, ILogger<BookingOut
         CancellationToken cancellationToken) =>
         NotifyAsync(context, message.BookingId, NotificationKind.BookingRefunded, message.RefundId, cancellationToken);
 
+    public Task<OutgoingMessages> Handle(BookingRefundFailedIntegrationEvent message, NotificationsDbContext context,
+        CancellationToken cancellationToken) =>
+        NotifyAsync(context, message.BookingId, NotificationKind.RefundFailed, message.RefundId, cancellationToken);
+
     private async Task<OutgoingMessages> NotifyAsync(NotificationsDbContext context, long bookingId, NotificationKind kind,
         Guid? refundId, CancellationToken cancellationToken)
     {

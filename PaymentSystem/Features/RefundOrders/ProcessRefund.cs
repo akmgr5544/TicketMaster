@@ -35,7 +35,8 @@ public sealed class ProcessRefundHandler
                 cancellationToken);
 
             return new RecordRefundOutcome(
-                refund.RefundOrderId, result.Status != RefundStatus.Failed, result.ProviderReference, result.FailureReason);
+                refund.RefundOrderId, result.Status != RefundStatus.Failed, result.ProviderReference, result.FailureReason,
+                Final: result.Status != RefundStatus.Pending);
         }
         // The PSP refused it; asking again will not change that. A Transient error is not caught: it propagates and
         // the message is retried later.

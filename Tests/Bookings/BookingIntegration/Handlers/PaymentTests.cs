@@ -249,6 +249,46 @@ public sealed class PaymentTests : IntegrationTest
         Assert.Single(stored.BookingHistories, h => h.BookingStatus == BookingStatus.Refunded);
     }
 
+    // --- Refund failed ---
+
+    // The relocation took A1 and voided the paid booking; the refund failed, but the booking stays void, so A2 goes
+    // back on sale anyway. A1 stays cancelled.
+    [Fact]
+    public async Task A_failed_refund_marks_the_booking_and_puts_its_remaining_seats_back()
+    {
+        var booking = await RefundPendingBookingAsync();
+
+        await Sender.Send(new FailRefundCommand(booking.Id));
+
+        var stored = await ReadAsync(context => context.Bookings.SingleAsync(b => b.Id == booking.Id));
+        Assert.Equal(BookingStatus.RefundFailed, stored.Status);
+        Assert.Equal(BookingRefundStatus.Failed, Assert.Single(stored.Refunds).Status);
+        var seats = await ReadAsync(context => context.Tickets
+            .Where(t => t.EventId == "evt-1").ToDictionaryAsync(t => t.Seat, t => t.Status));
+        Assert.Equal(TicketStatus.Cancelled, seats["A1"]);
+        Assert.Equal(TicketStatus.None, seats["A2"]);
+    }
+
+    [Fact]
+    public async Task The_same_refund_failure_arriving_twice_records_it_once()
+    {
+        var booking = await RefundPendingBookingAsync();
+
+        await Sender.Send(new FailRefundCommand(booking.Id));
+        await Sender.Send(new FailRefundCommand(booking.Id));
+
+        var stored = await ReadAsync(context => context.Bookings
+            .Include(b => b.BookingHistories).SingleAsync(b => b.Id == booking.Id));
+        Assert.Single(stored.BookingHistories, h => h.BookingStatus == BookingStatus.RefundFailed);
+    }
+
+    [Fact]
+    public async Task Refuses_to_fail_a_refund_of_a_booking_that_does_not_exist()
+    {
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            Sender.Send(new FailRefundCommand(long.MaxValue)));
+    }
+
     private async Task<Booking> RefundPendingBookingAsync()
     {
         var tickets = await Seed.TicketsAsync("evt-1", Seed.Soon, eventVersion: 1, "A1", "A2");

@@ -162,7 +162,7 @@ refund and no refund amount anywhere in Bookings.
 - **`Booking.RequestRefund()`** refuses anything not `Payed` and goes through the same path a relocation uses
   (`FlagForRefund`): the booking moves to `RefundPending`, one `BookingRefund` (id generated in the domain, so it
   goes out in the message before the row is saved) covers every seat, and `RefundRequested(BookingId, RefundId)`
-  is published. **The seats stay `Booked`** until the money lands, so a refund that fails has not already sold
+  is published. **The seats stay `Booked`** until the refund is final, so a refund that fails has not already sold
   them to somebody else. A booking already `RefundPending` refuses a second request.
 - **`CancelBookingCommandHandler`** refuses once the event has started — `Ticket.IsRefundableAt`, deliberately
   stricter than the sale window, which still sells a seat for `SaleGracePeriod` after the start (400).
@@ -336,7 +336,7 @@ PaymentSystem takes the money. Bookings asks for it and hears back through contr
 `TicketMaster.Common`: it **publishes** `PaymentRequested` from `MakeBookingCommandHandler` (after the
 save, since the id is database-generated) and `BookingCancelled` from `BookingCancelledDomainEventHandler`
 (so every cancel path — owner, failed payment, relocation — announces it) and `RefundRequested` from
-`BookingRefundRequestedDomainEventHandler`, and **consumes** the three outcomes below through `Consume`
+`BookingRefundRequestedDomainEventHandler`, and **consumes** the four outcomes below through `Consume`
 handlers and `Commands/Payments`.
 
 Both publishes go through `IIntegrationEventPublisher` (`Bookings.Domain/Abstractions`, for the
@@ -355,6 +355,7 @@ before Events had any — fails `IsAvailableFor`, so it is refused at reservatio
 |---|---|
 | `BookingPaidIntegrationEvent` | `Booking.MarkPaid()` — `Booked → Payed`. Tickets are untouched; they were already booked. |
 | `BookingPaymentFailedIntegrationEvent` | `Booking.Cancel()` — `Booked → Cancelled`, raising `BookingCancelledDomainEvent`, whose handler calls `Ticket.Release()` to put the seats back to `None`. |
+| `BookingRefundFailedIntegrationEvent` | `Booking.MarkRefundFailed(refundId)` — only a `RefundPending` booking changes: the refund is `Failed`, the booking `RefundFailed`, and `BookingRefundFailedDomainEvent` releases its seats (it stays void; a person returns the money). A `Refunded` or `Cancelled` booking released them already and is left as it is; money arriving later releases nothing. |
 | `BookingRefundedIntegrationEvent` | `Booking.MarkRefunded(refundId)` — completes that refund, raising `BookingRefundedDomainEvent`, whose handler releases the seats it covered; `Refunded` once every seat's refund is complete. A `Cancelled` booking (cancelled before its payment's success was heard) is left as it is. |
 
 23. **The two outcomes race, and whichever lands first wins.** `Cancel()` refuses a `Payed` booking

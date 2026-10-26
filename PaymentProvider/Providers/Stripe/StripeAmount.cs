@@ -54,6 +54,8 @@ internal static class StripeAmount
         return (long)minorUnits;
     }
 
+    public static decimal FromMinorUnits(long minorUnits, string currency) => minorUnits / Factor(currency);
+
     private static decimal Factor(string currency)
     {
         if (ZeroDecimal.Contains(currency))

@@ -191,6 +191,9 @@ namespace PaymentSystem.Data.Migrations
                     b.Property<Guid>("PaymentOrderId")
                         .HasColumnType("uuid");
 
+                    b.Property<DateTime?>("ProcessingSince")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<string>("PspRefundReference")
                         .HasMaxLength(255)
                         .HasColumnType("character varying(255)");
@@ -208,8 +211,17 @@ namespace PaymentSystem.Data.Migrations
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)");
 
+                    b.Property<DateTime?>("SucceededAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<bool>("WalletReversed")
                         .HasColumnType("boolean");
+
+                    b.Property<uint>("xmin")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
 
                     b.ComplexProperty(typeof(Dictionary<string, object>), "RefundAmount", "PaymentSystem.Domain.RefundOrder.RefundAmount#Money", b1 =>
                         {
@@ -229,10 +241,123 @@ namespace PaymentSystem.Data.Migrations
 
                     b.HasKey("RefundOrderId");
 
+                    b.HasIndex("PspRefundReference");
+
                     b.HasIndex("PaymentOrderId", "RequestId")
                         .IsUnique();
 
                     b.ToTable("RefundOrders", (string)null);
+                });
+
+            modelBuilder.Entity("PaymentSystem.Domain.SettlementDiscrepancy", b =>
+                {
+                    b.Property<Guid>("SettlementDiscrepancyId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal?>("ActualAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<string>("ActualCurrency")
+                        .HasMaxLength(3)
+                        .HasColumnType("character varying(3)");
+
+                    b.Property<string>("Detail")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<decimal?>("ExpectedAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<string>("ExpectedCurrency")
+                        .HasMaxLength(3)
+                        .HasColumnType("character varying(3)");
+
+                    b.Property<DateTime>("FoundAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)");
+
+                    b.Property<Guid?>("PaymentOrderId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Provider")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("Reference")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<Guid?>("RefundOrderId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("SettlementDiscrepancyId");
+
+                    b.HasIndex("Provider", "Kind", "Reference")
+                        .IsUnique();
+
+                    b.ToTable("SettlementDiscrepancies", (string)null);
+                });
+
+            modelBuilder.Entity("PaymentSystem.Domain.SettlementRecord", b =>
+                {
+                    b.Property<Guid>("SettlementRecordId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("FirstSeenAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<Guid?>("PaymentOrderId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Provider")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("ProviderReference")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<Guid?>("RefundId")
+                        .HasColumnType("uuid");
+
+                    b.ComplexProperty(typeof(Dictionary<string, object>), "Amount", "PaymentSystem.Domain.SettlementRecord.Amount#Money", b1 =>
+                        {
+                            b1.IsRequired();
+
+                            b1.Property<decimal>("Amount")
+                                .HasPrecision(18, 2)
+                                .HasColumnType("numeric(18,2)")
+                                .HasColumnName("Amount");
+
+                            b1.Property<string>("Currency")
+                                .IsRequired()
+                                .HasMaxLength(3)
+                                .HasColumnType("character varying(3)")
+                                .HasColumnName("Currency");
+                        });
+
+                    b.HasKey("SettlementRecordId");
+
+                    b.HasIndex("Provider", "ProviderReference", "Kind")
+                        .IsUnique();
+
+                    b.ToTable("SettlementRecords", (string)null);
                 });
 
             modelBuilder.Entity("PaymentSystem.Domain.User", b =>

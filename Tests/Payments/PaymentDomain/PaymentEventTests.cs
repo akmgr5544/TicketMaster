@@ -349,6 +349,40 @@ public sealed class PaymentEventTests
     }
 
     [Fact]
+    public void Reinstating_a_refunded_orders_payment_makes_it_paid_again()
+    {
+        var checkout = CheckoutWithOrderIn(PaymentOrderStatus.Refunded);
+
+        var update = checkout.ReinstateOrderPayment(OnlyOrder(checkout));
+
+        Assert.Equal(OrderUpdate.Applied, update);
+        Assert.Equal(PaymentOrderStatus.Success, checkout.PaymentOrders.Single().Status);
+    }
+
+    [Fact]
+    public void Reinstating_a_paid_orders_payment_changes_nothing()
+    {
+        var checkout = CheckoutWithOrderIn(PaymentOrderStatus.Success);
+
+        var update = checkout.ReinstateOrderPayment(OnlyOrder(checkout));
+
+        Assert.Equal(OrderUpdate.AlreadyApplied, update);
+        Assert.Equal(PaymentOrderStatus.Success, checkout.PaymentOrders.Single().Status);
+    }
+
+    [Theory]
+    [InlineData(PaymentOrderStatus.Init)]
+    [InlineData(PaymentOrderStatus.Executing)]
+    [InlineData(PaymentOrderStatus.Failed)]
+    public void Only_a_paid_orders_payment_can_be_reinstated(PaymentOrderStatus status)
+    {
+        var checkout = CheckoutWithOrderIn(status);
+
+        Assert.Throws<PaymentDomainException>(() => checkout.ReinstateOrderPayment(OnlyOrder(checkout)));
+        Assert.Equal(status, checkout.PaymentOrders.Single().Status);
+    }
+
+    [Fact]
     public void An_order_from_another_checkout_is_not_found() =>
         Assert.Throws<PaymentDomainException>(() => NewCheckout(10m).FindOrder(Guid.NewGuid()));
 
@@ -380,6 +414,7 @@ public sealed class PaymentEventTests
         { "Cancel", c => c.Cancel(), () => NewCheckout(10m) },
         { "MarkOrderSettled", c => c.MarkOrderSettled(OnlyOrder(c)), () => CheckoutWithOrderIn(PaymentOrderStatus.Success) },
         { "MarkOrderRefunded", c => c.MarkOrderRefunded(OnlyOrder(c)), () => CheckoutWithOrderIn(PaymentOrderStatus.Success) },
+        { "ReinstateOrderPayment", c => c.ReinstateOrderPayment(OnlyOrder(c)), () => CheckoutWithOrderIn(PaymentOrderStatus.Refunded) },
         { "UsePaymentMethod", c => c.UsePaymentMethod(Guid.NewGuid()), () => NewCheckout(10m) },
     };
 
@@ -405,6 +440,7 @@ public sealed class PaymentEventTests
         { "FailOrder again", c => c.FailOrder(OnlyOrder(c)), () => CheckoutWithOrderIn(PaymentOrderStatus.Failed) },
         { "FailOrder after success", c => c.FailOrder(OnlyOrder(c)), () => CheckoutWithOrderIn(PaymentOrderStatus.Success) },
         { "Cancel failing nothing", c => c.Cancel(), () => CheckoutWithOrderIn(PaymentOrderStatus.Success) },
+        { "ReinstateOrderPayment of a paid order", c => c.ReinstateOrderPayment(OnlyOrder(c)), () => CheckoutWithOrderIn(PaymentOrderStatus.Success) },
     };
 
     [Theory]

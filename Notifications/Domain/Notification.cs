@@ -31,6 +31,7 @@ public class Notification
         NotificationKind.BookingPaid => $"Booking {BookingId} is confirmed",
         NotificationKind.PaymentFailed => $"Payment for booking {BookingId} did not go through",
         NotificationKind.BookingCancelled => $"Booking {BookingId} was cancelled",
+        NotificationKind.RefundFailed => $"We could not refund booking {BookingId}",
         _ => $"Your refund for booking {BookingId} is on its way"
     };
 
@@ -40,6 +41,9 @@ public class Notification
         NotificationKind.PaymentFailed =>
             $"The payment for booking {BookingId} failed or was not completed in time, so the booking was voided and its seats released.",
         NotificationKind.BookingCancelled => $"Booking {BookingId} was cancelled.",
+        NotificationKind.RefundFailed =>
+            $"Your payment provider could not return the money for booking {BookingId}. Nothing is lost: our team will " +
+            "contact you to complete the refund another way.",
         _ => RefundId == Guid.Empty
             ? $"The money for booking {BookingId} is being returned to your payment method."
             : $"Refund {RefundId} for booking {BookingId} is being returned to your payment method."

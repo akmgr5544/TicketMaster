@@ -128,6 +128,56 @@ public sealed class StripeWebhookTests
         Assert.NotNull(Parse(body, header));
     }
 
+    [Theory]
+    [InlineData("charge.refund.updated")]
+    [InlineData("refund.updated")]
+    [InlineData("refund.failed")]
+    public void A_signed_refund_failure_names_the_order_the_refund_and_the_reason(string type)
+    {
+        var orderId = Guid.NewGuid();
+        var refundId = Guid.NewGuid();
+        var body = StripeWire.Event(type, StripeWire.Refund(id: "re_7", status: "failed",
+            failureReason: "expired_or_canceled_card", refundId: refundId, orderId: orderId), id: "evt_refund");
+
+        var webhook = Parse(body, Sign(body));
+
+        Assert.NotNull(webhook);
+        Assert.Equal("evt_refund", webhook.EventId);
+        Assert.Equal(orderId, webhook.PaymentOrderId);
+        Assert.Null(webhook.Payment);
+        Assert.Equal(new RefundUpdate(refundId, new RefundResult("re_7", RefundStatus.Failed, "expired_or_canceled_card")),
+            webhook.Refund);
+    }
+
+    [Fact]
+    public void A_refund_without_our_metadata_still_reports_its_reference()
+    {
+        var body = StripeWire.Event("refund.updated", StripeWire.Refund(id: "re_8", status: "succeeded"));
+
+        var webhook = Parse(body, Sign(body));
+
+        Assert.Null(webhook!.PaymentOrderId);
+        Assert.Null(webhook.Refund!.RefundId);
+        Assert.Equal(new RefundResult("re_8", RefundStatus.Succeeded), webhook.Refund.Result);
+    }
+
+    [Fact]
+    public void A_payment_event_carries_no_refund()
+    {
+        var body = StripeWire.Event("payment_intent.succeeded", StripeWire.Intent(status: "succeeded", orderId: Guid.NewGuid()));
+
+        Assert.Null(Parse(body, Sign(body))!.Refund);
+    }
+
+    [Fact]
+    public void A_refund_event_with_a_forged_status_is_refused()
+    {
+        var body = StripeWire.Event("refund.updated", StripeWire.Refund(status: "failed"));
+        var forged = body.Replace("\"failed\"", "\"succeeded\"");
+
+        AssertRefused(() => Parse(forged, Sign(body)));
+    }
+
     [Fact]
     public void An_event_that_is_not_about_a_payment_intent_is_verified_then_ignored()
     {
