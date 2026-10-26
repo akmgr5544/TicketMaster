@@ -43,11 +43,13 @@ public sealed class ProcessRefundTests(PaymentsFixture fixture) : IntegrationTes
         Assert.Equal(StubGateway.RefundReferenceFor(orderId, requestId), outcome.ProviderReference);
     }
 
+    // Pending is accepted but not final: the PSP has taken the refund and not finished it.
     [Theory]
-    [InlineData(RefundStatus.Succeeded, true)]
-    [InlineData(RefundStatus.Pending, true)]
-    [InlineData(RefundStatus.Failed, false)]
-    public async Task The_psps_answer_decides_whether_the_refund_was_accepted(RefundStatus answer, bool accepted)
+    [InlineData(RefundStatus.Succeeded, true, true)]
+    [InlineData(RefundStatus.Pending, true, false)]
+    [InlineData(RefundStatus.Failed, false, true)]
+    public async Task The_psps_answer_decides_whether_the_refund_was_accepted_and_whether_that_is_final(
+        RefundStatus answer, bool accepted, bool final)
     {
         var checkout = await SeedCheckoutAsync(OrderState.Success);
         var refund = await SeedRefundAsync(checkout.PaymentOrders.Single().PaymentOrderId, 10m);
@@ -56,6 +58,7 @@ public sealed class ProcessRefundTests(PaymentsFixture fixture) : IntegrationTes
         var outcome = await ProcessAsync(refund.RefundOrderId);
 
         Assert.Equal(accepted, outcome!.Accepted);
+        Assert.Equal(final, outcome.Final);
     }
 
     [Fact]

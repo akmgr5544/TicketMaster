@@ -108,6 +108,35 @@ internal sealed class BraintreePaymentGateway(IBraintreeApi api, IOptions<Braint
         }
     }
 
+    public async Task<RefundResult?> LookupRefundAsync(RefundLookupRequest request, CancellationToken cancellationToken = default)
+    {
+        // A void answers a refund of an unsettled sale with the sale's own id, and a voided sale stays voided.
+        var transaction = await api.FindAsync(request.ProviderReference);
+        if (transaction is null)
+            return null;
+
+        return transaction.Status == BraintreeTransactionStatus.Voided
+            ? new RefundResult(transaction.Id, RefundStatus.Succeeded)
+            : ToRefundResult(transaction);
+    }
+
+    public async Task<IReadOnlyList<SettlementLine>> GetSettlementAsync(SettlementRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var settled = await api.SearchSettledAsync(request.From, request.To);
+        var declinedCredits = await api.SearchDeclinedCreditsAsync(request.From, request.To);
+
+        // A sale carries the payment order id as its order id, a credit the refund id it was issued under.
+        var lines = settled
+            .Select(transaction => transaction.Type == BraintreeTransactionType.Credit
+                ? ToSettlementLine(transaction, SettlementLineKind.Refund, refundId: ParseGuid(transaction.OrderId))
+                : ToSettlementLine(transaction, SettlementLineKind.Charge, paymentOrderId: ParseGuid(transaction.OrderId)))
+            .Concat(declinedCredits.Select(credit =>
+                ToSettlementLine(credit, SettlementLineKind.RefundFailure, refundId: ParseGuid(credit.OrderId))));
+
+        return lines.OfType<SettlementLine>().ToArray();
+    }
+
     public WebhookEvent? ParseWebhook(WebhookRequest request)
     {
         var form = HttpUtility.ParseQueryString(request.Body);
@@ -131,6 +160,15 @@ internal sealed class BraintreePaymentGateway(IBraintreeApi api, IOptions<Braint
         var paymentOrderId = Guid.TryParse(transaction.OrderId, out var parsed) ? parsed : (Guid?)null;
         return new WebhookEvent(eventId, paymentOrderId, ToResult(transaction));
     }
+
+    // Null for a transaction Braintree returned without an amount or currency, which a settled one always has.
+    private static SettlementLine? ToSettlementLine(BraintreeTransaction transaction, SettlementLineKind kind,
+        Guid? paymentOrderId = null, Guid? refundId = null) =>
+        transaction is { Amount: { } amount, Currency: { } currency }
+            ? new SettlementLine(transaction.Id, kind, amount, currency.ToUpperInvariant(), paymentOrderId, refundId)
+            : null;
+
+    private static Guid? ParseGuid(string? value) => Guid.TryParse(value, out var parsed) ? parsed : null;
 
     private string MerchantAccountFor(string? currency) =>
         _merchantAccounts.TryGetValue(RequestGuard.Currency(Kind, currency), out var merchantAccountId)

@@ -168,6 +168,28 @@ public class PaymentEvent
         Version++;
     }
 
+    // A refund the PSP reported done has failed after all, so the money is the seller's again and the order is paid.
+    public OrderUpdate ReinstateOrderPayment(Guid paymentOrderId)
+    {
+        var order = FindOrder(paymentOrderId);
+
+        var update = order.Status switch
+        {
+            PaymentOrderStatus.Refunded => OrderUpdate.Applied,
+            PaymentOrderStatus.Success => OrderUpdate.AlreadyApplied,
+            _ => throw new PaymentDomainException(
+                $"Payment order {paymentOrderId} is {order.Status}; only a paid order's payment can be reinstated.")
+        };
+
+        if (update == OrderUpdate.Applied)
+        {
+            order.TransitionBackToSuccess();
+            Version++;
+        }
+
+        return update;
+    }
+
     public PaymentOrder FindOrder(Guid paymentOrderId) =>
         _paymentOrders.SingleOrDefault(o => o.PaymentOrderId == paymentOrderId)
         ?? throw new PaymentDomainException($"Payment order {paymentOrderId} is not part of checkout {CheckoutId}.");

@@ -102,6 +102,45 @@ internal sealed class StripeApi(IOptions<StripeOptions> options) : IStripeApi
         }
     }
 
+    public async Task<StripeRefund?> GetRefundAsync(string id, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var refund = await CallAsync(
+                () => _client.V1.Refunds.GetAsync(id, cancellationToken: cancellationToken),
+                cancellationToken);
+            return ToContract(refund);
+        }
+        catch (PaymentProviderException exception)
+            when (exception.InnerException is StripeException { HttpStatusCode: HttpStatusCode.NotFound })
+        {
+            return null;
+        }
+    }
+
+    public async Task<IReadOnlyList<StripeBalanceTransaction>> ListBalanceTransactionsAsync(DateTime from, DateTime to,
+        CancellationToken cancellationToken)
+    {
+        var listOptions = new BalanceTransactionListOptions
+        {
+            Created = new DateRangeOptions { GreaterThanOrEqual = from, LessThan = to },
+            Limit = 100,
+            Expand = ["data.source"],
+        };
+
+        return await CallAsync(async () =>
+        {
+            var transactions = new List<StripeBalanceTransaction>();
+            await foreach (var transaction in _client.V1.BalanceTransactions.ListAutoPagingAsync(
+                               listOptions, cancellationToken: cancellationToken))
+            {
+                transactions.Add(ToContract(transaction));
+            }
+
+            return (IReadOnlyList<StripeBalanceTransaction>)transactions;
+        }, cancellationToken);
+    }
+
     public StripeEvent ParseEvent(string body, string signatureHeader)
     {
         // Verified with the version check off first, so a forgery and a version mismatch are told
@@ -115,8 +154,12 @@ internal sealed class StripeApi(IOptions<StripeOptions> options) : IStripeApi
 
         Construct(body, signatureHeader, checkApiVersion: true);
 
-        var intent = stripeEvent.Data.Object as PaymentIntent;
-        return new StripeEvent(stripeEvent.Id, stripeEvent.Type, intent is null ? null : ToContract(intent));
+        return stripeEvent.Data.Object switch
+        {
+            PaymentIntent intent => new StripeEvent(stripeEvent.Id, stripeEvent.Type, ToContract(intent)),
+            Refund refund => new StripeEvent(stripeEvent.Id, stripeEvent.Type, null, ToContract(refund)),
+            _ => new StripeEvent(stripeEvent.Id, stripeEvent.Type, null),
+        };
     }
 
     private Event? Construct(string body, string signatureHeader, bool checkApiVersion)
@@ -147,8 +190,20 @@ internal sealed class StripeApi(IOptions<StripeOptions> options) : IStripeApi
             intent.Metadata.GetValueOrDefault(PaymentOrderIdKey),
             intent.LastPaymentError?.Message);
 
+    private static StripeBalanceTransaction ToContract(BalanceTransaction transaction) =>
+        transaction.Source switch
+        {
+            Charge charge => new StripeBalanceTransaction(transaction.Id, transaction.Type, charge.PaymentIntentId,
+                charge.Amount, charge.Currency, charge.Metadata?.GetValueOrDefault(PaymentOrderIdKey), null),
+            Refund refund => new StripeBalanceTransaction(transaction.Id, transaction.Type, refund.Id,
+                refund.Amount, refund.Currency, refund.Metadata?.GetValueOrDefault(PaymentOrderIdKey),
+                refund.Metadata?.GetValueOrDefault(RefundIdKey)),
+            _ => new StripeBalanceTransaction(transaction.Id, transaction.Type, null, null, null, null, null),
+        };
+
     private static StripeRefund ToContract(Refund refund) =>
-        new(refund.Id, ToRefundStatus(refund.Status), refund.FailureReason);
+        new(refund.Id, ToRefundStatus(refund.Status), refund.FailureReason,
+            refund.Metadata?.GetValueOrDefault(PaymentOrderIdKey), refund.Metadata?.GetValueOrDefault(RefundIdKey));
 
     private static StripeRefundStatus ToRefundStatus(string status) =>
         status switch

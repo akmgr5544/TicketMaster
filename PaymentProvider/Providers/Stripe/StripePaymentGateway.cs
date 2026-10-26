@@ -68,6 +68,38 @@ internal sealed class StripePaymentGateway(IStripeApi api) : IPaymentGateway
         return new RefundResult(refund.Id, ToStatus(refund), refund.FailureReason);
     }
 
+    public async Task<RefundResult?> LookupRefundAsync(RefundLookupRequest request, CancellationToken cancellationToken = default)
+    {
+        var refund = await api.GetRefundAsync(request.ProviderReference, cancellationToken);
+        return refund is null ? null : new RefundResult(refund.Id, ToStatus(refund), refund.FailureReason);
+    }
+
+    public async Task<IReadOnlyList<SettlementLine>> GetSettlementAsync(SettlementRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var transactions = await api.ListBalanceTransactionsAsync(request.From, request.To, cancellationToken);
+
+        var lines = new List<SettlementLine>();
+        foreach (var transaction in transactions)
+        {
+            var kind = transaction.Type switch
+            {
+                "charge" or "payment" => SettlementLineKind.Charge,
+                "refund" or "payment_refund" => SettlementLineKind.Refund,
+                "refund_failure" or "payment_failure_refund" => SettlementLineKind.RefundFailure,
+                _ => (SettlementLineKind?)null,
+            };
+            if (kind is null || transaction is not { SourceReference: { } reference, Amount: { } amount, Currency: { } currency })
+                continue;
+
+            var upperCurrency = currency.ToUpperInvariant();
+            lines.Add(new SettlementLine(reference, kind.Value, StripeAmount.FromMinorUnits(amount, upperCurrency),
+                upperCurrency, ParseGuid(transaction.PaymentOrderId), ParseGuid(transaction.RefundId)));
+        }
+
+        return lines;
+    }
+
     public WebhookEvent? ParseWebhook(WebhookRequest request)
     {
         var signature = request.GetHeader(SignatureHeader)
@@ -75,15 +107,25 @@ internal sealed class StripePaymentGateway(IStripeApi api) : IPaymentGateway
                 Kind, PaymentProviderErrorKind.InvalidSignature, $"The {SignatureHeader} header is missing.");
 
         var stripeEvent = api.ParseEvent(request.Body, signature);
+
+        // charge.refund.updated, refund.updated, refund.failed: whichever carries the refund itself.
+        if (stripeEvent.Refund is { } refund)
+        {
+            var update = new RefundUpdate(
+                ParseGuid(refund.RefundId), new RefundResult(refund.Id, ToStatus(refund), refund.FailureReason));
+            return new WebhookEvent(stripeEvent.Id, ParseGuid(refund.PaymentOrderId), null, update);
+        }
+
         if (!stripeEvent.Type.StartsWith(PaymentIntentEventPrefix, StringComparison.Ordinal)
             || stripeEvent.PaymentIntent is not { } intent)
         {
             return null;
         }
 
-        var paymentOrderId = Guid.TryParse(intent.PaymentOrderId, out var parsed) ? parsed : (Guid?)null;
-        return new WebhookEvent(stripeEvent.Id, paymentOrderId, ToResult(intent));
+        return new WebhookEvent(stripeEvent.Id, ParseGuid(intent.PaymentOrderId), ToResult(intent));
     }
+
+    private static Guid? ParseGuid(string? value) => Guid.TryParse(value, out var parsed) ? parsed : null;
 
     private PaymentResult ToResult(StripePaymentIntent intent) =>
         new(intent.Id, ToStatus(intent), intent.LastPaymentError);

@@ -52,6 +52,7 @@ public class PaymentOrder
 
     public void TransitionToFailed() => Status = PaymentOrderStatus.Failed;
     public void TransitionToRefunded() => Status = PaymentOrderStatus.Refunded;
+    public void TransitionBackToSuccess() => Status = PaymentOrderStatus.Success;
     public void CompleteWalletDistribution() => WalletUpdated = true;
     public void CompleteLedgerBookkeeping() => LedgerUpdated = true;
 }

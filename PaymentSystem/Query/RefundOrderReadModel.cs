@@ -9,5 +9,9 @@ public class RefundOrderReadModel
     public string Currency { get; init; } = null!;
     public string Status { get; init; } = null!;
     public string RefundReason { get; init; } = null!;
+    // Never put in a response: PSP references stay inside Payments.
+    public string? PspRefundReference { get; init; }
+    public DateTime? ProcessingSince { get; init; }
+    public DateTime? SucceededAt { get; init; }
     public DateTime CreatedAt { get; init; }
 }

@@ -63,6 +63,14 @@ public sealed class StubGateway(PaymentProviderKind kind) : IPaymentGateway
 
     public Func<RefundRequest, RefundResult> OnRefund { get; set; } = null!;
 
+    public ConcurrentQueue<RefundLookupRequest> RefundLookups { get; } = new();
+
+    public Func<RefundLookupRequest, RefundResult?> OnLookupRefund { get; set; } = null!;
+
+    public ConcurrentQueue<SettlementRequest> SettlementRequests { get; } = new();
+
+    public Func<SettlementRequest, IReadOnlyList<SettlementLine>> OnSettlement { get; set; } = null!;
+
     // Stable per order and refund, the way the real adapters answer a repeated refund with the first.
     public static string RefundReferenceFor(Guid paymentOrderId, Guid refundId) => $"re_{paymentOrderId:N}_{refundId:N}";
 
@@ -78,8 +86,12 @@ public sealed class StubGateway(PaymentProviderKind kind) : IPaymentGateway
         Submissions.Clear();
         Lookups.Clear();
         Refunds.Clear();
-        // The provider has no payment for the order until a test says otherwise.
+        RefundLookups.Clear();
+        SettlementRequests.Clear();
+        // The provider has no payment for the order, nor any refund, nor settled anything, until a test says otherwise.
         OnLookup = _ => null;
+        OnLookupRefund = _ => null;
+        OnSettlement = _ => [];
         OnRefund = request => new RefundResult(RefundReferenceFor(request.PaymentOrderId, request.RefundId),
             RefundStatus.Succeeded);
         OnCheckout = request => new CheckoutSession(
@@ -115,6 +127,19 @@ public sealed class StubGateway(PaymentProviderKind kind) : IPaymentGateway
         return Task.FromResult(OnRefund(request));
     }
 
+    public Task<RefundResult?> LookupRefundAsync(RefundLookupRequest request, CancellationToken cancellationToken = default)
+    {
+        RefundLookups.Enqueue(request);
+        return Task.FromResult(OnLookupRefund(request));
+    }
+
+    public Task<IReadOnlyList<SettlementLine>> GetSettlementAsync(SettlementRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        SettlementRequests.Enqueue(request);
+        return Task.FromResult(OnSettlement(request));
+    }
+
     // Signed by a header, as the real ones are: anything but the valid signature is refused before the body is read.
     public WebhookEvent? ParseWebhook(WebhookRequest request)
     {
@@ -122,6 +147,12 @@ public sealed class StubGateway(PaymentProviderKind kind) : IPaymentGateway
             throw new PaymentProviderException(kind, PaymentProviderErrorKind.InvalidSignature, "Bad signature.");
 
         var body = JsonSerializer.Deserialize<StubWebhookBody>(request.Body, JsonSerializerOptions.Web)!;
+        if (body.RefundStatus is { } refundStatus)
+        {
+            return new WebhookEvent(body.EventId, body.PaymentOrderId, null,
+                new RefundUpdate(body.RefundId, new RefundResult(body.RefundReference ?? "re_unknown", refundStatus, body.FailureReason)));
+        }
+
         return body.Status is not { } status
             ? null
             : new WebhookEvent(body.EventId, body.PaymentOrderId,
@@ -129,8 +160,15 @@ public sealed class StubGateway(PaymentProviderKind kind) : IPaymentGateway
     }
 }
 
-// Status null stands for a verified event that is not about a pay-in.
-public sealed record StubWebhookBody(string EventId, Guid? PaymentOrderId, PaymentStatus? Status)
+// Status and RefundStatus both null stand for a verified event about neither a pay-in nor a refund.
+public sealed record StubWebhookBody(
+    string EventId,
+    Guid? PaymentOrderId,
+    PaymentStatus? Status,
+    RefundStatus? RefundStatus = null,
+    Guid? RefundId = null,
+    string? RefundReference = null,
+    string? FailureReason = null)
 {
     public string ToJson() => JsonSerializer.Serialize(this, JsonSerializerOptions.Web);
 }

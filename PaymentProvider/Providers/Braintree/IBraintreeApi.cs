@@ -12,6 +12,10 @@ internal interface IBraintreeApi
 
     Task<BraintreeTransaction?> FindLatestByOrderIdAsync(string orderId);
 
+    Task<IReadOnlyList<BraintreeTransaction>> SearchSettledAsync(DateTime from, DateTime to);
+
+    Task<IReadOnlyList<BraintreeTransaction>> SearchDeclinedCreditsAsync(DateTime submittedFrom, DateTime submittedTo);
+
     Task<BraintreeTransaction> RefundAsync(string transactionId, decimal amount, string orderId);
 
     Task<BraintreeTransaction> VoidAsync(string transactionId);

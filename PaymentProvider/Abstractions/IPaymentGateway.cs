@@ -19,7 +19,14 @@ public interface IPaymentGateway
     // second one. Throws InvalidRequest when the provider holds no successful payment for the order.
     Task<RefundResult> RefundAsync(RefundRequest request, CancellationToken cancellationToken = default);
 
+    // Where a refund the provider accepted has got to. Null when the provider has no such refund.
+    Task<RefundResult?> LookupRefundAsync(RefundLookupRequest request, CancellationToken cancellationToken = default);
+
+    // The charges, refunds and refund failures the provider settled in the window. Fees, payouts and adjustments are
+    // left out: they are not money this service recorded.
+    Task<IReadOnlyList<SettlementLine>> GetSettlementAsync(SettlementRequest request, CancellationToken cancellationToken = default);
+
     // Verifies the signature before reading anything; throws PaymentProviderException with
-    // InvalidSignature if it fails. Null for a verified event that is not about a pay-in.
+    // InvalidSignature if it fails. Null for a verified event that is about neither a pay-in nor a refund.
     WebhookEvent? ParseWebhook(WebhookRequest request);
 }

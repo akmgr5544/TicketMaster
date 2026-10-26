@@ -102,6 +102,62 @@ public sealed class PaymentsHostTests(PaymentsHostFixture fixture)
     }
 
     [Fact]
+    public async Task A_signed_refund_success_finishes_the_refund_and_Bookings_hears_it_was_refunded()
+    {
+        var refundId = Guid.NewGuid();
+        var (checkout, refund) = await SeedProcessingRefundAsync(refundId);
+
+        using var response = await SendStripeRefundWebhookAsync(refund.PaymentOrderId, refundId, $"re_{refundId:N}", "succeeded");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        await fixture.Outcomes.WaitForAsync<BookingRefundedIntegrationEvent>(
+            refunded => refunded.BookingId == checkout.BookingId && refunded.RefundId == refundId, Wait);
+        Assert.Equal("Succeeded", await RefundStatusAsync(refund.RefundOrderId));
+        Assert.Equal("Refunded", await OrderStatusAsync(refund.PaymentOrderId));
+    }
+
+    [Fact]
+    public async Task A_signed_refund_failure_fails_the_refund_and_leaves_the_payment_where_it_was()
+    {
+        var refundId = Guid.NewGuid();
+        var (_, refund) = await SeedProcessingRefundAsync(refundId);
+
+        using var response = await SendStripeRefundWebhookAsync(
+            refund.PaymentOrderId, refundId, $"re_{refundId:N}", "failed", "expired_or_canceled_card");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("Failed", await RefundStatusAsync(refund.RefundOrderId));
+        Assert.Equal("Success", await OrderStatusAsync(refund.PaymentOrderId));
+    }
+
+    // Stripe sends no request id for a refund made outside Payments' flow; the reference alone still finds ours.
+    [Fact]
+    public async Task A_refund_event_without_our_ids_is_matched_by_its_reference()
+    {
+        var refundId = Guid.NewGuid();
+        var (_, refund) = await SeedProcessingRefundAsync(refundId);
+
+        using var response = await SendStripeRefundWebhookAsync(refund.PaymentOrderId, null, $"re_{refundId:N}", "failed");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("Failed", await RefundStatusAsync(refund.RefundOrderId));
+    }
+
+    [Fact]
+    public async Task A_refund_still_pending_or_unknown_is_acknowledged_and_changes_nothing()
+    {
+        var refundId = Guid.NewGuid();
+        var (_, refund) = await SeedProcessingRefundAsync(refundId);
+
+        using var pending = await SendStripeRefundWebhookAsync(refund.PaymentOrderId, refundId, $"re_{refundId:N}", "pending");
+        using var unknown = await SendStripeRefundWebhookAsync(Guid.NewGuid(), Guid.NewGuid(), "re_nobody_asked_for", "succeeded");
+
+        Assert.Equal(HttpStatusCode.OK, pending.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, unknown.StatusCode);
+        Assert.Equal("Processing", await RefundStatusAsync(refund.RefundOrderId));
+    }
+
+    [Fact]
     public async Task A_cancelled_booking_over_the_broker_fails_its_payment_and_Bookings_hears_it()
     {
         var bookingId = NewBookingId();
@@ -212,6 +268,44 @@ public sealed class PaymentsHostTests(PaymentsHostFixture fixture)
             }
             """;
 
+        return await SendSignedStripeAsync(body, secret);
+    }
+
+    private async Task<HttpResponseMessage> SendStripeRefundWebhookAsync(Guid orderId, Guid? refundId, string reference,
+        string status, string? failureReason = null)
+    {
+        var metadata = refundId is { } id
+            ? $$"""{ "payment_order_id": "{{orderId}}", "refund_id": "{{id}}" }"""
+            : "{}";
+        var body = $$"""
+            {
+              "id": "evt_{{Guid.NewGuid():N}}",
+              "object": "event",
+              "api_version": "{{Stripe.StripeConfiguration.ApiVersion}}",
+              "created": {{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}},
+              "type": "refund.updated",
+              "livemode": false,
+              "pending_webhooks": 1,
+              "data": {
+                "object": {
+                  "id": "{{reference}}",
+                  "object": "refund",
+                  "amount": 10000,
+                  "currency": "usd",
+                  "payment_intent": "pi_{{orderId:N}}",
+                  "status": "{{status}}",
+                  "failure_reason": {{(failureReason is null ? "null" : $"\"{failureReason}\"")}},
+                  "metadata": {{metadata}}
+                }
+              }
+            }
+            """;
+
+        return await SendSignedStripeAsync(body, PaymentsHostFixture.StripeWebhookSecret);
+    }
+
+    private async Task<HttpResponseMessage> SendSignedStripeAsync(string body, string secret)
+    {
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         var signature = HMACSHA256.HashData(Encoding.UTF8.GetBytes(secret), Encoding.UTF8.GetBytes($"{timestamp}.{body}"));
 
@@ -226,6 +320,32 @@ public sealed class PaymentsHostTests(PaymentsHostFixture fixture)
 
     private async Task<bool> CheckoutExistsAsync(long bookingId) =>
         await ScalarAsync<long>("select count(*) from \"PaymentEvents\" where \"BookingId\" = @id", ("id", bookingId)) > 0;
+
+    // A paid order whose refund Stripe accepted without finishing, with the seller's wallet holding the payment.
+    private async Task<(PaymentEvent Checkout, RefundOrder Refund)> SeedProcessingRefundAsync(Guid refundId)
+    {
+        var checkout = PaymentEvent.Create(NewBookingId(), Guid.NewGuid(), "USD");
+        checkout.AddPaymentOrder(Guid.NewGuid(), 100m);
+        var order = checkout.PaymentOrders.Single();
+        checkout.StartOrder(order.PaymentOrderId, "Stripe", $"pi_{order.PaymentOrderId:N}", DateTime.UtcNow);
+        checkout.SucceedOrder(order.PaymentOrderId, $"pi_{order.PaymentOrderId:N}");
+        checkout.MarkOrderSettled(order.PaymentOrderId);
+        var wallet = new Wallet(order.SellerId, "USD");
+        wallet.CreditFunds(order.Amount);
+        var refund = RefundOrder.Create(order.PaymentOrderId, refundId, order.Amount, "Booking cancelled");
+        refund.MarkAsProcessing($"re_{refundId:N}", DateTime.UtcNow);
+
+        using var scope = fixture.Services.CreateScope();
+        var context = scope.ServiceProvider.GetRequiredService<PaymentDbContext>();
+        context.PaymentEvents.Add(checkout);
+        context.Wallets.Add(wallet);
+        context.RefundOrders.Add(refund);
+        await context.SaveChangesAsync();
+        return (checkout, refund);
+    }
+
+    private Task<string> RefundStatusAsync(Guid refundOrderId) =>
+        ScalarAsync<string>("select \"Status\" from \"RefundOrders\" where \"RefundOrderId\" = @id", ("id", refundOrderId));
 
     private Task<string> OrderStatusAsync(Guid orderId) =>
         ScalarAsync<string>("select \"Status\" from \"PaymentOrders\" where \"PaymentOrderId\" = @id", ("id", orderId));

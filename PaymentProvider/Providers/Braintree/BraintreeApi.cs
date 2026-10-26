@@ -72,6 +72,24 @@ internal sealed class BraintreeApi(IOptions<BraintreeOptions> options) : IBraint
         return latest is null ? null : ToContract(latest);
     }
 
+    public async Task<IReadOnlyList<BraintreeTransaction>> SearchSettledAsync(DateTime from, DateTime to)
+    {
+        var search = new TransactionSearchRequest().SettledAt.Between(from, to);
+        var transactions = await CallAsync(() => _gateway.Transaction.SearchAsync(search));
+        return transactions.Select(ToContract).ToArray();
+    }
+
+    // Braintree records no time for a settlement decline, so credits are found by when they were submitted.
+    public async Task<IReadOnlyList<BraintreeTransaction>> SearchDeclinedCreditsAsync(DateTime submittedFrom, DateTime submittedTo)
+    {
+        var search = new TransactionSearchRequest()
+            .Type.Is(TransactionType.CREDIT)
+            .Status.IncludedIn(TransactionStatus.SETTLEMENT_DECLINED)
+            .SubmittedForSettlementAt.Between(submittedFrom, submittedTo);
+        var transactions = await CallAsync(() => _gateway.Transaction.SearchAsync(search));
+        return transactions.Select(ToContract).ToArray();
+    }
+
     public async Task<BraintreeTransaction> RefundAsync(string transactionId, decimal amount, string orderId) =>
         ToContract(Outcome(await CallAsync(() => _gateway.Transaction.RefundAsync(transactionId,
             new TransactionRefundRequest { Amount = amount, OrderId = orderId }))));
@@ -108,7 +126,8 @@ internal sealed class BraintreeApi(IOptions<BraintreeOptions> options) : IBraint
         };
 
         return new BraintreeTransaction(transaction.Id, status, transaction.OrderId, failureReason, transaction.RefundIds,
-            transaction.Amount);
+            transaction.Amount, transaction.CurrencyIsoCode,
+            transaction.Type == TransactionType.CREDIT ? BraintreeTransactionType.Credit : BraintreeTransactionType.Sale);
     }
 
     // A refused refund or void comes back without a transaction; the message says why (already refunded,

@@ -13,6 +13,8 @@ public class PaymentDbContext(DbContextOptions<PaymentDbContext> options) : DbCo
     public DbSet<Wallet> Wallets => Set<Wallet>();
     public DbSet<LedgerEntry> LedgerEntries => Set<LedgerEntry>();
     public DbSet<BookingClaim> BookingClaims => Set<BookingClaim>();
+    public DbSet<SettlementRecord> SettlementRecords => Set<SettlementRecord>();
+    public DbSet<SettlementDiscrepancy> SettlementDiscrepancies => Set<SettlementDiscrepancy>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -23,5 +25,7 @@ public class PaymentDbContext(DbContextOptions<PaymentDbContext> options) : DbCo
         modelBuilder.ApplyConfiguration(new UserConfiguration());
         modelBuilder.ApplyConfiguration(new WalletConfiguration());
         modelBuilder.ApplyConfiguration(new LedgerEntryConfiguration());
+        modelBuilder.ApplyConfiguration(new SettlementRecordConfiguration());
+        modelBuilder.ApplyConfiguration(new SettlementDiscrepancyConfiguration());
     }
 }

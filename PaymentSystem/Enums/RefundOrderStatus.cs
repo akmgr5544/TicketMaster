@@ -5,6 +5,8 @@ public enum RefundOrderStatus
 {
     // Recorded, not yet answered by the PSP.
     Pending,
+    // Accepted by the PSP, which has not finished it; nothing has moved yet.
+    Processing,
     Succeeded,
     Failed
 }
