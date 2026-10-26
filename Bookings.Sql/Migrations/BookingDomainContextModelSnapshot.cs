@@ -158,19 +158,11 @@ namespace Bookings.Sql.Migrations
                             b1.Property<Guid>("Id")
                                 .HasColumnType("uuid");
 
-                            b1.Property<decimal?>("Amount")
-                                .HasPrecision(18, 2)
-                                .HasColumnType("numeric(18,2)");
-
                             b1.Property<long>("BookingId")
                                 .HasColumnType("bigint");
 
                             b1.Property<DateTime>("CreatedAt")
                                 .HasColumnType("timestamp with time zone");
-
-                            b1.Property<string>("Currency")
-                                .HasMaxLength(3)
-                                .HasColumnType("character varying(3)");
 
                             b1.Property<string>("Status")
                                 .IsRequired()

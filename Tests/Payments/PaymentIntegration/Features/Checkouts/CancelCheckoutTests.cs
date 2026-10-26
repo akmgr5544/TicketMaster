@@ -50,48 +50,44 @@ public sealed class CancelCheckoutTests(PaymentsFixture fixture) : IntegrationTe
     }
 
     [Fact]
-    public async Task Cancelling_a_part_refunded_booking_refunds_only_what_is_left()
+    public async Task Cancelling_a_paid_booking_whose_earlier_refund_failed_still_refunds_everything()
     {
         var checkout = await SeedCheckoutAsync(OrderState.Success, amount: 100m);
         var orderId = checkout.PaymentOrders.Single().PaymentOrderId;
-        await SeedSettledRefundAsync(orderId, 30m);
+        var failed = await SeedRefundAsync(orderId, 100m);
+        await InScopeAsync(async c =>
+        {
+            (await c.RefundOrders.SingleAsync(r => r.RefundOrderId == failed.RefundOrderId)).MarkAsFailed();
+            await c.SaveChangesAsync();
+        });
 
         await CancelAsync(checkout.BookingId);
 
         var refund = Assert.Single(await ReadAsync(c => c.RefundOrders.Where(r => r.RequestId == orderId).ToListAsync()));
-        Assert.Equal(70m, refund.RefundAmount.Amount);
+        Assert.Equal(100m, refund.RefundAmount.Amount);
     }
 
     [Fact]
-    public async Task Cancelling_a_booking_with_one_paid_and_one_unpaid_order_does_both()
+    public async Task A_redelivered_cancellation_of_a_paid_booking_sends_nothing_and_refunds_nothing_twice()
     {
-        var checkout = await SeedCheckoutWithOrdersAsync(Guid.NewGuid(), NewBookingId(),
-            (OrderState.Executing, 20m), (OrderState.Success, 50m));
-        var unpaid = checkout.PaymentOrders.ElementAt(0).PaymentOrderId;
-        var paid = checkout.PaymentOrders.ElementAt(1).PaymentOrderId;
-
-        var outgoing = await CancelAsync(checkout.BookingId);
-
-        Assert.Single(outgoing.OfType<BookingPaymentFailedIntegrationEvent>());
-        Assert.Single(outgoing.OfType<ProcessRefund>());
-        var stored = await ReadCheckoutAsync(checkout.BookingId);
-        Assert.Equal(PaymentOrderStatus.Failed, stored.FindOrder(unpaid).Status);
-        var refund = Assert.Single(await ReadAsync(c => c.RefundOrders.ToListAsync()));
-        Assert.Equal(paid, refund.PaymentOrderId);
-        Assert.Equal(50m, refund.RefundAmount.Amount);
-    }
-
-    [Fact]
-    public async Task A_redelivered_cancellation_fails_nothing_sends_nothing_and_refunds_nothing_twice()
-    {
-        var checkout = await SeedCheckoutWithOrdersAsync(Guid.NewGuid(), NewBookingId(),
-            (OrderState.Executing, 20m), (OrderState.Success, 50m));
+        var checkout = await SeedCheckoutAsync(OrderState.Success, amount: 50m);
         await CancelAsync(checkout.BookingId);
 
         var outgoing = await CancelAsync(checkout.BookingId);
 
         Assert.Empty(outgoing);
         Assert.Single(await ReadAsync(c => c.RefundOrders.ToListAsync()));
+    }
+
+    [Fact]
+    public async Task A_redelivered_cancellation_of_an_unpaid_booking_fails_nothing_and_sends_nothing()
+    {
+        var checkout = await SeedCheckoutAsync(OrderState.Executing);
+        await CancelAsync(checkout.BookingId);
+
+        var outgoing = await CancelAsync(checkout.BookingId);
+
+        Assert.Empty(outgoing);
     }
 
     // The cancellation overtook the payment request; the claim is what makes the request refuse when it lands.

@@ -16,6 +16,6 @@ internal sealed class BookingRefundRequestedDomainEventHandler : INotificationHa
     }
 
     public Task Handle(BookingRefundRequestedDomainEvent notification, CancellationToken cancellationToken) =>
-        _integrationEvents.PublishAsync(new RefundRequestedIntegrationEvent(notification.BookingId, notification.RefundId,
-            notification.Amount, notification.Currency), cancellationToken);
+        _integrationEvents.PublishAsync(new RefundRequestedIntegrationEvent(notification.BookingId, notification.RefundId),
+            cancellationToken);
 }

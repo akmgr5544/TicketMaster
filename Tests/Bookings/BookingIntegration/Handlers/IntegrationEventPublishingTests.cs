@@ -170,11 +170,9 @@ public sealed class IntegrationEventPublishingTests : IntegrationTest
 
         var published = Assert.Single(Log.Published);
         var requested = Assert.IsType<RefundRequestedIntegrationEvent>(published.Event);
-        // The whole booking: no amount, so PaymentSystem refunds whatever is still paid. Named, so the answer says
-        // which refund landed.
+        // Named, so the answer says which refund landed.
         Assert.Equal(booking.Id, requested.BookingId);
         Assert.NotNull(requested.RefundId);
-        Assert.Null(requested.Amount);
         Assert.NotNull(published.TransactionId);
     }
 

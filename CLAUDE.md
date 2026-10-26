@@ -16,6 +16,7 @@ dotnet run --project Bookings.Api/Bookings.Api.csproj
 dotnet run --project Events.Api/Events.Api.csproj
 dotnet run --project Users.Api/Users.Api.csproj
 dotnet run --project PaymentSystem/PaymentSystem.csproj
+dotnet run --project Notifications/Notifications.csproj
 dotnet run --project TicketMaster.ApiGateway/TicketMaster.ApiGateway.csproj
 
 # Tests — no aggregating test project, run per-project
@@ -30,12 +31,13 @@ dotnet test Tests/Events/EventsApi/EventsApi.csproj                  # exception
 dotnet test Tests/Events/EventsCosmos/EventsCosmos.csproj            # Cosmos document serialization
 dotnet test Tests/Events/EventsIntegration/EventsIntegration.csproj  # repositories + 412 + delete guards (Cosmos emulator); outbox relay host fixture (+ RabbitMQ). Needs Docker
 dotnet test Tests/Users/UsersApi/UsersApi.csproj                 # Error-to-status mapping
-dotnet test Tests/Users/UsersIntegration/UsersIntegration.csproj  # first-user-Admin + PUT role + UserRegistered, real host + JWTs over HTTP (Postgres + RabbitMQ). Needs Docker
+dotnet test Tests/Users/UsersIntegration/UsersIntegration.csproj  # first-user-Admin + PUT role + UserRegistered + resync, real host + JWTs over HTTP (Postgres + RabbitMQ). Needs Docker
 dotnet test Tests/Users/UsersArchitecture/UsersArchitecture.csproj
 dotnet test Tests/Payments/PaymentArchitecture/PaymentArchitecture.csproj  # domain purity, read side independent of domain, visibility, transactional commands
 dotnet test Tests/Payments/PaymentDomain/PaymentDomain.csproj          # checkout/order/wallet/ledger/Money rules
 dotnet test Tests/Payments/PaymentIntegration/PaymentIntegration.csproj  # slices, message handlers, reconciliation, indexes, concurrency (Postgres); Mechanics/ boots the host (+ RabbitMQ). Needs Docker
 dotnet test Tests/Payments/PaymentAdapters/PaymentAdapters.csproj    # Stripe/Braintree adapters in PaymentProvider
+dotnet test Tests/Notifications/NotificationsIntegration/NotificationsIntegration.csproj  # outcome emails, dedupe, SMTP retry (Postgres); Mechanics/ boots the host (+ RabbitMQ + Mailpit). Needs Docker
 dotnet test Tests/Rpc/GrpcSeam/GrpcSeam.csproj                       # Bookings↔Events gRPC error round-trip (in-process, no Docker)
 dotnet test Tests/Gateway/GatewayTests/GatewayTests.csproj           # gateway routing/edge-auth/identity headers (in-process, no Docker)
 
@@ -48,11 +50,13 @@ dotnet ef migrations add <Name> -p Bookings.Sql -s Bookings.Api
 dotnet ef database update            -p Bookings.Sql -s Bookings.Api
 # PaymentSystem keeps its DbContext in the same project
 dotnet ef migrations add <Name> -p PaymentSystem -s PaymentSystem -o Data/Migrations
+# Notifications likewise
+dotnet ef migrations add <Name> -p Notifications -s Notifications -o Data/Migrations
 ```
 
-Migrations are also applied automatically at startup via `app.ApplyMigrationsAsync()` in `Bookings.Api/Program.cs`, `Users.Api/Program.cs` and `PaymentSystem/Program.cs`.
+Migrations are also applied automatically at startup via `app.ApplyMigrationsAsync()` in `Bookings.Api/Program.cs`, `Users.Api/Program.cs`, `PaymentSystem/Program.cs` and `Notifications/Program.cs`.
 
-`compose.yaml` brings up all five services (`users-api`, `events-api`, `bookings-api`, `payments-api`, `gateway`) plus Postgres, Redis, RabbitMQ and the Cosmos emulator; the gateway on `:8080` is the only entry point. Secrets come from `.env` (copy `.env.example`): `USERS_AUTH_TOKEN`, `POSTGRES_PASSWORD`, and `PAYMENTS_STRIPE_SECRET_KEY` / `PAYMENTS_STRIPE_WEBHOOK_SECRET`, without which PaymentSystem fails fast. Every service has its own Dockerfile.
+`compose.yaml` brings up all six services (`users-api`, `events-api`, `bookings-api`, `payments-api`, `notifications`, `gateway`) plus Postgres, Redis, RabbitMQ, the Cosmos emulator and Mailpit (catches every email: SMTP `1025`, inbox at http://localhost:8025); the gateway on `:8080` is the only API entry point (`notifications` is published on `5300` for its `/health` only). Secrets come from `.env` (copy `.env.example`): `USERS_AUTH_TOKEN`, `POSTGRES_PASSWORD`, and `PAYMENTS_STRIPE_SECRET_KEY` / `PAYMENTS_STRIPE_WEBHOOK_SECRET`, without which PaymentSystem fails fast. Every service has its own Dockerfile.
 
 ## Central Configuration
 
@@ -62,7 +66,7 @@ Migrations are also applied automatically at startup via `app.ApplyMigrationsAsy
 
 ## Architecture
 
-Five .NET services plus a shared kernel, wired together at runtime by a YARP API gateway and RabbitMQ:
+Six .NET services plus a shared kernel, wired together at runtime by a YARP API gateway and RabbitMQ:
 
 ```
                        ┌────────────────────────────┐
@@ -79,7 +83,12 @@ Five .NET services plus a shared kernel, wired together at runtime by a YARP API
               │                      │                                          │
               └──────────────────────┴───► RabbitMQ (Wolverine) ◄────────────────┘
         PaymentRequested, BookingCancelled, RefundRequested ──►   ◄── BookingPaid, BookingPaymentFailed, BookingRefunded
-        UserRegistered (Users ──► Payments)
+        UserRegistered (Users ──► Payments, Notifications)
+                                             │ own queues notifications.<Message>
+                                             ▼
+                                       Notifications ── SMTP ──► Mailpit (dev)
+                                       (Postgres+EF, no public API,
+                                        consumes only, emails buyers)
 ```
 
 ### Per-service layering
@@ -93,19 +102,27 @@ Five .NET services plus a shared kernel, wired together at runtime by a YARP API
 
 Each project has a marker interface (`IApiAssemblyMarker`, `IApplicationAssemblyMarker`, `IDomainAssemblyMarker`, `ISqlAssemblyMarker` in Bookings.Sql and `ICosmosAssemblyMarker` in Events.Cosmos). Architecture tests load assemblies via these markers.
 
-**Users.Api** is a single-project **vertical slice** design (feature folders under `Features/Users/{Authenticate,RefreshToken,Register}`), not the layered layout above. It is the JWT issuer for the system, and publishes `UserRegistered` through a Wolverine EF Core outbox committed with the new user (PaymentSystem keeps a copy). It therefore needs `ConnectionStrings:RabbitMQ` to start.
+**Users.Api** is a single-project **vertical slice** design (feature folders under `Features/Users/{Authenticate,RefreshToken,Register}`), not the layered layout above. It is the JWT issuer for the system, and publishes `UserRegistered` through a Wolverine EF Core outbox committed with the new user (PaymentSystem and Notifications keep a copy). After deploying a new consumer of `UserRegistered`, an admin runs `POST api/users/resync` once: it re-publishes the event for every user, and consumers skip one they already have. It therefore needs `ConnectionStrings:RabbitMQ` to start.
 
 **PaymentSystem** is vertical slices on a rich DDD domain, in one project: `Domain/` (the `PaymentEvent`
-checkout is the aggregate root owning one `PaymentOrder` per seller; `RefundOrder`; `Wallet`; double-entry
+checkout is the aggregate root owning exactly one `PaymentOrder`; `RefundOrder`; `Wallet`; double-entry
 `LedgerEntry`; `PaymentMethod`; `BookingClaim`; `Money` mapped as a complex property), `Query/` (plain read
 models), `Data/` (`PaymentDbContext` for writes, a no-tracking `PaymentQueryDbContext` for reads, configurations
 split `Domain/` and `Query/`), `Shared/{Endpoints,Pipelines,Results,Messaging}`, and
 `Features/<Area>/<Feature>.cs` — one file per feature, **no per-feature folder** (`Checkouts/`,
 `PaymentOrders/`, `RefundOrders/`, `PaymentMethods/`, `Wallets/`, `LedgerEntries/`, `Webhooks/`). HTTP slices
 are MediatR and return `Result<T>` like Users; messages are handled by plain Wolverine handlers. It takes pay-ins
-and gives them back as refunds, whole or in part; there is no pay-out to sellers. `PaymentProvider` is the PSP
+and gives them back as whole refunds; there is no pay-out to sellers. `PaymentProvider` is the PSP
 anti-corruption library (Stripe, Braintree). See the `payments-service` skill for the rules, the flow and the
 known gaps.
+
+**Notifications** is vertical slices in one project, plain Wolverine handlers, no MediatR: `Domain/`
+(`BookingBuyer`, `Recipient`, `Notification`), `Data/` (`NotificationsDbContext`, `notifications_db`), `Email/`
+(`IEmailSender`, MailKit `SmtpEmailSender`), `Features/<Area>/<Feature>.cs`. It emails a booking's buyer each
+outcome (paid, payment failed, cancelled, refunded), learning the buyer from `PaymentRequested` and the address
+from `UserRegistered`. No public API (only `GET /health`), no gateway route, publishes nothing. It listens on its
+own `notifications.<Message>` queues bound to the existing exchanges — the default-named queues belong to
+Payments and Bookings. See the `notifications-service` skill.
 
 ### Cross-cutting patterns
 
@@ -117,10 +134,12 @@ known gaps.
   an unpriced ticket is not on sale) and every booking cancellation publishes
   `BookingCancelled`; PaymentSystem answers with `BookingPaid` or `BookingPaymentFailed` (PSP cancel,
   15-minute checkout expiry, or the booking being cancelled). A paid booking a relocation voids publishes
-  `RefundRequested` with no amount, and PaymentSystem refunds whatever is still paid — as it does for a booking
-  cancelled after it was paid. A customer cancelling seats of a paid booking (until the event starts) publishes
-  it with those seats' amount, and PaymentSystem refunds that much. Every refund carries a `RefundId`;
-  `BookingRefunded` echoes it and releases the seats that refund covered — they stay held until then. A
+  `RefundRequested`, and PaymentSystem refunds whatever is still paid — as it does for a booking cancelled
+  after it was paid. A customer cancelling a paid booking (until the event starts) publishes it too; refunds
+  are whole only, so a paid booking is cancelled whole (a subset of its seats is a 409) and the message carries
+  no amount. Every refund carries a `RefundId`; `BookingRefunded` echoes it once the order is fully refunded
+  and releases the booking's seats — they stay held until then. Notifications emails the buyer each
+  outcome. A
   cancellation that overtakes its `PaymentRequested` is remembered (`BookingClaims`), so the late request is
   refused. Bookings publishes through an `IIntegrationEventPublisher` that stages into Wolverine's
   `DbContextOutbox` on the open transaction and sends after commit — never `SaveChangesAndFlushMessagesAsync`,

@@ -63,11 +63,13 @@ Code shared by several features in one area sits one level up, at `Features/<Are
 | `Program.cs` | Composition and pipeline |
 
 The live feature slices under `Features/Users/` are `Authenticate`, `Register`, `RefreshToken`,
-`Introspect` and `SetRole`. `Introspect` (`Introspect/IntrospectUser.cs`) is the gateway-facing
+`Introspect`, `SetRole` and `Resync`. `Introspect` (`Introspect/IntrospectUser.cs`) is the gateway-facing
 contract: `IntrospectUser.Query(Guid UserId)` maps `GET api/users/auth` with `.RequireAuthorization()`
 and returns `{ id, email, firstName, lastName, userName, role, permissions }` — see rule 11 and the
 `api-gateway` skill. `SetRole` (`SetRole/SetUserRole.cs`) maps `PUT api/users/{id:guid}/role` behind
-the `AdminOnly` policy for promoting/demoting users.
+the `AdminOnly` policy for promoting/demoting users. `Resync` (`Resync/ResyncUsers.cs`) maps
+`POST api/users/resync` behind `AdminOnly`: it re-publishes `UserRegistered` for every existing user through
+the same EF Core outbox and returns `{ published: <count> }`.
 
 ## User identity is a Guid
 
@@ -141,7 +143,10 @@ Implemented:
   returning 400, rather than letting the loser of two concurrent registrations surface as a 500
   (`efcore` rule 4).
 - **Register announces the user: `UserRegisteredIntegrationEvent(UserId, Email)`**, which PaymentSystem
-  consumes to keep its own copy. It is staged through Wolverine's `IDbContextOutbox<UsersDomainContext>` and
+  and Notifications consume to keep their own copy. **After deploying a new consumer of `UserRegistered`, an
+  admin runs `POST api/users/resync` once** so it learns the users registered before it subscribed; every
+  consumer skips a user it already has, so a repeat is harmless. There is no email-change feature, hence no
+  email-change message. It is staged through Wolverine's `IDbContextOutbox<UsersDomainContext>` and
   committed with the insert (`SaveChangesAndFlushMessagesAsync`), so other services hear about exactly the
   accounts that exist — the loser of the race above rolls back its message with its row. Users has no
   `TransactionBehavior`, which is what makes that call safe here; do not use it where one is open. Messaging is
@@ -177,7 +182,7 @@ Implemented:
   `Microsoft.IdentityModel.JsonWebTokens` is the current one and does not rewrite claim types into
   long URIs. Migrating means rebuilding token creation around `SecurityTokenDescriptor`, so it is
   deferred rather than done as a drop-in.
-- Role paths and `UserRegistered` are covered by `Tests/Users/UsersIntegration` (real host, real JWTs over
+- Role paths, `UserRegistered` and the resync (`Features/Resync/ResyncTests.cs`) are covered by `Tests/Users/UsersIntegration` (real host, real JWTs over
   HTTP, Postgres, and RabbitMQ with a stand-in subscriber — including the duplicate that loses the insert
   race announcing nothing, forced with the same table-lock technique). The
   bootstrap race is pinned by `Two_first_registrations_that_both_see_an_empty_table_both_become_Admin`;

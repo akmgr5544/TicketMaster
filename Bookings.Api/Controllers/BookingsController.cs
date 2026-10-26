@@ -71,14 +71,15 @@ public class BookingsController : BaseController
     }
 
     /// <summary>
-    /// An unpaid booking is cancelled whole. A paid one has its seats — all, or the ones named — refunded until the
-    /// event starts; they stay held until the money is back.
+    /// A booking is cancelled whole. An unpaid one is cancelled at once; a paid one is refunded in full until the
+    /// event starts, its seats held until the money is back. Naming only some seats is refused (409 when paid).
     /// </summary>
     [HttpPost("{id:long}/cancel")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> CancelBookingAsync(long id,
         [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] CancelBookingRequest? request,
         CancellationToken cancellationToken)

@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using PaymentIntegration.Fixtures;
 using PaymentSystem.Domain;
+using PaymentSystem.Domain.Exceptions;
 
 namespace PaymentIntegration.Persistence;
 
@@ -18,20 +19,31 @@ public sealed class IntegrityTests(PaymentsFixture fixture) : IntegrationTest(fi
         await Assert.ThrowsAsync<DbUpdateException>(() => SeedClaimAsync(BookingClaim.Cancelled(bookingId)));
     }
 
+    [Fact]
+    public async Task A_second_order_is_refused_by_the_domain_and_the_checkout_stays_as_it_was()
+    {
+        var checkout = await SeedCheckoutAsync(amount: 40m);
+        var loaded = await ReadCheckoutAsync(checkout.BookingId);
+
+        Assert.Throws<PaymentDomainException>(() => loaded.AddPaymentOrder(Guid.NewGuid(), 10m));
+        Assert.Single(loaded.PaymentOrders);
+        Assert.Equal(40m, loaded.TotalAmount.Amount);
+    }
+
     // The domain refuses this too, so the only way to reach the index is to write a row past the root.
     [Fact]
-    public async Task The_database_refuses_a_second_order_for_one_seller_in_a_checkout()
+    public async Task The_database_refuses_a_second_order_for_a_checkout()
     {
         var checkout = await SeedCheckoutAsync();
-        var order = checkout.PaymentOrders.Single();
 
+        // A different seller: one order per checkout, whoever it is for.
         var exception = await Assert.ThrowsAsync<PostgresException>(() => InScopeAsync(c => c.Database.ExecuteSqlRawAsync(
             """
             insert into "PaymentOrders" ("PaymentOrderId", "CheckoutId", "SellerId", "Amount", "Currency", "Status",
                                          "WalletUpdated", "LedgerUpdated", "CreatedAt")
             values ({0}, {1}, {2}, 10, 'USD', 'Init', false, false, now())
             """,
-            Guid.NewGuid(), checkout.CheckoutId, order.SellerId)));
+            Guid.NewGuid(), checkout.CheckoutId, Guid.NewGuid())));
 
         Assert.Equal(PostgresErrorCodes.UniqueViolation, exception.SqlState);
     }

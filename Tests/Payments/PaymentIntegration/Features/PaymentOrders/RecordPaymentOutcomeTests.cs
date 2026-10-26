@@ -67,21 +67,6 @@ public sealed class RecordPaymentOutcomeTests(PaymentsFixture fixture) : Integra
     }
 
     [Fact]
-    public async Task The_booking_is_paid_only_once_every_order_of_the_checkout_is()
-    {
-        var checkout = await SeedCheckoutWithOrdersAsync(Guid.NewGuid(), NewBookingId(),
-            (OrderState.Executing, 40m), (OrderState.Executing, 60m));
-        var first = checkout.PaymentOrders.ElementAt(0).PaymentOrderId;
-        var second = checkout.PaymentOrders.ElementAt(1).PaymentOrderId;
-
-        var afterFirst = await RecordAsync(first, succeeded: true);
-        var afterSecond = await RecordAsync(second, succeeded: true);
-
-        Assert.Empty(afterFirst.OfType<BookingPaidIntegrationEvent>());
-        Assert.Single(afterSecond.OfType<BookingPaidIntegrationEvent>());
-    }
-
-    [Fact]
     public async Task A_repeated_success_credits_nothing_more_and_sends_nothing()
     {
         var checkout = await SeedCheckoutAsync(OrderState.Executing, amount: 50m);

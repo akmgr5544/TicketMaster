@@ -6,10 +6,11 @@ description: Use when working on PaymentSystem or PaymentProvider — the pay-in
 # Payments Service
 
 PaymentSystem takes a booking's payment from "requested" to "paid or failed", tells Bookings which, and gives
-money back — the whole booking when it is voided, part of it when the customer cancels seats. Money moves buyer →
-seller and, on a refund, back. No pay-out to a seller's bank, no FX. The design follows the Pragmatic Engineer
-"Designing a payment system" article: a checkout (`PaymentEvent`) with one `PaymentOrder` per seller, a PSP-hosted
-page with the order id as the PSP's idempotency key, a wallet per seller, a double-entry ledger.
+money back — always all of it: refunds are whole only. Money moves buyer → seller and, on a refund, back. No
+pay-out to a seller's bank, no FX. The design follows the Pragmatic Engineer "Designing a payment system" article:
+a checkout (`PaymentEvent`) holding a `PaymentOrder` (exactly one here: a booking is one event, paid to its one
+organizer), a PSP-hosted page with the order id as the PSP's idempotency key, a wallet per seller, a double-entry
+ledger.
 
 **Scope:** `PaymentSystem/`, `PaymentProvider/` (the PSP anti-corruption library: Stripe, Braintree behind
 `IPaymentGateway`), `Tests/Payments/`. **Load alongside:** `cqrs`, `efcore`, `messaging`, `testing`, `api-gateway`.
@@ -53,14 +54,16 @@ Extensions/      AddInfrastructureServices, AddFeatureEndpoints, ApplyMigrations
 ## Domain rules
 
 - **`PaymentEvent` is the only way to change its orders:** `AddPaymentOrder`, `UsePaymentMethod`, `StartOrder`,
-  `SucceedOrder`, `FailOrder`, `Cancel`, `MarkOrderSettled`, `MarkOrderRefunded`. **One order per seller.**
+  `SucceedOrder`, `FailOrder`, `Cancel`, `MarkOrderSettled`, `MarkOrderRefunded`. **Exactly one order per
+  checkout:** `AddPaymentOrder` refuses a second. The collection stays so the checkout/order split of the design
+  does; nothing should loop over several orders as if they could exist.
 - **Order states:** `Init → Executing → Success | Failed`, `Success → Refunded`. `Cancel()` (also used by the
   expiry) fails `Init`/`Executing` only and returns how many it failed.
 - **PSP answers are reported, not thrown** (`OrderUpdate`): `Applied`, `AlreadyApplied` (a repeat), `Superseded`
   (the order settled the other way), `NotStarted`. PSPs repeat themselves and answer late; that is normal traffic.
-- **`Version`** is bumped by every applied change to the checkout or an order and is the concurrency token, so two
-  orders settling at once (or a webhook racing the expiry) conflict and the message retry decides over the winner's
-  state. No-ops leave it alone.
+- **`Version`** is bumped by every applied change to the checkout or its order and is the concurrency token, so a
+  webhook racing the expiry or a cancellation conflicts and the retry decides over the winner's state. No-ops leave
+  it alone.
 - **`Money`** (`Domain/Shared`): 3-letter currency (uppercased), never negative, at most 2 decimals — what
   `numeric(18,2)` holds exactly. `+`/`-` refuse mixed currencies; `-` refuses going below zero.
 - **Wallet** — one per user per currency; debit refuses more than the balance. **LedgerEntry** — written in
@@ -75,8 +78,9 @@ Extensions/      AddInfrastructureServices, AddFeatureEndpoints, ApplyMigrations
 - **EF Core 10 cannot index a complex property's column.** One wallet per user per currency is the unique
   `IX_Wallets_UserId_Currency`, **hand-written in `InitialCreate`**; keep it if that migration is ever regenerated.
   Other hand edits: the `PaymentMethods.UserId` text→uuid cast in `AddClaimsVersionAndReconciliation`.
-- Uniqueness each handler relies on: one checkout per booking, one claim per booking (key), one order per seller
-  per checkout, one refund per order per request id, one default payment method per user (partial index).
+- Uniqueness each handler relies on: one checkout per booking, one claim per booking (key), one order per
+  checkout (`IX_PaymentOrders_CheckoutId`), one refund per order per request id, one default payment method per
+  user (a filtered index).
 - Concurrency tokens: `PaymentEvent.Version`; Postgres `xmin` on `Wallet`.
 - The read context maps the same tables with `ExcludeFromMigrations`; only `PaymentDbContext` owns the schema.
   `dotnet ef` needs `--context PaymentDbContext`. Migrations run at startup (`ApplyMigrationsAsync`).
@@ -90,16 +94,17 @@ Bookings  PaymentRequested ─► RequestPayment: checkout + Requested claim; Ch
 Buyer     POST orders/{id}/checkout [saved method?] ─► PSP session, order Executing (provider, ExecutingSince)
 Buyer     POST orders/{id}/payment-method [token | saved method] ─► Braintree charges now; Stripe → webhook
 PSP       POST webhooks/{provider} (signature-verified; ungated at the gateway)
-            ─► RecordPaymentOutcome: success → wallet credit + ledger pair + BookingPaid once all paid
+            ─► RecordPaymentOutcome: success → wallet credit + ledger pair + BookingPaid
                                      cancel  → BookingPaymentFailed
 Job       ReconcileOrdersJob every 1 min: Executing > 2 min → PSP lookup → RecordPaymentOutcome
 Timer     CheckoutExpiryDue: unpaid → failed → BookingPaymentFailed
 Bookings  BookingCancelled ─► CancelCheckout: unpaid fail (BookingPaymentFailed); paid → refund of the remainder;
                               no checkout yet → Cancelled claim, so the later request is refused
-Bookings  RefundRequested ─► RequestRefund: no amount → each paid order's remainder; amount → off the single paid order
-Users     UserRegistered ─► RecordUser: keeps Payments' copy of the user (id + email); a redelivery adds nothing
-Local     ProcessRefund (no transaction) ─► PSP refund ─► RecordRefundOutcome: wallet debit + reversing pair;
-          BookingRefunded — a partial at once, a whole-booking one once no paid order is left
+Bookings  RefundRequested(BookingId, RefundId) ─► RequestRefund: one refund of everything still paid on the order
+Users     UserRegistered ─► RecordUser: keeps Payments' copy of the user (id + email); a redelivery adds nothing.
+          Users registered before Payments subscribed arrive when an admin runs POST api/users/resync (Users.Api)
+Local     ProcessRefund (no transaction) ─► PSP refund ─► RecordRefundOutcome: wallet debit + reversing pair,
+          order Refunded, BookingRefunded(BookingId, RefundId)
 ```
 
 - **Booking claims:** a request and a cancellation for one booking both insert `BookingClaims` (key = booking id).
@@ -107,8 +112,14 @@ Local     ProcessRefund (no transaction) ─► PSP refund ─► RecordRefundOu
 - **Refund ids:** the request id is Bookings' `RefundId`, or the order id when Bookings named none (a booking
   cancelled after payment); `BookingRefunded` echoes the `RefundId`, or null for one nobody named. The request id
   is the PSP's idempotency key, so a retried refund replays.
+- **Refunds are whole.** "Still paid" is the order amount minus earlier refunds that did not fail, so a refund
+  asked for again after a failed attempt (under a new request id) still gives everything back.
 - A refund the PSP refuses, or a PSP success for an order already failed, is logged at Error ("needs a manual
   refund") — never retried, never reported to Bookings as refunded.
+- **`StartCheckout` retries a lost race itself** (up to 3 attempts, clearing the tracker and reloading): lost to
+  the expiry, a cancellation or a PSP answer → `payment_order_settled`; lost to the buyer's own second start → the
+  same session comes back (the order id is the PSP's idempotency key). Only a writer that wins every attempt
+  yields 409 `payment_order_changed`.
 
 ## Messaging
 
@@ -119,6 +130,8 @@ Postgres message store; durable inbox, outbox and local queues (`checkout-expiry
 `PaymentRequested`, `BookingCancelled`, `RefundRequested` (Bookings) and `UserRegistered` (Users); publishes
 `BookingPaid`, `BookingPaymentFailed`, `BookingRefunded`. User ids still come from `X-Identity-UserId`; the
 synced `User` is a copy for when Payments needs more than the id (an email), not an authorization source.
+Notifications consumes several of the same contracts on its own `notifications.<Message>` queues; Payments keeps
+the default-named ones — never move either onto the other's queue (see the `messaging` skill).
 
 ## HTTP
 
@@ -150,5 +163,4 @@ Write tests from the requirement, not the code; a schema/model mismatch fails fi
 
 - A refund the PSP accepted as pending and later fails is not heard about — `PaymentProvider` has no refund
   lookup or refund webhook yet.
-- Checkouts with several sellers are protected (`Version`) but unreachable: Bookings sends one seller per booking.
 - Opening a Stripe checkout, the Braintree charge end to end and a real refund are tested against `StubPsp` only.

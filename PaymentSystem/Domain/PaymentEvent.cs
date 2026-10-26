@@ -46,9 +46,10 @@ public class PaymentEvent
         if (IsPaymentDone)
             throw new PaymentDomainException("Cannot add orders to a finalized checkout sequence.");
 
-        // One payment order per seller: it is what the PSP is asked to pay and the wallet is credited by.
-        if (_paymentOrders.Any(order => order.SellerId == sellerId))
-            throw new PaymentDomainException($"Seller {sellerId} already has a payment order in this checkout.");
+        // One order per checkout: a booking is for one event, paid to its one organizer. Kept as a collection so the
+        // checkout/order split of the design stays, but a second order is refused.
+        if (_paymentOrders.Count > 0)
+            throw new PaymentDomainException("A checkout has exactly one payment order.");
 
         var money = Money.Create(amount, TotalAmount.Currency);
         var order = new PaymentOrder(CheckoutId, sellerId, money);

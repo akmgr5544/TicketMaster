@@ -1,7 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using PaymentSystem.Data;
 using PaymentSystem.Domain;
-using PaymentSystem.Domain.Exceptions;
 using PaymentSystem.Domain.Shared;
 using PaymentSystem.Enums;
 using PaymentSystem.Shared.Messaging;
@@ -10,9 +9,8 @@ using Wolverine;
 
 namespace PaymentSystem.Features.RefundOrders;
 
-// Bookings wants money back for a paid booking. With no amount it is the whole booking; with one, that much off the
-// booking's single paid order. Each refund is recorded as Pending, and ProcessRefund sends it to the PSP once the
-// record has committed.
+// Bookings wants a paid booking's money back — all of it; refunds are whole only. The refund is recorded as Pending,
+// and ProcessRefund sends it to the PSP once the record has committed.
 public sealed class RefundRequestedHandler(ILogger<RefundRequestedHandler> logger)
 {
     public async Task<OutgoingMessages> Handle(RefundRequestedIntegrationEvent message, PaymentDbContext context,
@@ -29,98 +27,34 @@ public sealed class RefundRequestedHandler(ILogger<RefundRequestedHandler> logge
             return outgoing;
         }
 
-        var paidOrders = checkout.PaymentOrders.Where(o => o.Status == PaymentOrderStatus.Success).ToList();
-        var paidOrderIds = paidOrders.Select(o => o.PaymentOrderId).ToList();
+        // A checkout has one order; only a paid one has anything to give back.
+        var order = checkout.PaymentOrders.SingleOrDefault(o => o.Status == PaymentOrderStatus.Success);
+        if (order is null)
+        {
+            logger.LogWarning("Refund requested for booking {BookingId}, but nothing of it is paid.", message.BookingId);
+            return outgoing;
+        }
+
+        // A message sent before refunds had ids carries none; the order's own id still makes a redelivery a no-op.
+        var requestId = message.RefundId ?? order.PaymentOrderId;
 
         var refunds = await context.RefundOrders
-            .Where(r => paidOrderIds.Contains(r.PaymentOrderId))
+            .Where(r => r.PaymentOrderId == order.PaymentOrderId)
             .ToListAsync(cancellationToken);
 
-        if (message.Amount is null)
-            RefundWholeBooking(message, paidOrders, refunds, context, outgoing);
-        else
-            RefundPart(message, message.Amount.Value, paidOrders, refunds, context, outgoing);
+        if (refunds.Any(r => r.RequestId == requestId))
+            return outgoing;
+
+        // A failed refund gave nothing back, so it does not count against what is left.
+        var remaining = order.Amount.Amount - refunds.Where(r => r.Status != RefundOrderStatus.Failed).Sum(r => r.RefundAmount.Amount);
+        if (remaining <= 0)
+            return outgoing;
+
+        var refund = RefundOrder.Create(
+            order.PaymentOrderId, requestId, Money.Create(remaining, order.Amount.Currency), "Booking refunded");
+        context.RefundOrders.Add(refund);
+        outgoing.Add(new ProcessRefund(refund.RefundOrderId));
 
         return outgoing;
     }
-
-    private static void RefundWholeBooking(RefundRequestedIntegrationEvent message, List<PaymentOrder> paidOrders,
-        List<RefundOrder> refunds, PaymentDbContext context, OutgoingMessages outgoing)
-    {
-        foreach (var order in paidOrders)
-        {
-            // A message sent before refunds had ids carries none; the order's own id still makes a redelivery a no-op.
-            var requestId = message.RefundId ?? order.PaymentOrderId;
-            if (AlreadyRequested(refunds, order, requestId))
-                continue;
-
-            var remaining = order.Amount.Amount - RefundedSoFar(refunds, order);
-            if (remaining <= 0)
-                continue;
-
-            var refund = RefundOrder.Create(
-                order.PaymentOrderId, requestId, Money.Create(remaining, order.Amount.Currency), "Booking refunded");
-            context.RefundOrders.Add(refund);
-            outgoing.Add(new ProcessRefund(refund.RefundOrderId));
-        }
-    }
-
-    private void RefundPart(RefundRequestedIntegrationEvent message, decimal amount, List<PaymentOrder> paidOrders,
-        List<RefundOrder> refunds, PaymentDbContext context, OutgoingMessages outgoing)
-    {
-        // Each case below is logged rather than thrown: retrying would not change the answer, so a person has to look.
-        if (message.RefundId is not { } requestId)
-        {
-            logger.LogError("Partial refund for booking {BookingId} carries no refund id; it needs a manual refund.", message.BookingId);
-            return;
-        }
-
-        if (paidOrders.Count != 1)
-        {
-            logger.LogError("Partial refund {RefundId} for booking {BookingId} found {Count} paid orders, not one; it needs a manual refund.",
-                requestId, message.BookingId, paidOrders.Count);
-            return;
-        }
-
-        var order = paidOrders[0];
-        if (AlreadyRequested(refunds, order, requestId))
-            return;
-
-        if (!string.Equals(message.Currency, order.Amount.Currency, StringComparison.OrdinalIgnoreCase))
-        {
-            logger.LogError("Partial refund {RefundId} is in {Currency}, but booking {BookingId} was paid in {Paid}; it needs a manual refund.",
-                requestId, message.Currency, message.BookingId, order.Amount.Currency);
-            return;
-        }
-
-        var remaining = order.Amount.Amount - RefundedSoFar(refunds, order);
-        if (amount > remaining)
-        {
-            logger.LogError("Partial refund {RefundId} asks for {Amount}, but only {Remaining} of booking {BookingId} is left to refund; it needs a manual refund.",
-                requestId, amount, remaining, message.BookingId);
-            return;
-        }
-
-        try
-        {
-            var refund = RefundOrder.Create(
-                order.PaymentOrderId, requestId, Money.Create(amount, order.Amount.Currency), "Seats cancelled");
-            context.RefundOrders.Add(refund);
-            outgoing.Add(new ProcessRefund(refund.RefundOrderId));
-        }
-        catch (PaymentDomainException exception)
-        {
-            logger.LogError("Partial refund {RefundId} for booking {BookingId} was refused: {Reason}; it needs a manual refund.",
-                requestId, message.BookingId, exception.Message);
-        }
-    }
-
-    private static bool AlreadyRequested(List<RefundOrder> refunds, PaymentOrder order, Guid requestId) =>
-        refunds.Any(r => r.PaymentOrderId == order.PaymentOrderId && r.RequestId == requestId);
-
-    // A failed refund gave nothing back, so it does not count against what is left.
-    private static decimal RefundedSoFar(List<RefundOrder> refunds, PaymentOrder order) =>
-        refunds
-            .Where(r => r.PaymentOrderId == order.PaymentOrderId && r.Status != RefundOrderStatus.Failed)
-            .Sum(r => r.RefundAmount.Amount);
 }

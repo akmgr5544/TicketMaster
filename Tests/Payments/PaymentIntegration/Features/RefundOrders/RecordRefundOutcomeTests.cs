@@ -9,6 +9,7 @@ using Wolverine;
 
 namespace PaymentIntegration.Features.RefundOrders;
 
+// Refunds are whole only, so an accepted one gives back everything left on the order and is reported to Bookings.
 public sealed class RecordRefundOutcomeTests(PaymentsFixture fixture) : IntegrationTest(fixture)
 {
     private Task<OutgoingMessages> RecordAsync(Guid refundOrderId, bool accepted, string? reference = "re_psp") =>
@@ -31,7 +32,7 @@ public sealed class RecordRefundOutcomeTests(PaymentsFixture fixture) : Integrat
     public async Task An_accepted_refund_reverses_the_money_beside_the_pay_in()
     {
         var (checkout, order) = await SeedPaidAsync();
-        var refund = await SeedRefundAsync(order.PaymentOrderId, 40m);
+        var refund = await SeedRefundAsync(order.PaymentOrderId, 100m);
 
         await RecordAsync(refund.RefundOrderId, accepted: true, reference: "re_123");
 
@@ -41,7 +42,7 @@ public sealed class RecordRefundOutcomeTests(PaymentsFixture fixture) : Integrat
         Assert.True(stored.WalletReversed);
         Assert.True(stored.LedgerReversed);
 
-        Assert.Equal(60m, (await ReadWalletAsync(order.SellerId)).CurrentBalance.Amount);
+        Assert.Equal(0m, (await ReadWalletAsync(order.SellerId)).CurrentBalance.Amount);
 
         var entries = await ReadAsync(c => c.LedgerEntries.Where(l => l.TransactionRefId == refund.RefundOrderId).ToListAsync());
         Assert.Equal(2, entries.Count);
@@ -51,41 +52,13 @@ public sealed class RecordRefundOutcomeTests(PaymentsFixture fixture) : Integrat
         Assert.Equal(checkout.BuyerId.ToString(), credit.AccountId);
         Assert.All(entries, e =>
         {
-            Assert.Equal(40m, e.Amount.Amount);
+            Assert.Equal(100m, e.Amount.Amount);
             Assert.Equal(RefType.Refund, e.RefType);
         });
     }
 
     [Fact]
-    public async Task A_partial_refund_is_reported_at_once_with_bookings_refund_id()
-    {
-        var (checkout, order) = await SeedPaidAsync();
-        var refundId = Guid.NewGuid();
-        var refund = await SeedRefundAsync(order.PaymentOrderId, 40m, refundId);
-
-        var outgoing = await RecordAsync(refund.RefundOrderId, accepted: true);
-
-        var refunded = Assert.Single(outgoing.OfType<BookingRefundedIntegrationEvent>());
-        Assert.Equal(checkout.BookingId, refunded.BookingId);
-        Assert.Equal(refundId, refunded.RefundId);
-        Assert.Equal(PaymentOrderStatus.Success, (await ReadCheckoutAsync(checkout.BookingId)).FindOrder(order.PaymentOrderId).Status);
-    }
-
-    [Fact]
-    public async Task A_partial_refund_is_reported_even_while_another_refund_is_still_pending()
-    {
-        var (_, order) = await SeedPaidAsync();
-        await SeedRefundAsync(order.PaymentOrderId, 10m);
-        var refundId = Guid.NewGuid();
-        var refund = await SeedRefundAsync(order.PaymentOrderId, 40m, refundId);
-
-        var outgoing = await RecordAsync(refund.RefundOrderId, accepted: true);
-
-        Assert.Equal(refundId, Assert.Single(outgoing.OfType<BookingRefundedIntegrationEvent>()).RefundId);
-    }
-
-    [Fact]
-    public async Task Refunding_the_whole_amount_marks_the_order_refunded_and_reports_it()
+    public async Task An_accepted_refund_marks_the_order_refunded_and_reports_bookings_refund_id()
     {
         var (checkout, order) = await SeedPaidAsync(80m);
         var refundId = Guid.NewGuid();
@@ -94,61 +67,25 @@ public sealed class RecordRefundOutcomeTests(PaymentsFixture fixture) : Integrat
         var outgoing = await RecordAsync(refund.RefundOrderId, accepted: true);
 
         Assert.Equal(PaymentOrderStatus.Refunded, (await ReadCheckoutAsync(checkout.BookingId)).FindOrder(order.PaymentOrderId).Status);
-        Assert.Equal(refundId, Assert.Single(outgoing.OfType<BookingRefundedIntegrationEvent>()).RefundId);
-    }
-
-    [Fact]
-    public async Task Parts_that_reach_the_whole_amount_mark_the_order_refunded()
-    {
-        var (checkout, order) = await SeedPaidAsync(100m);
-        await SeedSettledRefundAsync(order.PaymentOrderId, 60m);
-        var refund = await SeedRefundAsync(order.PaymentOrderId, 40m);
-
-        await RecordAsync(refund.RefundOrderId, accepted: true);
-
-        Assert.Equal(PaymentOrderStatus.Refunded, (await ReadCheckoutAsync(checkout.BookingId)).FindOrder(order.PaymentOrderId).Status);
-    }
-
-    [Fact]
-    public async Task A_whole_booking_refund_is_reported_only_once_no_paid_order_is_left()
-    {
-        var checkout = await SeedCheckoutWithOrdersAsync(Guid.NewGuid(), NewBookingId(),
-            (OrderState.Success, 40m), (OrderState.Success, 60m));
-        var first = checkout.PaymentOrders.ElementAt(0);
-        var second = checkout.PaymentOrders.ElementAt(1);
-        await SeedWalletAsync(first.SellerId, 40m);
-        await SeedWalletAsync(second.SellerId, 60m);
-        var refundId = Guid.NewGuid();
-        var firstRefund = await SeedRefundAsync(first.PaymentOrderId, 40m, refundId);
-        var secondRefund = await SeedRefundAsync(second.PaymentOrderId, 60m, refundId);
-
-        var afterFirst = await RecordAsync(firstRefund.RefundOrderId, accepted: true);
-        var afterSecond = await RecordAsync(secondRefund.RefundOrderId, accepted: true);
-
-        Assert.Empty(afterFirst.OfType<BookingRefundedIntegrationEvent>());
-        var refunded = Assert.Single(afterSecond.OfType<BookingRefundedIntegrationEvent>());
+        var refunded = Assert.Single(outgoing.OfType<BookingRefundedIntegrationEvent>());
         Assert.Equal(checkout.BookingId, refunded.BookingId);
         Assert.Equal(refundId, refunded.RefundId);
     }
 
     [Fact]
-    public async Task A_whole_booking_refund_with_a_part_that_failed_is_never_reported_refunded()
+    public async Task A_refund_accepted_after_an_earlier_attempt_failed_still_refunds_everything_and_is_reported()
     {
-        var checkout = await SeedCheckoutWithOrdersAsync(Guid.NewGuid(), NewBookingId(),
-            (OrderState.Success, 40m), (OrderState.Success, 60m));
-        var first = checkout.PaymentOrders.ElementAt(0);
-        var second = checkout.PaymentOrders.ElementAt(1);
-        await SeedWalletAsync(first.SellerId, 40m);
-        await SeedWalletAsync(second.SellerId, 60m);
+        var (checkout, order) = await SeedPaidAsync(100m);
+        var failed = await SeedRefundAsync(order.PaymentOrderId, 100m);
+        await RecordAsync(failed.RefundOrderId, accepted: false);
         var refundId = Guid.NewGuid();
-        var firstRefund = await SeedRefundAsync(first.PaymentOrderId, 40m, refundId);
-        var secondRefund = await SeedRefundAsync(second.PaymentOrderId, 60m, refundId);
+        var retry = await SeedRefundAsync(order.PaymentOrderId, 100m, refundId);
 
-        var afterRefused = await RecordAsync(firstRefund.RefundOrderId, accepted: false);
-        var afterAccepted = await RecordAsync(secondRefund.RefundOrderId, accepted: true);
+        var outgoing = await RecordAsync(retry.RefundOrderId, accepted: true);
 
-        Assert.Empty(afterRefused);
-        Assert.Empty(afterAccepted.OfType<BookingRefundedIntegrationEvent>());
+        Assert.Equal(PaymentOrderStatus.Refunded, (await ReadCheckoutAsync(checkout.BookingId)).FindOrder(order.PaymentOrderId).Status);
+        Assert.Equal(0m, (await ReadWalletAsync(order.SellerId)).CurrentBalance.Amount);
+        Assert.Equal(refundId, Assert.Single(outgoing.OfType<BookingRefundedIntegrationEvent>()).RefundId);
     }
 
     [Fact]
@@ -168,21 +105,21 @@ public sealed class RecordRefundOutcomeTests(PaymentsFixture fixture) : Integrat
     public async Task A_redelivered_outcome_moves_no_money_and_reports_nothing()
     {
         var (_, order) = await SeedPaidAsync();
-        var refund = await SeedRefundAsync(order.PaymentOrderId, 40m);
+        var refund = await SeedRefundAsync(order.PaymentOrderId, 100m);
         await RecordAsync(refund.RefundOrderId, accepted: true);
 
         var outgoing = await RecordAsync(refund.RefundOrderId, accepted: true);
 
         Assert.Empty(outgoing);
-        Assert.Equal(60m, (await ReadWalletAsync(order.SellerId)).CurrentBalance.Amount);
+        Assert.Equal(0m, (await ReadWalletAsync(order.SellerId)).CurrentBalance.Amount);
         Assert.Equal(2, await ReadAsync(c => c.LedgerEntries.CountAsync(l => l.TransactionRefId == refund.RefundOrderId)));
     }
 
     [Fact]
     public async Task A_refused_refund_moves_no_money_reports_nothing_and_is_left_for_a_person()
     {
-        var (_, order) = await SeedPaidAsync();
-        var refund = await SeedRefundAsync(order.PaymentOrderId, 40m);
+        var (checkout, order) = await SeedPaidAsync();
+        var refund = await SeedRefundAsync(order.PaymentOrderId, 100m);
 
         var outgoing = await RecordAsync(refund.RefundOrderId, accepted: false);
 
@@ -193,6 +130,7 @@ public sealed class RecordRefundOutcomeTests(PaymentsFixture fixture) : Integrat
         Assert.False(stored.LedgerReversed);
         Assert.Equal(100m, (await ReadWalletAsync(order.SellerId)).CurrentBalance.Amount);
         Assert.Empty(await ReadAsync(c => c.LedgerEntries.ToListAsync()));
+        Assert.Equal(PaymentOrderStatus.Success, (await ReadCheckoutAsync(checkout.BookingId)).FindOrder(order.PaymentOrderId).Status);
         Assert.Contains(Logs.Lines, line => line.StartsWith("Error") && line.Contains("manual refund"));
     }
 }

@@ -32,8 +32,6 @@ public class BookingConfiguration : IEntityTypeConfiguration<Booking>
                 refund.HasKey(r => r.Id);
                 // Generated in the domain, so the id can go out in RefundRequested before the row is saved.
                 refund.Property(r => r.Id).ValueGeneratedNever();
-                refund.Property(r => r.Amount).HasPrecision(18, 2);
-                refund.Property(r => r.Currency).HasMaxLength(3);
                 refund.Property(r => r.Status).HasConversion<string>().HasMaxLength(20).IsRequired();
                 refund.Property(r => r.CreatedAt).IsRequired();
             });

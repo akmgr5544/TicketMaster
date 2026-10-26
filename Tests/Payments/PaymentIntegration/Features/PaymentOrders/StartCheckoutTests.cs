@@ -218,4 +218,87 @@ public sealed class StartCheckoutTests(PaymentsFixture fixture) : IntegrationTes
         Assert.Equal(PaymentOrderStatus.Init, order.Status);
         Assert.Null(order.Provider);
     }
+
+    // The race window is the PSP call: the handler has loaded the checkout and has not saved yet. The stub's hook runs
+    // inside that window, so another writer changes the checkout exactly there. Task.Run keeps the hook's own awaits off
+    // xUnit's synchronisation context, which the blocking wait would otherwise deadlock.
+    private void DuringPspCall(Func<int, Task> otherWriter)
+    {
+        var answer = Psp.Stripe.OnCheckout;
+        var calls = 0;
+        Psp.Stripe.OnCheckout = request =>
+        {
+            Task.Run(() => otherWriter(++calls)).GetAwaiter().GetResult();
+            return answer(request);
+        };
+    }
+
+    [Fact]
+    public async Task A_start_that_loses_to_the_expiry_is_decided_again_and_answers_that_the_order_is_settled()
+    {
+        var buyer = Guid.NewGuid();
+        var checkout = await SeedCheckoutAsync(buyerId: buyer);
+        var orderId = checkout.PaymentOrders.Single().PaymentOrderId;
+        DuringPspCall(async call =>
+        {
+            if (call == 1)
+                await InScopeAsync(async c =>
+                {
+                    (await c.PaymentEvents.SingleAsync(e => e.CheckoutId == checkout.CheckoutId)).Cancel();
+                    await c.SaveChangesAsync();
+                });
+        });
+
+        var result = await Sender.Send(new StartCheckout.Command(buyer, orderId));
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal("payment_order_settled", result.Error!.Code);
+        Assert.Equal(PaymentOrderStatus.Failed, (await ReadCheckoutAsync(checkout.BookingId)).FindOrder(orderId).Status);
+    }
+
+    [Fact]
+    public async Task A_start_that_loses_to_the_buyers_own_second_start_succeeds_and_starts_the_order_once()
+    {
+        var buyer = Guid.NewGuid();
+        var checkout = await SeedCheckoutAsync(buyerId: buyer);
+        var orderId = checkout.PaymentOrders.Single().PaymentOrderId;
+        DuringPspCall(async call =>
+        {
+            if (call == 1)
+                await InScopeAsync(async c =>
+                {
+                    (await c.PaymentEvents.SingleAsync(e => e.CheckoutId == checkout.CheckoutId))
+                        .StartOrder(orderId, "Stripe", StubGateway.ReferenceFor(orderId), Clock.GetUtcNow().UtcDateTime);
+                    await c.SaveChangesAsync();
+                });
+        });
+
+        var result = await Sender.Send(new StartCheckout.Command(buyer, orderId));
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("Stripe", result.Value!.Provider);
+        Assert.False(string.IsNullOrEmpty(result.Value.ClientToken));
+        var stored = await ReadCheckoutAsync(checkout.BookingId);
+        Assert.Equal(PaymentOrderStatus.Executing, stored.FindOrder(orderId).Status);
+        // Started once: only the other writer's start moved the version; the handler's own was a no-op.
+        Assert.Equal(checkout.Version + 1, stored.Version);
+    }
+
+    [Fact]
+    public async Task A_start_that_keeps_losing_gives_up_after_three_attempts()
+    {
+        var buyer = Guid.NewGuid();
+        var checkout = await SeedCheckoutAsync(buyerId: buyer);
+        var orderId = checkout.PaymentOrders.Single().PaymentOrderId;
+        // A writer that changes the checkout on every attempt without settling it.
+        DuringPspCall(_ => InScopeAsync(c => c.Database.ExecuteSqlRawAsync(
+            "update \"PaymentEvents\" set \"Version\" = \"Version\" + 1 where \"CheckoutId\" = {0}", checkout.CheckoutId)));
+
+        var result = await Sender.Send(new StartCheckout.Command(buyer, orderId));
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal("payment_order_changed", result.Error!.Code);
+        Assert.Equal(3, Psp.Stripe.Checkouts.Count);
+        Assert.Equal(PaymentOrderStatus.Init, (await ReadCheckoutAsync(checkout.BookingId)).FindOrder(orderId).Status);
+    }
 }
