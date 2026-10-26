@@ -11,16 +11,17 @@ listed honestly under [Known gaps](#-known-gaps) rather than left for you to dis
 | Concern | Choice |
 |---|---|
 | Language / runtime | C# 14, .NET 10 (`net10.0`, stable SDK — see `global.json`) |
-| Architecture | Clean Architecture + DDD (Bookings, Events), vertical slice (Users), vertical slices on a DDD domain (Payments) |
+| Architecture | Clean Architecture + DDD (Bookings, Events), vertical slice (Users), vertical slices on a DDD domain (Payments), vertical slices (Notifications) |
 | CQRS | MediatR — commands, handlers, pipeline behaviors |
 | Messaging | WolverineFx over RabbitMQ (Postgres-backed durable inbox/outbox in Bookings and Payments; `WolverineFx.CosmosDb` durable outbox in Events) |
-| Relational store | PostgreSQL via EF Core (Bookings, Users, Payments) |
+| Relational store | PostgreSQL via EF Core (Bookings, Users, Payments, Notifications) |
+| Email | SMTP via MailKit (Notifications); Mailpit catches it in development |
 | Document store | Azure Cosmos DB, NoSQL API (Events) |
 | Caching / locking | Redis via StackExchange.Redis + Medallion.Threading.Redis |
 | Service-to-service | gRPC over HTTP/2 with Protobuf (Bookings → Events), alongside RabbitMQ |
 | Edge | YARP reverse proxy with a custom authentication scheme |
 | Payment providers | Stripe and Braintree behind `IPaymentGateway` (`PaymentProvider`), hosted payment page + signed webhooks |
-| Testing | xUnit + ArchUnitNET, plus Testcontainers (Postgres, Redis, RabbitMQ, Cosmos emulator) for the integration suites |
+| Testing | xUnit + ArchUnitNET, plus Testcontainers (Postgres, Redis, RabbitMQ, Cosmos emulator, Mailpit) for the integration suites |
 
 ## 🏗️ Architecture
 
@@ -43,10 +44,13 @@ flowchart TB
         events["<b>Events.Api</b><br/>Clean Architecture<br/>catalogue: events, venues, performers"]
         bookings["<b>Bookings.Api</b><br/>Clean Architecture + DDD<br/>tickets, reservations, bookings"]
         payments["<b>PaymentSystem</b><br/>vertical slices on a DDD domain<br/>checkouts, wallets, ledger · pay-in and refunds"]
+        notifications["<b>Notifications</b><br/>vertical slices · no public API<br/>emails buyers each booking outcome"]
     end
 
+    smtp(["SMTP · Mailpit in dev"])
+
     subgraph data["Stores and broker"]
-        postgres[("<b>PostgreSQL</b><br/>users_db · bookings_db · payments_db<br/>+ Wolverine outbox tables")]
+        postgres[("<b>PostgreSQL</b><br/>users_db · bookings_db · payments_db · notifications_db<br/>+ Wolverine outbox tables")]
         redis[("<b>Redis</b><br/>seat reservations, 5-min TTL<br/>per-seat distributed locks")]
         cosmos[("<b>Cosmos DB</b><br/>events · venues · performers<br/>+ wolverine outbox container")]
         broker{{"<b>RabbitMQ</b><br/>Wolverine, durable inbox/outbox"}}
@@ -71,6 +75,9 @@ flowchart TB
     events <--> broker
     bookings <--> broker
     payments <--> broker
+    notifications --> postgres
+    broker --> notifications
+    notifications -- "SendEmail · MailKit" --> smtp
 ```
 
 ### Messages
@@ -91,7 +98,15 @@ flowchart LR
     bookings -- "PaymentRequested<br/>BookingCancelled<br/>RefundRequested" --> payments
     payments -- "BookingPaid<br/>BookingPaymentFailed<br/>BookingRefunded" --> bookings
     users -- "UserRegistered" --> payments
+    notifications["<b>Notifications</b>"]
+    bookings -- "PaymentRequested<br/>BookingCancelled" --> notifications
+    payments -- "BookingPaid<br/>BookingPaymentFailed<br/>BookingRefunded" --> notifications
+    users -- "UserRegistered" --> notifications
 ```
+
+Notifications consumes contracts other services already consume, so it listens on its own queues
+(`notifications.<Message>`) bound to the same fanout exchanges; sharing the default-named queue would make
+the two services compete for messages instead of each getting a copy.
 
 | Message | From → To | What the consumer does |
 |---|---|---|
@@ -100,13 +115,19 @@ flowchart LR
 | `EventRelocated` | Events → Bookings | Reconciles tickets to the seats the event *now* has; a booking that loses a seat is cancelled, or flagged `RefundPending` and refunded if paid |
 | `EventRepriced` | Events → Bookings | Gives every unsold ticket its seat's new price; booked tickets keep theirs |
 | `EventCancelled` | Events → Bookings | Cancels the event's tickets |
-| `PaymentRequested` | Bookings → Payments | Opens a checkout (one payment order per seller) and schedules its 15-minute expiry |
-| `BookingCancelled` | Bookings → Payments | Fails the checkout's unsettled orders and refunds any that were already paid. With no checkout yet, claims the booking as cancelled so a late `PaymentRequested` is refused |
-| `RefundRequested` | Bookings → Payments | With no amount (a relocation), refunds whatever is still paid on every order; with one (a customer cancelling seats), refunds that much. At the provider, then reverses that much of the wallet credit with its own ledger pair |
+| `PaymentRequested` | Bookings → Payments | Opens a checkout (exactly one payment order, to the event's organizer) and schedules its 15-minute expiry |
+| `PaymentRequested` | Bookings → Notifications | Remembers who bought the booking |
+| `BookingCancelled` | Bookings → Payments | Fails the checkout's unsettled order, or refunds it if already paid. With no checkout yet, claims the booking as cancelled so a late `PaymentRequested` is refused |
+| `BookingCancelled` | Bookings → Notifications | Emails the buyer — once per voided booking, whichever of this or `BookingPaymentFailed` lands first |
+| `RefundRequested` | Bookings → Payments | Refunds everything still paid on the order (refunds are whole; the message has no amount), then reverses the wallet credit with its own ledger pair |
 | `BookingPaid` | Payments → Bookings | Confirms the booking |
+| `BookingPaid` | Payments → Notifications | Emails the buyer a confirmation |
 | `BookingPaymentFailed` | Payments → Bookings | Cancels the unpaid booking and releases its seats |
-| `BookingRefunded` | Payments → Bookings | Names the refund that landed; releases the seats it covered, and marks the booking `Refunded` once every seat's refund has |
+| `BookingPaymentFailed` | Payments → Notifications | Emails the buyer (unless the cancellation already did) |
+| `BookingRefunded` | Payments → Bookings | Sent once the order is fully refunded; names the refund, releases the booking's seats and marks it `Refunded` |
+| `BookingRefunded` | Payments → Notifications | Emails the buyer, one email per refund |
 | `UserRegistered` | Users → Payments | Keeps Payments' own copy of the user (id and email); committed with the registration, so a refused one announces nothing |
+| `UserRegistered` | Users → Notifications | Remembers the user's address, so outcomes can be emailed |
 
 ### A booking, end to end
 
@@ -188,6 +209,7 @@ POST   /api/users/login
 POST   /api/users/refreshToken
 GET    /api/users/auth                  # the gateway's introspection call; requires a JWT
 PUT    /api/users/{id}/role             # admin only; 204
+POST   /api/users/resync                # admin only; re-publishes UserRegistered for every user → { published }
 ```
 
 Venues and performers each expose a conventional CRUD surface:
@@ -223,8 +245,8 @@ POST   /api/bookings                    # 201 + { id }
 GET    /api/bookings/{id}               # the caller's own; somebody else's is a 404
                                         # responses carry createdAt
 GET    /api/bookings?page=&pageSize=    # the caller's own, newest first
-POST   /api/bookings/{id}/cancel        # 204; optional { ticketIds }. Unpaid: cancelled whole. Paid: those
-                                        # seats (or all) refunded until the event starts; held until the money lands
+POST   /api/bookings/{id}/cancel        # 204; whole only. Unpaid: cancelled. Paid: refunded in full until the
+                                        # event starts; seats held until the money lands. A subset: 400 unpaid, 409 paid
 ```
 
 Payments exposes the checkout's payment side, also scoped to the caller; PSP webhooks are the one
@@ -273,7 +295,8 @@ pages by `page`/`pageSize` and returns `items`, `page`, `pageSize`, `total` and 
 | **Users.Api** | Vertical slice (`Features/Users/…`) | Postgres | Registration (the first account becomes Admin), authentication, refresh tokens, admin role assignment. Issues the JWTs and answers the gateway's introspection call. |
 | **Bookings** | `Domain` / `Application` / `Sql` / `Api` | Postgres + Redis | Reservations and bookings. Owns the whole ticket lifecycle — held in Redis, sold in Postgres, settled or released when a payment result arrives — with a distributed lock per seat guarding concurrent reservation. |
 | **Events** | `Domain` / `Application` / `Cosmos` / `Api` | Cosmos DB | The catalogue: venues and performers with full CRUD; events created, rescheduled, relocated, re-lined-up and cancelled (never deleted). Serves the `EventsLookup` gRPC service Bookings calls. Publishes `EventCreated`, `EventRescheduled`, `EventRelocated` and `EventCancelled` — the first is what causes tickets to exist in Bookings, and the rest are what keep them correct. |
-| **PaymentSystem** | Vertical slices (`Features/<Area>/<Feature>.cs`) on a DDD `Domain/`, with a separate no-tracking read side | Postgres | The pay-in flow: a checkout per booking with one payment order per seller, PSP checkout and webhooks, saved payment methods, seller wallets, a double-entry ledger, 15-minute checkout expiry, reconciliation of stuck orders, refunds whole or in part. Publishes `BookingPaid` / `BookingPaymentFailed` / `BookingRefunded`. |
+| **PaymentSystem** | Vertical slices (`Features/<Area>/<Feature>.cs`) on a DDD `Domain/`, with a separate no-tracking read side | Postgres | The pay-in flow: a checkout per booking with exactly one payment order, PSP checkout and webhooks, saved payment methods, seller wallets, a double-entry ledger, 15-minute checkout expiry, reconciliation of stuck orders, whole refunds. Publishes `BookingPaid` / `BookingPaymentFailed` / `BookingRefunded`. |
+| **Notifications** | Vertical slices (`Features/<Area>/<Feature>.cs`), plain Wolverine handlers | Postgres | Emails a booking's buyer each outcome — paid, payment failed, cancelled, refunded — one email per outcome, sent over SMTP (MailKit) outside any transaction and retried while the mail server is down. Learns the buyer from `PaymentRequested` and the address from `UserRegistered`. No public API (`GET /health` only), publishes nothing. |
 | **PaymentProvider** | Class library | — | Anti-corruption layer over the PSPs (Stripe, Braintree) behind `IPaymentGateway`. |
 | **TicketMaster.ApiGateway** | — | — | YARP routing, edge authentication, identity header propagation. |
 | **TicketMaster.Common** | — | — | Integration event contracts and the `events.proto` gRPC contract shared across service boundaries. |
@@ -291,7 +314,7 @@ and nothing else, so a checkout abandoned before booking lapses on its own and n
 action. Booking replaces that with a durable hold: the reservation is deleted and the ticket's own
 status carries it. The trade is explicit — after booking, the TTL no longer applies to those seats, so
 only a cancellation or a refund can put them back: a `BookingPaymentFailed`, the owner cancelling (a paid
-seat comes back once its refund lands), or a relocation that removes one of its seats. The unpaid case has a timeout, and it lives in PaymentSystem: a
+booking's seats come back once its refund lands), or a relocation that removes one of its seats. The unpaid case has a timeout, and it lives in PaymentSystem: a
 checkout nobody pays for fails after 15 minutes.
 
 **Reservation checks the database before holding anything.** `Ticket.IsAvailableFor` is the rule —
@@ -394,18 +417,19 @@ venue and performers: renaming a venue deliberately does not rewrite history. Do
 serialized through a private rehydration constructor, so loading a past event never re-runs the
 creation invariants that would reject it.
 
-**One aggregate per checkout, one order per seller (Payments).** `PaymentEvent` is the root and the only
-way to change its `PaymentOrder`s (owned, in their own table), so the checkout-wide rule — paid once every
-order has succeeded — cannot be bypassed. A provider's answer is *reported* rather than thrown (`Applied`,
+**One aggregate per checkout, one order per checkout (Payments).** `PaymentEvent` is the root and the only
+way to change its `PaymentOrder` (owned, in its own table). A booking is one event paid to its one organizer,
+so a checkout holds exactly one order — the domain refuses a second and a unique index on
+`PaymentOrders.CheckoutId` backs it; the collection stays so the checkout/order split of the design does. A provider's answer is *reported* rather than thrown (`Applied`,
 `AlreadyApplied`, `Superseded`, `NotStarted`), which is what makes redelivered webhooks and late answers safe.
 `Money` is a value object mapped as a complex property: it refuses any amount `numeric(18,2)` cannot hold
 exactly, because Postgres would otherwise round it and the PSP would charge a different amount than the ledger
 records.
 
-**A version every change bumps (Payments).** Two orders of one checkout settling at once would each see the
-other unfinished and leave the checkout never paid; a webhook racing the expiry would overwrite one with the
-other. Every applied change to the checkout or an order bumps `PaymentEvent.Version`, a concurrency token, so
-the second save fails and Wolverine's retry decides again over the winner's state. Wallets carry Postgres'
+**A version every change bumps (Payments).** A webhook racing the expiry or a cancellation would overwrite one
+with the other. Every applied change to the checkout or its order bumps `PaymentEvent.Version`, a concurrency
+token, so the second save fails and Wolverine's retry decides again over the winner's state. `StartCheckout`,
+an HTTP slice, retries itself the same way (up to three attempts). Wallets carry Postgres'
 `xmin` for the same reason.
 
 **Writes and messages commit together (Bookings, Payments).** Bookings publishes through an
@@ -430,6 +454,7 @@ Tests/
 ├── Bookings/   BookingArchitecture, BookingDomain, BookingIntegration, BookingApi
 ├── Events/     EventsArchitecture, EventsDomain, EventsApplication, EventsCosmos, EventsApi, EventsIntegration
 ├── Gateway/    GatewayTests
+├── Notifications/ NotificationsIntegration
 ├── Payments/   PaymentArchitecture, PaymentDomain, PaymentIntegration, PaymentAdapters
 ├── Rpc/        GrpcSeam
 └── Users/      UsersArchitecture, UsersApi, UsersIntegration
@@ -496,7 +521,14 @@ handlers are internal and sealed, and every writing command is transactional exc
 `SubmitPaymentMethod`, which call a PSP and must not hold a transaction open. The tests were written from the
 requirements rather than the code, and the key suites were checked by breaking the code on purpose.
 
-**Needs a running Docker daemon** — every test in `BookingIntegration`, `EventsIntegration` and `PaymentIntegration` starts
+Notifications has `Tests/Notifications/NotificationsIntegration`: each handler through the production
+registration against real Postgres with a recording email sender — the outcome emails, redeliveries adding
+nothing, one email for a voided booking, unknown buyers skipped, a down mail server failing the send so it is
+retried — plus a host collection that boots the real service on Postgres, RabbitMQ and a **Mailpit** container
+beside a stand-in Payments host, proving a contract both services consume reaches each of them and that a paid
+booking ends as an email in Mailpit.
+
+**Needs a running Docker daemon** — every test in `BookingIntegration`, `EventsIntegration`, `PaymentIntegration` and `NotificationsIntegration` starts
 containers; with the daemon down the whole project fails at fixture initialisation. `Bookings.Sql` and
 `Bookings.Application` carry `InternalsVisibleTo("BookingIntegration")` so the tests can construct the
 internal context, repositories and handlers; `Bookings.Application` and `Events.Api` also expose internals
@@ -539,6 +571,7 @@ dotnet test Tests/Payments/PaymentArchitecture/PaymentArchitecture.csproj
 dotnet test Tests/Payments/PaymentDomain/PaymentDomain.csproj
 dotnet test Tests/Payments/PaymentIntegration/PaymentIntegration.csproj   # needs Docker
 dotnet test Tests/Payments/PaymentAdapters/PaymentAdapters.csproj
+dotnet test Tests/Notifications/NotificationsIntegration/NotificationsIntegration.csproj   # needs Docker
 dotnet test Tests/Gateway/GatewayTests/GatewayTests.csproj
 dotnet test Tests/Rpc/GrpcSeam/GrpcSeam.csproj
 ```
@@ -562,7 +595,8 @@ among the command handlers.
 
 The whole system, in containers — use the gateway at `http://localhost:8080` as the entry point (each
 service and backing store is also published on the host for debugging: users 5054, events 5158/5159,
-bookings 5225, payments 5290):
+bookings 5225, payments 5290, notifications 5300 for `/health` only). Every email the system sends lands in
+**Mailpit** — open its inbox at http://localhost:8025:
 
 ```bash
 cp .env.example .env      # then set USERS_AUTH_TOKEN (e.g. openssl rand -hex 64) and the two
@@ -583,6 +617,7 @@ dotnet run --project Users.Api/Users.Api.csproj --launch-profile https          
 dotnet run --project Bookings.Api/Bookings.Api.csproj --launch-profile https    # https://localhost:7225
 dotnet run --project Events.Api/Events.Api.csproj --launch-profile https        # https://localhost:7158 (gRPC needs HTTP/2)
 dotnet run --project PaymentSystem/PaymentSystem.csproj                         # https://localhost:7291
+dotnet run --project Notifications/Notifications.csproj                         # no API; SMTP to localhost:1025 (Mailpit)
 dotnet run --project TicketMaster.ApiGateway/TicketMaster.ApiGateway.csproj     # http://localhost:5203
 
 The `https` profiles matter: the gateway's clusters and Bookings' gRPC client point at those ports, while a
@@ -597,7 +632,7 @@ dotnet user-secrets set "PaymentProviders:Stripe:SecretKey" "sk_test_…" --proj
 dotnet user-secrets set "PaymentProviders:Stripe:WebhookSecret" "whsec_…" --project PaymentSystem
 ```
 
-Bookings, Users and PaymentSystem apply EF Core migrations at startup; Events creates its Cosmos database and
+Bookings, Users, PaymentSystem and Notifications apply EF Core migrations at startup; Events creates its Cosmos database and
 containers at startup. The JWT signing key is empty in `appsettings.json`, so outside Development (in
 compose, for instance) Users.Api fails fast until `AuthConfigs__Token` is set. `appsettings.Development.json`
 currently carries a development key; override it with user-secrets:
@@ -609,7 +644,7 @@ dotnet user-secrets set "AuthConfigs:Token" "$(openssl rand -hex 64)" --project 
 Events expects the Cosmos emulator on `http://localhost:8081`, in Gateway mode — both set in
 `appsettings.Development.json`, along with the emulator's well-known account key, which is not a secret.
 The vnext emulator serves plain http, so there is no certificate to trust. Bring up just the backing stores with
-`POSTGRES_PASSWORD=password docker compose up postgres redis rabbitmq cosmos` — the checked-in connection
+`POSTGRES_PASSWORD=password docker compose up postgres redis rabbitmq cosmos mailpit` — the checked-in connection
 strings use the password `password`.
 
 Central package management is enabled: add package versions to `Directory.Packages.props`, never
@@ -626,13 +661,14 @@ each lives in the owning service's skill under `.claude/skills/`.
 - **Events has no real transaction** (`TransactionBehavior` is a no-op), so the venue and performer delete guards are best-effort.
 - **Reservations rest entirely on the distributed locks**; a lock lost mid-operation can double-reserve a seat.
 - **After-commit work is dropped for a command sent from a message handler** — nothing does that today.
-- **Starting a checkout can lose a concurrency race** (409 `payment_order_changed`) and has to be retried; message handlers retry on their own.
 - **A refund the provider refuses is logged for a person**, and one accepted as pending that fails later goes unnoticed — `PaymentProvider` has no refund lookup or refund webhook yet.
-- **A Braintree sale that has not settled cannot be refunded in part**, only voided whole, so cancelling one seat right after paying needs a person.
+- **Refunds are whole only**: a paid booking cannot give back some of its seats; cancelling a subset is a 409.
 - **Opening a Stripe checkout, the Braintree charge end to end and a real refund** are tested against a stubbed PSP only.
+- **Emails are at least once**: a crash between the SMTP send and recording it sends the email again.
+- **A new consumer of `UserRegistered` learns existing users only when an admin runs `POST api/users/resync`** once after deploying it; until then Notifications skips those buyers' outcomes, and does not replay them afterwards. A repeat resync is harmless.
+- **Emails are plain text**, with no templates or localisation.
 
 ## 🗺️ Roadmap
 
-- Notifications to the customer when a booking is refunded or cancelled
 - Reconciliation against PSP settlement files
 - Saga / process-manager work for the full booking flow in Wolverine

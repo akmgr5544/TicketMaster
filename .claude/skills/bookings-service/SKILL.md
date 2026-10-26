@@ -145,35 +145,33 @@ helper: `Bookings.Domain` cannot see the contract, and the mapping is one expres
 finds the covering booking (`IBookingRepository.FindByTicketIdAsync`) and calls
 `Booking.OnBookedSeatCancelled()` — an unpaid booking is cancelled, a paid one moves to
 `RefundPending` (it cannot be cancelled: undoing a payment is a refund). It is idempotent, so several
-lost seats on one booking are safe. Flagging adds a whole-booking `BookingRefund` (no amount) covering every
+lost seats on one booking are safe. Flagging adds a whole-booking `BookingRefund` covering every
 seat no refund covers yet, and raises `BookingRefundRequestedDomainEvent`, whose handler publishes
 `RefundRequested` on the same transaction; PaymentSystem refunds whatever is still paid and answers
 `BookingRefunded` with that refund's id, which `CompleteRefundCommand` turns into `Booking.MarkRefunded(id)` —
 `Refunded`, and `BookingRefundedDomainEvent` releases the seats (the seat the relocation removed stays
-`Cancelled`; `Ticket.Release` skips it). Nobody is notified yet.
+`Cancelled`; `Ticket.Release` skips it). The Notifications service emails the buyer when the refund lands.
 
 ## A customer cancelling a paid booking
 
-`POST /api/bookings/{id}/cancel` with an optional `{ ticketIds }`. An unpaid booking is cancelled whole — naming
-some of its seats is a 400, since its checkout is already open for the whole amount. A paid booking gets a
-refund for the named seats, or every seat no refund covers yet:
+`POST /api/bookings/{id}/cancel` with an optional `{ ticketIds }`. **Every booking is cancelled whole**; naming
+every seat counts as the whole booking. An unpaid booking with a subset named is a 400 (`BookingsDomainException`);
+a paid one is a **409** (`BookingsApplicationException`), since refunds are whole only — there is no seat-by-seat
+refund and no refund amount anywhere in Bookings.
 
-- **`Booking.RequestRefund(ticketIds, amount, currency)`** adds a `BookingRefund` (id generated in the domain, so
-  it goes out in the message before the row is saved), marks each `BookedTicket.RefundId`, and raises the event
-  that publishes `RefundRequested` with the amount. A seat not in the booking, already covered, or named twice
-  is refused. **The booking stays `Payed` and the seats stay `Booked`** until the money lands, so a refund that
-  fails has not already sold them to somebody else.
-- **`CancelBookingCommandHandler`** prices it: each seat gives back what it was charged (a booked ticket keeps
-  its price through a repricing), summed as `MakeBookingCommandHandler` summed the charge. It refuses once the
-  event has started — `Ticket.IsRefundableAt`, deliberately stricter than the sale window, which still sells a
-  seat for `SaleGracePeriod` after the start.
-- **`MarkRefunded(refundId)`** completes that refund and releases the seats it covers. When every seat is
-  covered by a completed refund the booking is `Refunded`. The whole-booking refund settles every refund still
-  pending too — it gave back everything still paid, their money included. **A seat an earlier refund already
-  released is never released again**: it may since have been sold to somebody else. A repeat changes nothing; a
-  refund id the booking never asked for is refused. **No refund id** is a message from before refunds had ids,
-  and is treated as the whole-booking refund it was.
-- `BookingDto.Refunds` shows each refund's status, amount and seats, so a customer can see what is pending.
+- **`Booking.RequestRefund()`** refuses anything not `Payed` and goes through the same path a relocation uses
+  (`FlagForRefund`): the booking moves to `RefundPending`, one `BookingRefund` (id generated in the domain, so it
+  goes out in the message before the row is saved) covers every seat, and `RefundRequested(BookingId, RefundId)`
+  is published. **The seats stay `Booked`** until the money lands, so a refund that fails has not already sold
+  them to somebody else. A booking already `RefundPending` refuses a second request.
+- **`CancelBookingCommandHandler`** refuses once the event has started — `Ticket.IsRefundableAt`, deliberately
+  stricter than the sale window, which still sells a seat for `SaleGracePeriod` after the start (400).
+- **`MarkRefunded(refundId)`** completes the refund, releases the seats it covers and makes the booking
+  `Refunded`. A refund gives back everything paid, so it settles any other refund still pending too. **A seat an
+  earlier refund already released is never released again**: it may since have been sold to somebody else. A
+  repeat changes nothing; a refund id the booking never asked for is refused. **No refund id** is a message from
+  before refunds had ids, and is treated as the whole-booking refund it was.
+- `BookingDto.Refunds` is `(Id, Status, TicketIds)` per refund, so a customer can see what is pending.
 
 ## The reservation and booking flow
 
@@ -300,8 +298,8 @@ POST   /api/tickets/reserve             hold seats, 5 minute TTL
 POST   /api/bookings                    201 + { id }
 GET    /api/bookings/{id}               the caller's own
 GET    /api/bookings?page=&pageSize=    the caller's own, newest first
-POST   /api/bookings/{id}/cancel        204; optional { ticketIds }. Unpaid: whole only. Paid: refunds
-                                        those seats (or all), until the event starts
+POST   /api/bookings/{id}/cancel        204; whole only. Unpaid: cancelled. Paid: refunded in full until the
+                                        event starts. A subset of seats: 400 unpaid, 409 paid
 ```
 
 27. **Identity comes from `X-Identity-UserId` and nowhere else.** The id is a `Guid` in the store and
@@ -370,9 +368,9 @@ before Events had any — fails `IsAvailableFor`, so it is refused at reservatio
     told it is void and the seat may no longer exist. It is skipped rather than refused, so cancelling
     the booking still succeeds — this is the one place the relocation loose end below is handled.
 26. **`Cancel()` is for unpaid bookings only.** It refuses a `Payed` booking: undoing a payment is a refund,
-    so a customer's cancellation of a paid booking goes through `RequestRefund` instead (see "A customer
-    cancelling a paid booking"), and a relocation through `OnBookedSeatCancelled`. Nobody is notified of a
-    refund or a cancellation yet.
+    so a customer's cancellation of a paid booking goes through `RequestRefund()` instead (see "A customer
+    cancelling a paid booking"), and a relocation through `OnBookedSeatCancelled`. The Notifications service
+    emails the buyer about cancellations, failed payments and refunds.
 
 ## Known gaps
 

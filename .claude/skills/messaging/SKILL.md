@@ -29,12 +29,18 @@ Bookings consumes **eight** contracts in `Bookings.Application/IntegrationEventH
 
 The three payment outcomes are produced by **PaymentSystem**, which in turn consumes `PaymentRequested`
 (published by Bookings' `MakeBooking`), `BookingCancelled` (published on every booking cancellation) and
-`RefundRequested` (published when a relocation voids a paid booking or a customer cancels paid seats). Its own
+`RefundRequested` (published when a relocation voids a paid booking or a customer cancels a paid one — always
+for the whole booking, no amount). Its own
 steps — `CheckoutExpiryDue`, `ProcessRefund`, `RecordRefundOutcome` — stay on durable local queues.
 Bookings publishes through an `IIntegrationEventPublisher` that stages into Wolverine's `DbContextOutbox` on
 the open transaction and flushes after commit. PaymentSystem's message handlers return `OutgoingMessages`
 and let Wolverine's EF Core middleware (`AutoApplyTransactions`) save them with the handler's writes — see
 the `payments-service` skill.
+
+**Notifications** consumes `PaymentRequested`, `UserRegistered`, `BookingPaid`, `BookingPaymentFailed`,
+`BookingCancelled` and `BookingRefunded` — every one already consumed by Payments or Bookings — on its own
+queues (see "A second consumer of a contract" below). It publishes nothing; `SendEmail` is a durable local
+message. See the `notifications-service` skill.
 
 **Both sides now have a durable outbox** — Bookings on Postgres, Events on Cosmos via
 `WolverineFx.CosmosDb` (see the Events subsection below). Both are now proven at runtime; Events',
@@ -173,6 +179,28 @@ Customisation:
 Because outgoing exchanges are fanout, every queue bound to one gets a copy. That is the right
 default for events and the wrong default for commands.
 
+### A second consumer of a contract
+
+**A service that consumes a contract another service already consumes listens on its own queue,
+`<service>.<MessageType>`, bound to the type's exchange — never the default-named queue.** Conventional
+routing would give both services the queue named after the type; two services on one queue *compete*
+for its messages (each gets some), instead of each getting a copy from the fanout exchange. Nothing
+fails — messages just go missing from one side.
+
+`Notifications/Extensions/MessagingExtension.cs` is the pattern: no `UseConventionalRouting()`; for each
+type in `Consumed`, `BindExchange(type.FullName!, ExchangeType.Fanout).ToQueue("notifications.<Name>")`
+and `ListenToRabbitQueue(...)`. The exchange name is the type's full name, which is what the publishers'
+conventional routing sends to. `Mechanics/NotificationsHostTests.A_message_both_services_consume_reaches_each_of_them`
+proves the copy reaches both.
+
+### A host that publishes and handles the same type
+
+**A Wolverine host that publishes a message it also has a handler for needs
+`Policies.DisableConventionalLocalRouting()`**, or the publish is handed to the local handler in memory
+and never reaches the broker. Easy to hit in a test stand-in that publishes contracts and records what
+comes back: see `Tests/Notifications/NotificationsIntegration/Fixtures/NotificationsHostFixture.cs` (the
+Payments stand-in publishes `UserRegistered` and also consumes it).
+
 ### Handlers
 
 A Wolverine handler is a plain class with a `Handle` or `Consume` method taking the message type.
@@ -296,6 +324,8 @@ swap cheap — both are properties of your code, not the library.
 | Redelivery duplicates rows | Consumer inserts without a message-level version check (rule 6) |
 | Consumer must call the producer for a missing field | Contract too thin (rule 10) — e.g. reconciling seats needs the event's start date to create a ticket |
 | Every bound queue receives a command | Conventional routing publishes to a fanout exchange |
+| A service sees only some of a contract's messages | Two services share the default-named queue and compete — give the newer consumer its own queue |
+| A published message never reaches the broker | The host also handles that type and conventional local routing kept it in memory |
 
 ## Sources
 

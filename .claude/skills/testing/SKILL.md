@@ -1,6 +1,6 @@
 ---
 name: testing
-description: Use when writing, moving or restructuring tests in any TicketMaster service — choosing between a unit and an integration test, working with the Testcontainers fixtures in BookingIntegration (Postgres + Redis) or EventsIntegration (Cosmos emulator), seeding data, or adding a new test project. Covers xUnit, Respawn, Testcontainers and the ArchUnit suites.
+description: Use when writing, moving or restructuring tests in any TicketMaster service — choosing between a unit and an integration test, working with the Testcontainers fixtures in BookingIntegration (Postgres + Redis), EventsIntegration (Cosmos emulator) or NotificationsIntegration (Postgres + RabbitMQ + Mailpit), seeding data, or adding a new test project. Covers xUnit, Respawn, Testcontainers and the ArchUnit suites.
 ---
 
 # Testing
@@ -65,6 +65,12 @@ Tests/Users/    UsersApi  UsersArchitecture
                            UsersTest base (register/login/PUT-role helpers, fresh-scope reads)
     Features/<Slice>/     Register/FirstAdminTests, Register/UserRegisteredTests, SetRole/SetRoleTests
     Mechanics/            AuthOptionsTests
+Tests/Notifications/
+  NotificationsIntegration/  two collections, see [Notifications integration](#notifications-integration)
+    Fixtures/             NotificationsFixture (Postgres) + IntegrationTest base; NotificationsHostFixture
+                           (real host + RabbitMQ + Mailpit, and a Payments stand-in)
+    Features/<Area>/      Bookings/RecordBuyer, Users/RecordRecipient, Notifications/{NotifyBuyer,SendEmail}
+    Mechanics/            NotificationsHostTests — shared-contract queues, every endpoint durable, an email reaching Mailpit
 Tests/Rpc/      GrpcSeam — the one cross-service test: the Bookings↔Events gRPC error round-trip,
                 in-process (TestServer), no containers. See the `rpc` skill.
 Tests/Gateway/  GatewayTests — routing, edge auth and identity headers via WebApplicationFactory with
@@ -338,6 +344,26 @@ the very cache the test depends on being empty.
   `ConflictsBeforeSuccess` fakes, because forcing exactly-N conflicts against live Cosmos is a race.
   This suite proves the conditional write that *produces* the conflict; the fake proves the retry that
   *consumes* it.
+
+## Notifications integration
+
+`NotificationsIntegration` needs Docker. Two collections, running in parallel on separate containers:
+
+- **"Notifications" — `NotificationsFixture`.** The production `AddNotificationsServices` on a real
+  Postgres (schema via `MigrateAsync`), Respawn per test (`public` only, `__EFMigrationsHistory` ignored).
+  Wolverine is not started — `ConfigureMessaging` is a host-builder extension — and `IEmailSender` is
+  removed and replaced by `RecordingEmailSender` (set `Fail` to throw `EmailDeliveryException` like a
+  down mail server). The `IntegrationTest` base's `HandleAsync<THandler>` builds the Wolverine handler
+  from a fresh scope and saves afterwards, as Wolverine's EF Core middleware would; `ReadAsync` reads back
+  through another scope; `SeedKnownBuyerAsync` seeds a `BookingBuyer` + `Recipient` pair.
+- **"Notifications host" — `NotificationsHostFixture`.** Boots `Program.cs` unmodified through
+  `WebApplicationFactory<Program>` on Postgres, RabbitMQ and a **Mailpit** container (SMTP 1025; its HTTP
+  API on 8025 is how `EmailsToAsync` reads what arrived). Configuration goes in as environment variables,
+  as in Bookings. Beside it a **Payments stand-in** — a Wolverine host with conventional routing, so it
+  owns the default-named queues — publishes the test messages and records the `UserRegistered` it gets,
+  which is how `Mechanics/` proves both services receive a shared contract. The stand-in needs
+  `DisableConventionalLocalRouting()`, or its publish of a type it also handles never leaves the process
+  (see the `messaging` skill).
 
 ## Unit tests
 
