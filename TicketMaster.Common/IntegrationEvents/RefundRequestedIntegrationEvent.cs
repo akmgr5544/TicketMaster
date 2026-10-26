@@ -1,16 +1,12 @@
 namespace TicketMaster.Common.IntegrationEvents;
 
 /// <summary>
-/// Money a paid booking took must go back. Published by Bookings, consumed by PaymentSystem.
+/// A paid booking's money must go back — all of it. Published by Bookings (a relocation voided the booking, or the
+/// customer cancelled it), consumed by PaymentSystem, which refunds everything still paid.
 /// <para>
-/// With no <c>Amount</c> it is the whole booking — a relocation voided it — and PaymentSystem refunds everything still
-/// paid. With one, the customer cancelled some seats and that much, in that currency, goes back. <c>RefundId</c> names
-/// the refund, so a redelivery is recognised and <see cref="BookingRefundedIntegrationEvent"/> can say which refund
-/// landed; a message sent before refunds had ids carries none.
+/// Refunds are whole only: a paid booking cannot be cancelled seat by seat, so there is no amount. <c>RefundId</c>
+/// names the refund, so a redelivery is recognised and <see cref="BookingRefundedIntegrationEvent"/> can say which
+/// refund landed; a message sent before refunds had ids carries none.
 /// </para>
 /// </summary>
-public record RefundRequestedIntegrationEvent(
-    long BookingId,
-    Guid? RefundId = null,
-    decimal? Amount = null,
-    string? Currency = null);
+public record RefundRequestedIntegrationEvent(long BookingId, Guid? RefundId = null);

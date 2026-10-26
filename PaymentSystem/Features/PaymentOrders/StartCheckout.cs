@@ -27,7 +27,32 @@ public static class StartCheckout
     internal sealed class Handler(PaymentDbContext context, IPaymentGatewayFactory gateways, TimeProvider clock)
         : IRequestHandler<Command, Result<Response>>
     {
+        // A race lost to the expiry, a cancellation, a PSP answer or the buyer's own second request is decided again
+        // over the winner's state rather than handed back as a 409. Asking the PSP again is safe: the order id is its
+        // idempotency key, so the same payment comes back.
+        private const int MaxAttempts = 3;
+
         public async Task<Result<Response>> Handle(Command request, CancellationToken cancellationToken)
+        {
+            for (var attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    return await StartAsync(request, cancellationToken);
+                }
+                catch (DbUpdateConcurrencyException) when (attempt < MaxAttempts)
+                {
+                    context.ChangeTracker.Clear();
+                }
+                // Every attempt lost to a concurrent writer; rare enough that the caller can try again.
+                catch (DbUpdateConcurrencyException)
+                {
+                    return Error.Conflict("payment_order_changed", "The payment order kept changing while it was being started. Try again.");
+                }
+            }
+        }
+
+        private async Task<Result<Response>> StartAsync(Command request, CancellationToken cancellationToken)
         {
             var checkout = await context.PaymentEvents
                 .SingleOrDefaultAsync(e => e.BuyerId == request.CallerId
@@ -71,16 +96,7 @@ public static class StartCheckout
             }
 
             checkout.StartOrder(order.PaymentOrderId, gateway.Kind.ToString(), session.ProviderReference, clock.GetUtcNow().UtcDateTime);
-
-            try
-            {
-                await context.SaveChangesAsync(cancellationToken);
-            }
-            // The expiry, a cancellation or a PSP answer changed the order while the PSP was being asked.
-            catch (DbUpdateConcurrencyException)
-            {
-                return Error.Conflict("payment_order_changed", "The payment order changed while it was being started. Try again.");
-            }
+            await context.SaveChangesAsync(cancellationToken);
 
             return new Response(gateway.Kind.ToString(), session.ClientToken);
         }

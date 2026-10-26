@@ -47,18 +47,17 @@ public sealed class RecordRefundOutcomeHandler(ILogger<RecordRefundOutcomeHandle
                         && r.Status == RefundOrderStatus.Succeeded)
             .ToListAsync(cancellationToken);
 
-        if (refund.RefundAmount.Amount + refundedBefore.Sum(r => r.RefundAmount.Amount) >= order.Amount.Amount)
-            checkout.MarkOrderRefunded(order.PaymentOrderId);
+        // Refunds are whole, so one that went through gives back what was left on the order. Earlier refunds count
+        // only if they went through, which a failed attempt before this one did not.
+        if (refund.RefundAmount.Amount + refundedBefore.Sum(r => r.RefundAmount.Amount) < order.Amount.Amount)
+            return outgoing;
 
-        // When Bookings hears, it releases the seats the refund covered. A refund that leaves money on its order is a
-        // partial one, reported at once; one that empties its order is part of a whole-booking refund, reported once
-        // no paid order is left. A request id equal to the order id was made up here because Bookings named none, so
-        // no refund id goes back.
-        if (order.Status == PaymentOrderStatus.Success || checkout.PaymentOrders.All(o => o.Status != PaymentOrderStatus.Success))
-        {
-            Guid? refundId = refund.RequestId == refund.PaymentOrderId ? null : refund.RequestId;
-            outgoing.Add(new BookingRefundedIntegrationEvent(checkout.BookingId, refundId));
-        }
+        checkout.MarkOrderRefunded(order.PaymentOrderId);
+
+        // Bookings releases the seats once it hears. A request id equal to the order id was made up here because
+        // Bookings named none, so no refund id goes back.
+        Guid? refundId = refund.RequestId == refund.PaymentOrderId ? null : refund.RequestId;
+        outgoing.Add(new BookingRefundedIntegrationEvent(checkout.BookingId, refundId));
 
         return outgoing;
     }

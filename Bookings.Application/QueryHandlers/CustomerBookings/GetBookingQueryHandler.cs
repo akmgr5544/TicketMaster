@@ -39,7 +39,6 @@ internal sealed class GetBookingQueryHandler : IRequestHandler<GetBookingQuery, 
                 .Select(history => new BookingHistoryDto(history.BookingStatus.ToString(), history.TicketsCount))
                 .ToArray(),
             booking.Refunds
-                .Select(refund => new BookingRefundDto(refund.Id, refund.Status.ToString(), refund.Amount, refund.Currency,
-                    booking.TicketsCoveredBy(refund.Id)))
+                .Select(refund => new BookingRefundDto(refund.Id, refund.Status.ToString(), booking.TicketsCoveredBy(refund.Id)))
                 .ToArray());
 }

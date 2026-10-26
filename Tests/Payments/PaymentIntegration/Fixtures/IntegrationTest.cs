@@ -115,37 +115,6 @@ public abstract class IntegrationTest(PaymentsFixture fixture) : IAsyncLifetime
         return checkout;
     }
 
-    // A checkout with one order per entry, each for its own seller, driven like SeedCheckoutAsync.
-    protected async Task<PaymentEvent> SeedCheckoutWithOrdersAsync(Guid buyerId, long bookingId,
-        params (OrderState State, decimal Amount)[] orders)
-    {
-        var checkout = PaymentEvent.Create(bookingId, buyerId, Usd);
-        foreach (var (_, amount) in orders)
-            checkout.AddPaymentOrder(Guid.NewGuid(), amount);
-
-        var created = checkout.PaymentOrders.ToArray();
-        for (var i = 0; i < orders.Length; i++)
-        {
-            var orderId = created[i].PaymentOrderId;
-            if (orders[i].State != OrderState.Init)
-                checkout.StartOrder(orderId, "Stripe", StubGateway.ReferenceFor(orderId), Clock.GetUtcNow().UtcDateTime);
-            if (orders[i].State == OrderState.Success)
-            {
-                checkout.SucceedOrder(orderId, StubGateway.ReferenceFor(orderId));
-                checkout.MarkOrderSettled(orderId);
-            }
-            if (orders[i].State == OrderState.Failed)
-                checkout.FailOrder(orderId);
-        }
-
-        await InScopeAsync(async c =>
-        {
-            c.PaymentEvents.Add(checkout);
-            await c.SaveChangesAsync();
-        });
-        return checkout;
-    }
-
     // A refund the PSP has already accepted, as RecordRefundOutcome leaves it (without the money it moved).
     protected async Task<RefundOrder> SeedSettledRefundAsync(Guid paymentOrderId, decimal amount, Guid? requestId = null)
     {

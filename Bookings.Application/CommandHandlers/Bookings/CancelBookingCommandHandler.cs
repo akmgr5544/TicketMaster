@@ -27,7 +27,7 @@ internal sealed class CancelBookingCommandHandler : IRequestHandler<CancelBookin
             throw new NotFoundException("Booking", request.BookingId.ToString());
 
         if (booking.Status == BookingStatus.Payed)
-            await RequestRefundAsync(booking, request.TicketIds, cancellationToken);
+            await RefundWholeAsync(booking, request.TicketIds, cancellationToken);
         else
             CancelWhole(booking, request.TicketIds);
 
@@ -38,31 +38,27 @@ internal sealed class CancelBookingCommandHandler : IRequestHandler<CancelBookin
     // whole or not at all.
     private static void CancelWhole(Booking booking, long[]? ticketIds)
     {
-        var all = booking.BookedTickets.Select(bookedTicket => bookedTicket.TicketId).ToHashSet();
-        if (ticketIds is not null && !all.SetEquals(ticketIds))
+        if (ticketIds is not null && !NamesEverySeat(booking, ticketIds))
             throw new BookingsDomainException("An unpaid booking is cancelled whole, not seat by seat.");
 
         booking.Cancel();
     }
 
-    // No seats named: every seat no refund covers yet. Each seat gives back what it was charged — a booked ticket
-    // keeps its price through a repricing — summed the way MakeBookingCommandHandler summed the charge.
-    private async Task RequestRefundAsync(Booking booking, long[]? ticketIds, CancellationToken cancellationToken)
+    // Refunds are whole, so a paid booking is cancelled whole too: giving some seats back would need a partial refund.
+    // A well-formed request the booking's state refuses, hence 409 rather than 400.
+    private async Task RefundWholeAsync(Booking booking, long[]? ticketIds, CancellationToken cancellationToken)
     {
-        ticketIds ??= booking.BookedTickets
-            .Where(bookedTicket => bookedTicket.RefundId is null)
-            .Select(bookedTicket => bookedTicket.TicketId)
-            .ToArray();
-        if (ticketIds.Length == 0)
-            throw new BookingsDomainException("Every seat of this booking is already being refunded.");
+        if (ticketIds is not null && !NamesEverySeat(booking, ticketIds))
+            throw new BookingsApplicationException("A paid booking is cancelled whole, not seat by seat.");
 
-        var tickets = await _tickets.GetTicketsByIdAsync([..ticketIds.Distinct()], cancellationToken);
-        if (tickets.Length != ticketIds.Distinct().Count())
-            throw new BookingsDomainException("Some of those seats do not exist.");
+        var tickets = await _tickets.GetTicketsByIdAsync(
+            [..booking.BookedTickets.Select(bookedTicket => bookedTicket.TicketId)], cancellationToken);
         if (tickets.Any(ticket => !ticket.IsRefundableAt(DateTime.UtcNow)))
             throw new BookingsDomainException("The event has started; its seats can no longer be cancelled.");
 
-        var pricings = tickets.Select(ticket => ticket.Pricing!).ToArray();
-        booking.RequestRefund(ticketIds, pricings.Sum(pricing => pricing.Price), pricings[0].Currency);
+        booking.RequestRefund();
     }
+
+    private static bool NamesEverySeat(Booking booking, long[] ticketIds) =>
+        booking.BookedTickets.Select(bookedTicket => bookedTicket.TicketId).ToHashSet().SetEquals(ticketIds);
 }

@@ -339,10 +339,10 @@ namespace PaymentSystem.Data.Migrations
 
                             b1.HasKey("PaymentOrderId");
 
-                            b1.HasIndex("SellerId");
-
-                            b1.HasIndex("CheckoutId", "SellerId")
+                            b1.HasIndex("CheckoutId")
                                 .IsUnique();
+
+                            b1.HasIndex("SellerId");
 
                             b1.HasIndex("Status", "ExecutingSince");
 

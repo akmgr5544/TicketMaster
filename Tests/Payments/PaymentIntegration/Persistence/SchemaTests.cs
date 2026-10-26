@@ -12,7 +12,7 @@ public sealed class SchemaTests(PaymentsFixture fixture) : IntegrationTest(fixtu
     [InlineData("RefundOrders", "IX_RefundOrders_PaymentOrderId_RequestId", "CREATE UNIQUE INDEX")]     // one refund per order per request
     [InlineData("PaymentMethods", "IX_PaymentMethods_UserId_Default", "WHERE \"IsDefault\"")]           // one default method per user
     [InlineData("Wallets", "IX_Wallets_UserId_Currency", "CREATE UNIQUE INDEX")]                        // one wallet per user per currency
-    [InlineData("PaymentOrders", "IX_PaymentOrders_CheckoutId_SellerId", "CREATE UNIQUE INDEX")]        // one order per seller per checkout
+    [InlineData("PaymentOrders", "IX_PaymentOrders_CheckoutId", "CREATE UNIQUE INDEX")]                 // one order per checkout
     [InlineData("BookingClaims", "PK_BookingClaims", "CREATE UNIQUE INDEX")]                            // one claim per booking
     public async Task The_migrated_schema_holds_each_uniqueness_rule(string table, string index, string expected)
     {

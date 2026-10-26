@@ -15,10 +15,10 @@ public sealed class GetOrderLedgerTests(PaymentsFixture fixture) : IntegrationTe
         var buyer = Guid.NewGuid();
         var checkout = await SeedCheckoutAsync(OrderState.Success, amount: 100m, buyerId: buyer);
         var order = checkout.PaymentOrders.Single();
-        var refund = await SeedSettledRefundAsync(order.PaymentOrderId, 30m);
+        var refund = await SeedSettledRefundAsync(order.PaymentOrderId, 100m);
         var other = await SeedCheckoutAsync(OrderState.Success, amount: 5m);
         var money = Money.Create(100m, Usd);
-        var refunded = Money.Create(30m, Usd);
+        var refunded = Money.Create(100m, Usd);
 
         await InScopeAsync(async c =>
         {
@@ -37,7 +37,7 @@ public sealed class GetOrderLedgerTests(PaymentsFixture fixture) : IntegrationTe
         Assert.Equal(4, entries.Count);
         Assert.Equal(entries.OrderBy(e => e.EntryId).Select(e => e.EntryId), entries.Select(e => e.EntryId));
         Assert.Equal(["Payment", "Payment", "Refund", "Refund"], entries.Select(e => e.RefType));
-        Assert.Equal([100m, 100m, 30m, 30m], entries.Select(e => e.Amount));
+        Assert.Equal([100m, 100m, 100m, 100m], entries.Select(e => e.Amount));
         Assert.Equal(["Debit", "Credit", "Debit", "Credit"], entries.Select(e => e.EntryType));
     }
 

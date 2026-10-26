@@ -258,51 +258,67 @@ public sealed class CustomerBookingTests : IntegrationTest
         Assert.Equal(BookingStatus.Cancelled, stored.Status);
     }
 
-    // --- Cancelling seats of a paid booking: a refund ---
+    // --- Cancelling a paid booking: a whole refund ---
 
+    // Refunds are whole, so giving back only some seats would need a partial one: refused, and nothing changes.
     // Paid state is arranged through ConfirmBookingCommand, as the payment service's answer would arrive.
     [Fact]
-    public async Task Cancelling_some_seats_of_a_paid_booking_asks_for_their_money_and_keeps_them_held()
+    public async Task Cancelling_some_seats_of_a_paid_booking_is_refused_and_changes_nothing()
     {
         var (booking, tickets) = await APaidBookingAsync("A1", "A2");
 
-        await Sender.Send(new CancelBookingCommand(booking.Id, Owner, [tickets[0].Id]));
+        await Assert.ThrowsAsync<BookingsApplicationException>(() =>
+            Sender.Send(new CancelBookingCommand(booking.Id, Owner, [tickets[0].Id])));
 
         var stored = await ReadAsync(context => context.Bookings.SingleAsync(b => b.Id == booking.Id));
         Assert.Equal(BookingStatus.Payed, stored.Status);
-        var refund = Assert.Single(stored.Refunds);
-        Assert.Equal(new RefundRequestedIntegrationEvent(booking.Id, refund.Id, Seed.Pricing.Price, Seed.Pricing.Currency),
-            Assert.Single(Log.Published).Event);
+        Assert.Empty(stored.Refunds);
+        Assert.Empty(Log.Published);
         Assert.All(await ReadTicketsAsync(tickets), ticket => Assert.Equal(TicketStatus.Booked, ticket.Status));
     }
 
+    // The seats stay held until the money lands, so a refund that fails has not sold them to somebody else.
     [Fact]
-    public async Task Cancelling_a_paid_booking_whole_asks_for_every_seat()
+    public async Task Cancelling_a_paid_booking_whole_asks_for_all_its_money_and_keeps_its_seats_held()
     {
-        var (booking, _) = await APaidBookingAsync("A1", "A2");
+        var (booking, tickets) = await APaidBookingAsync("A1", "A2");
 
         await Sender.Send(new CancelBookingCommand(booking.Id, Owner));
 
-        var requested = Assert.IsType<RefundRequestedIntegrationEvent>(Assert.Single(Log.Published).Event);
-        Assert.Equal(2 * Seed.Pricing.Price, requested.Amount);
+        var stored = await ReadAsync(context => context.Bookings.SingleAsync(b => b.Id == booking.Id));
+        Assert.Equal(BookingStatus.RefundPending, stored.Status);
+        var refund = Assert.Single(stored.Refunds);
+        Assert.Equal(new RefundRequestedIntegrationEvent(booking.Id, refund.Id), Assert.Single(Log.Published).Event);
+        Assert.All(await ReadTicketsAsync(tickets), ticket => Assert.Equal(TicketStatus.Booked, ticket.Status));
+    }
+
+    // Naming every seat is the whole booking, as it is for an unpaid one.
+    [Fact]
+    public async Task Naming_every_seat_of_a_paid_booking_refunds_it_whole()
+    {
+        var (booking, tickets) = await APaidBookingAsync("A1", "A2");
+
+        await Sender.Send(new CancelBookingCommand(booking.Id, Owner, [tickets[1].Id, tickets[0].Id]));
+
+        var stored = await ReadAsync(context => context.Bookings.SingleAsync(b => b.Id == booking.Id));
+        Assert.Equal(BookingStatus.RefundPending, stored.Status);
+        Assert.IsType<RefundRequestedIntegrationEvent>(Assert.Single(Log.Published).Event);
     }
 
     [Fact]
-    public async Task The_refund_landing_puts_back_only_its_seats_and_shows_on_the_booking()
+    public async Task The_refund_landing_puts_back_every_seat_and_shows_on_the_booking()
     {
         var (booking, tickets) = await APaidBookingAsync("A1", "A2");
-        await Sender.Send(new CancelBookingCommand(booking.Id, Owner, [tickets[0].Id]));
+        await Sender.Send(new CancelBookingCommand(booking.Id, Owner));
         var refundId = Assert.IsType<RefundRequestedIntegrationEvent>(Assert.Single(Log.Published).Event).RefundId;
 
         await Sender.Send(new CompleteRefundCommand(booking.Id, refundId));
 
-        var stored = await ReadTicketsAsync(tickets);
-        Assert.Equal(TicketStatus.None, stored.Single(t => t.Id == tickets[0].Id).Status);
-        Assert.Equal(TicketStatus.Booked, stored.Single(t => t.Id == tickets[1].Id).Status);
+        Assert.All(await ReadTicketsAsync(tickets), ticket => Assert.Equal(TicketStatus.None, ticket.Status));
         var dto = await Sender.Send(new GetBookingQuery(booking.Id, Owner));
-        Assert.Equal(nameof(BookingStatus.Payed), dto.Status);
-        Assert.Equal(new BookingRefundDto(refundId!.Value, nameof(BookingRefundStatus.Completed), Seed.Pricing.Price,
-            Seed.Pricing.Currency, [tickets[0].Id]), Assert.Single(dto.Refunds), BookingRefundDtoComparer.Instance);
+        Assert.Equal(nameof(BookingStatus.Refunded), dto.Status);
+        Assert.Equal(new BookingRefundDto(refundId!.Value, nameof(BookingRefundStatus.Completed),
+            [tickets[0].Id, tickets[1].Id]), Assert.Single(dto.Refunds), BookingRefundDtoComparer.Instance);
     }
 
     [Fact]
@@ -341,8 +357,8 @@ public sealed class CustomerBookingTests : IntegrationTest
 
         public bool Equals(BookingRefundDto? x, BookingRefundDto? y) =>
             x is not null && y is not null
-            && (x.Id, x.Status, x.Amount, x.Currency) == (y.Id, y.Status, y.Amount, y.Currency)
-            && x.TicketIds.SequenceEqual(y.TicketIds);
+            && (x.Id, x.Status) == (y.Id, y.Status)
+            && x.TicketIds.Order().SequenceEqual(y.TicketIds.Order());
 
         public int GetHashCode(BookingRefundDto obj) => obj.Id.GetHashCode();
     }

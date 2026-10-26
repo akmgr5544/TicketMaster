@@ -77,43 +77,27 @@ public sealed class Booking : Entity, IAggregateRoot
         }
     }
 
-    // The whole booking is voided, so it asks for everything still paid and covers every seat no refund covers yet.
-    private void FlagForRefund()
+    // The customer cancels a paid booking: undoing a payment is a refund, and refunds are whole, so the booking asks
+    // for everything back. The seats stay held until the money lands, so a refund that fails has not already sold
+    // them to somebody else.
+    public Guid RequestRefund()
+    {
+        if (Status != BookingStatus.Payed)
+            throw new BookingsDomainException($"A {Status} booking cannot be refunded.");
+
+        return FlagForRefund();
+    }
+
+    // The whole booking is voided, so it asks for everything paid and covers every seat.
+    private Guid FlagForRefund()
     {
         Status = BookingStatus.RefundPending;
         BookingHistories.Add(new BookingHistory(Status, BookedTickets.Count));
-        var refund = new BookingRefund(amount: null, currency: null);
+        var refund = new BookingRefund();
         _refunds.Add(refund);
         foreach (var bookedTicket in BookedTickets.Where(bookedTicket => bookedTicket.RefundId is null))
             bookedTicket.CoverBy(refund.Id);
-        AddDomainEvent(new BookingRefundRequestedDomainEvent(Id, refund.Id, Amount: null, Currency: null));
-    }
-
-    // A customer giving back some of a paid booking's seats. The booking stays paid and the seats stay held until
-    // the money lands, so a refund that fails has not already sold them to somebody else.
-    public Guid RequestRefund(long[] ticketIds, decimal amount, string currency)
-    {
-        if (Status != BookingStatus.Payed)
-            throw new BookingsDomainException($"A {Status} booking cannot be refunded seat by seat.");
-        if (ticketIds.Length == 0)
-            throw new BookingsDomainException("Choose the seats to cancel.");
-        if (ticketIds.Distinct().Count() != ticketIds.Length)
-            throw new BookingsDomainException("The same seat was chosen more than once.");
-        if (amount <= 0)
-            throw new BookingsDomainException("A refund must give something back.");
-
-        var seats = ticketIds
-            .Select(ticketId => BookedTickets.Find(bookedTicket => bookedTicket.TicketId == ticketId)
-                                ?? throw new BookingsDomainException($"Booking {Id} does not hold ticket {ticketId}."))
-            .ToArray();
-        if (seats.Any(seat => seat.RefundId is not null))
-            throw new BookingsDomainException("A refund has already been asked for some of those seats.");
-
-        var refund = new BookingRefund(amount, currency);
-        _refunds.Add(refund);
-        foreach (var seat in seats)
-            seat.CoverBy(refund.Id);
-        AddDomainEvent(new BookingRefundRequestedDomainEvent(Id, refund.Id, amount, currency));
+        AddDomainEvent(new BookingRefundRequestedDomainEvent(Id, refund.Id));
         return refund.Id;
     }
 
@@ -122,9 +106,9 @@ public sealed class Booking : Entity, IAggregateRoot
             .Select(bookedTicket => bookedTicket.TicketId)
             .ToArray();
 
-    // The money for a refund is back, so the seats it covers go back on sale. The whole-booking refund gave back
-    // everything still paid, any pending part's money with it, so it settles those parts too. A seat an earlier
-    // refund already released is never released again: it may since be somebody else's.
+    // The money for a refund is back, so the seats it covers go back on sale. A refund gives back everything paid,
+    // so it settles any other refund still pending too. A seat an earlier refund already released is never released
+    // again: it may since be somebody else's.
     // No refund id: a message from before refunds had ids, which only ever answered a whole-booking refund.
     // A Cancelled booking is the other one a refund reaches: it was cancelled before its payment's success was
     // heard, the seats are already back on sale, and only the money had to follow.
@@ -160,8 +144,7 @@ public sealed class Booking : Entity, IAggregateRoot
             return null;
 
         var settled = new HashSet<Guid> { refund.Id };
-        if (refund.IsWholeBooking)
-            settled.UnionWith(SettlePending());
+        settled.UnionWith(SettlePending());
         return settled;
     }
 

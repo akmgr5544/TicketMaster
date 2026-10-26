@@ -50,8 +50,8 @@ internal sealed class PaymentEventConfiguration : IEntityTypeConfiguration<Payme
             orders.Property(order => order.PspTokenRef).HasMaxLength(255);
             orders.Property(order => order.Provider).HasMaxLength(20);
 
-            // Backs the domain's one-order-per-seller rule against any writer that skips the root.
-            orders.HasIndex(order => new { order.CheckoutId, order.SellerId }).IsUnique();
+            // Backs the domain's one-order-per-checkout rule against any writer that skips the root.
+            orders.HasIndex(order => order.CheckoutId).IsUnique();
             orders.HasIndex(order => order.SellerId);
             // Reconciliation's query: orders still executing, oldest first.
             orders.HasIndex(order => new { order.Status, order.ExecutingSince });
